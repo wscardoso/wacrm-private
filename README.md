@@ -15,6 +15,7 @@
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)](https://nextjs.org)
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ecf8e?logo=supabase)](https://supabase.com)
 [![Stars](https://img.shields.io/github/stars/ArnasDon/wacrm?style=social)](https://github.com/ArnasDon/wacrm/stargazers)
+[![Tests](https://github.com/wscardoso/wacrm/actions/workflows/test.yml/badge.svg)](https://github.com/wscardoso/wacrm/actions/workflows/test.yml)
 
 The marketing site and self-host docs live in a separate repo:
 [ArnasDon/wacrm-site](https://github.com/ArnasDon/wacrm-site)
@@ -140,6 +141,17 @@ Key pages:
 - [Deploy on Hostinger](https://wacrm.tech/docs/deployment-hostinger)
 - [Architecture](https://wacrm.tech/docs/architecture)
 - [Troubleshooting](https://wacrm.tech/docs/troubleshooting)
+
+## Architecture
+
+```mermaid
+graph TD
+  WA[WhatsApp Cloud API] -->|webhook| NEXT[Next.js App]
+  NEXT --> SB[(Supabase)]
+  NEXT --> META[Meta API]
+  SB --> RLS[Row Level Security]
+  AGENT[Agent Browser] --> NEXT
+```
 
 ## Stack
 

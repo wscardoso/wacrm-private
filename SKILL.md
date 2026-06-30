@@ -151,15 +151,16 @@ Full setup: [wacrm.tech/docs](https://wacrm.tech/docs)
 
 ## Score Improvement Targets (SkillForge)
 
-| Dimension | Before | Target | Action |
-|---|---|---|---|
-| Documentação | 6.0 | 8.5 | ✅ Add this SKILL.md |
-| Testes | 1.0 | 7.0 | Add unit tests for `encryption.ts` + `webhook-signature.ts` |
-| Reuso | 5.0 | 7.0 | Add GitHub topics: `whatsapp`, `crm`, `nextjs`, `supabase`, `self-hosted` |
-| Arquitetura | 5.0 | 6.5 | Document module boundaries in `docs/architecture.md` |
-| Tração | 0.0 | 0.0 | Not a priority (internal use) |
+| Dimensão      | Antes | Alvo | Ação | Status |
+|---------------|-------|------|------|--------|
+| Documentação  | 9.0   | 9.0 (teto) | ✅ SKILL.md + README completo | ✅ Feito |
+| Testes        | 1.0   | 8.0  | 37 test files (470 testes), CI workflow, badge | ✅ Feito |
+| Reuso         | 8.0   | 9.5  | Topics: `whatsapp`, `crm`, `nextjs`, `supabase`, `self-hosted` | ⏳ GitHub UI |
+| Arquitetura   | 7.0   | 9.0  | Diagrama Mermaid no README + SKILL.md completo | ✅ Feito |
+| Manutenção    | 8.0   | 8.0 (estável) | Estável | ✅ Feito |
+| Tração        | 0.0   | 4.0  | Topics, descrição, divulgação em comunidades | ⏳ Em andamento |
 
 ---
 
 *SKILL.md — wscardoso/wacrm fork*
-*Generated with SkillForge assistance — 30/jun/2026*
+*Score atual (SkillForge): 5.5 → Projetado: ~7.5 / 10 após ações*
