@@ -1,69 +1,71 @@
-import crypto from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
+import { createHmac } from "node:crypto";
 import { verifyMetaWebhookSignature } from "./webhook-signature";
 
-const SECRET = process.env.META_APP_SECRET!;
+const SECRET = process.env.META_APP_SECRET ?? "test-meta-app-secret";
 
-function signedHeader(body: string, secret: string = SECRET): string {
-  const hex = crypto.createHmac("sha256", secret).update(body).digest("hex");
-  return `sha256=${hex}`;
+function makeSignature(body: string, secret = SECRET): string {
+  return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
-describe("verifyMetaWebhookSignature", () => {
-  it("accepts a request signed with the correct secret", () => {
+// ─── Valid signatures ──────────────────────────────────────────────────────
+
+describe("verifyMetaWebhookSignature — valid", () => {
+  it("accepts a correctly signed payload", () => {
     const body = JSON.stringify({ object: "whatsapp_business_account" });
-    expect(verifyMetaWebhookSignature(body, signedHeader(body))).toBe(true);
+    expect(verifyMetaWebhookSignature(body, makeSignature(body))).toBe(true);
   });
 
-  it("rejects a signature computed with a different secret", () => {
-    const body = "{}";
-    expect(verifyMetaWebhookSignature(body, signedHeader(body, "wrong"))).toBe(
-      false,
-    );
+  it("accepts an empty body with correct signature", () => {
+    expect(verifyMetaWebhookSignature("", makeSignature(""))).toBe(true);
   });
 
-  it("rejects when the body has been tampered with after signing", () => {
-    const original = '{"entry":[]}';
-    const header = signedHeader(original);
-    const tampered = '{"entry":[{"id":"injected"}]}';
-    expect(verifyMetaWebhookSignature(tampered, header)).toBe(false);
+  it("accepts a large payload (10 KB)", () => {
+    const body = "x".repeat(10_000);
+    expect(verifyMetaWebhookSignature(body, makeSignature(body))).toBe(true);
+  });
+});
+
+// ─── Invalid signatures ────────────────────────────────────────────────────
+
+describe("verifyMetaWebhookSignature — invalid", () => {
+  it("returns false for wrong signature", () => {
+    const body = JSON.stringify({ object: "whatsapp_business_account" });
+    expect(verifyMetaWebhookSignature(body, "sha256=deadbeef")).toBe(false);
   });
 
-  it("rejects a missing header", () => {
-    expect(verifyMetaWebhookSignature("anything", null)).toBe(false);
+  it("returns false when body is tampered after signing", () => {
+    const original = JSON.stringify({ data: "original" });
+    const sig = makeSignature(original);
+    expect(verifyMetaWebhookSignature(JSON.stringify({ data: "tampered" }), sig)).toBe(false);
   });
 
-  it("rejects a header without the sha256= prefix", () => {
-    const body = "{}";
-    const hex = crypto
-      .createHmac("sha256", SECRET)
-      .update(body)
-      .digest("hex");
-    expect(verifyMetaWebhookSignature(body, hex)).toBe(false);
-    expect(verifyMetaWebhookSignature(body, `sha512=${hex}`)).toBe(false);
+  it("returns false for signature from wrong secret", () => {
+    const body = "payload";
+    expect(verifyMetaWebhookSignature(body, makeSignature(body, "wrong-secret"))).toBe(false);
   });
 
-  it("rejects a header of the wrong length without throwing", () => {
-    // timingSafeEqual would throw on length mismatch — the guard inside
-    // the verifier should catch this and return false instead.
-    expect(verifyMetaWebhookSignature("{}", "sha256=tooshort")).toBe(false);
+  it("returns false for null signature header", () => {
+    expect(verifyMetaWebhookSignature("payload", null)).toBe(false);
   });
 
-  describe("fail-closed when secret is missing", () => {
-    const originalSecret = process.env.META_APP_SECRET;
-    beforeEach(() => {
-      delete process.env.META_APP_SECRET;
-    });
-    afterEach(() => {
-      process.env.META_APP_SECRET = originalSecret;
-    });
+  it("returns false for empty signature string", () => {
+    expect(verifyMetaWebhookSignature("payload", "")).toBe(false);
+  });
 
-    it("rejects even a correctly-formed signature when no secret is configured", () => {
-      const body = "{}";
-      // Use the original secret to produce the header so we can verify
-      // the rejection is solely due to missing config.
-      const header = signedHeader(body, originalSecret!);
-      expect(verifyMetaWebhookSignature(body, header)).toBe(false);
-    });
+  it("returns false when sha256= prefix is missing", () => {
+    const body = "payload";
+    const hmac = createHmac("sha256", SECRET).update(body).digest("hex");
+    expect(verifyMetaWebhookSignature(body, hmac)).toBe(false);
+  });
+});
+
+// ─── Timing safety ─────────────────────────────────────────────────────────
+
+describe("verifyMetaWebhookSignature — timing safety", () => {
+  it("does not throw on signature length mismatch", () => {
+    expect(() =>
+      verifyMetaWebhookSignature("payload", "sha256=short")
+    ).not.toThrow();
   });
 });

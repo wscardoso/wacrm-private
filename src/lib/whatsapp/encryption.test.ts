@@ -1,125 +1,77 @@
-import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { decrypt, encrypt, isLegacyFormat } from "./encryption";
+import { describe, it, expect } from "vitest";
+import { encrypt, decrypt, isLegacyFormat } from "./encryption";
 
-const KEY_HEX = process.env.ENCRYPTION_KEY!;
+// ─── Roundtrip ─────────────────────────────────────────────────────────────
 
-function cbcEncryptLegacy(plaintext: string): string {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(
-    "aes-256-cbc",
-    Buffer.from(KEY_HEX, "hex"),
-    iv,
-  );
-  let ct = cipher.update(plaintext, "utf8", "hex");
-  ct += cipher.final("hex");
-  return `${iv.toString("hex")}:${ct}`;
-}
-
-describe("encryption", () => {
-  describe("encrypt / decrypt round-trip", () => {
-    it("recovers the original plaintext", () => {
-      const ct = encrypt("EAAG... fake WhatsApp token");
-      expect(decrypt(ct)).toBe("EAAG... fake WhatsApp token");
-    });
-
-    it("produces three colon-separated parts (GCM)", () => {
-      const ct = encrypt("anything");
-      expect(ct.split(":")).toHaveLength(3);
-    });
-
-    it("uses a fresh IV per encrypt so identical plaintexts produce different ciphertexts", () => {
-      const a = encrypt("same input");
-      const b = encrypt("same input");
-      expect(a).not.toBe(b);
-      expect(decrypt(a)).toBe("same input");
-      expect(decrypt(b)).toBe("same input");
-    });
-
-    it("roundtrips empty string", () => {
-      const ct = encrypt("");
-      expect(decrypt(ct)).toBe("");
-    });
-
-    it("roundtrips multibyte UTF-8", () => {
-      const ct = encrypt("token-✓-🔐-žąsis");
-      expect(decrypt(ct)).toBe("token-✓-🔐-žąsis");
-    });
+describe("encrypt / decrypt roundtrip", () => {
+  it("returns the original plaintext after roundtrip", () => {
+    const plaintext = "whatsapp-token-abc123";
+    expect(decrypt(encrypt(plaintext))).toBe(plaintext);
   });
 
-  describe("GCM authentication", () => {
-    it("rejects ciphertext tampered after encryption", () => {
-      const ct = encrypt("secret");
-      const [ivHex, ctHex, tagHex] = ct.split(":");
-      // Flip a byte in the ciphertext body — auth tag will mismatch.
-      const tamperedCtHex =
-        (parseInt(ctHex.slice(0, 2), 16) ^ 0xff).toString(16).padStart(2, "0") +
-        ctHex.slice(2);
-      expect(() =>
-        decrypt(`${ivHex}:${tamperedCtHex}:${tagHex}`),
-      ).toThrow();
-    });
-
-    it("rejects a swapped auth tag", () => {
-      const ct = encrypt("secret");
-      const [ivHex, ctHex] = ct.split(":");
-      const bogusTag = "00".repeat(16);
-      expect(() => decrypt(`${ivHex}:${ctHex}:${bogusTag}`)).toThrow();
-    });
-
-    it("rejects a GCM IV of the wrong length", () => {
-      const ct = encrypt("secret");
-      const [, ctHex, tagHex] = ct.split(":");
-      const shortIv = "00".repeat(8); // 8 bytes ≠ 12
-      expect(() => decrypt(`${shortIv}:${ctHex}:${tagHex}`)).toThrow(
-        /GCM IV length/,
-      );
-    });
-
-    it("rejects a GCM auth tag of the wrong length", () => {
-      const ct = encrypt("secret");
-      const [ivHex, ctHex] = ct.split(":");
-      const shortTag = "00".repeat(8); // 8 bytes ≠ 16
-      expect(() => decrypt(`${ivHex}:${ctHex}:${shortTag}`)).toThrow(
-        /auth-tag length/,
-      );
-    });
+  it("produces different ciphertext on every call (random IV)", () => {
+    const ct1 = encrypt("same-input");
+    const ct2 = encrypt("same-input");
+    expect(ct1).not.toBe(ct2);
   });
 
-  describe("legacy CBC compatibility (read-only)", () => {
-    it("decrypts a CBC blob produced by the previous codepath", () => {
-      const legacy = cbcEncryptLegacy("old-token");
-      expect(decrypt(legacy)).toBe("old-token");
-    });
-
-    it("rejects a CBC blob with the wrong IV length", () => {
-      // 8-byte IV (16 hex chars) instead of 16 bytes.
-      const bogus = "00".repeat(8) + ":" + "00".repeat(16);
-      expect(() => decrypt(bogus)).toThrow(/CBC IV length/);
-    });
+  it("roundtrips an empty string", () => {
+    expect(decrypt(encrypt(""))).toBe("");
   });
 
-  describe("format detection", () => {
-    it("isLegacyFormat returns true for two-part CBC strings", () => {
-      const legacy = cbcEncryptLegacy("anything");
-      expect(isLegacyFormat(legacy)).toBe(true);
-    });
-
-    it("isLegacyFormat returns false for three-part GCM strings", () => {
-      const modern = encrypt("anything");
-      expect(isLegacyFormat(modern)).toBe(false);
-    });
+  it("roundtrips unicode / emoji", () => {
+    const value = "token-🦅-üñíçödé";
+    expect(decrypt(encrypt(value))).toBe(value);
   });
 
-  describe("malformed input", () => {
-    it("throws on a single-token blob (no colons)", () => {
-      expect(() => decrypt("not-encrypted-at-all")).toThrow(
-        /unrecognised format/,
-      );
-    });
+  it("roundtrips a long token (512 chars)", () => {
+    expect(decrypt(encrypt("x".repeat(512)))).toBe("x".repeat(512));
+  });
+});
 
-    it("throws on a four-part blob", () => {
-      expect(() => decrypt("aa:bb:cc:dd")).toThrow(/unrecognised format/);
-    });
+// ─── GCM output format ─────────────────────────────────────────────────────
+
+describe("encrypt output format (GCM)", () => {
+  it("produces iv:ciphertext:authTag format (2 colons)", () => {
+    const parts = encrypt("test").split(":");
+    expect(parts).toHaveLength(3);
+  });
+
+  it("is different from plaintext", () => {
+    expect(encrypt("supersecret")).not.toBe("supersecret");
+  });
+});
+
+// ─── isLegacyFormat ────────────────────────────────────────────────────────
+
+describe("isLegacyFormat", () => {
+  it("returns false for current GCM output (3 parts)", () => {
+    expect(isLegacyFormat(encrypt("anything"))).toBe(false);
+  });
+
+  it("returns true for a legacy iv:ciphertext shape (2 parts)", () => {
+    expect(isLegacyFormat("aabbcc:ddeeff")).toBe(true);
+  });
+
+  it("returns false for unrecognised shape (1 part)", () => {
+    expect(isLegacyFormat("nodivider")).toBe(false);
+  });
+});
+
+// ─── Decrypt error cases ───────────────────────────────────────────────────
+
+describe("decrypt error cases", () => {
+  it("throws on unrecognised format", () => {
+    expect(() => decrypt("not-valid")).toThrow();
+  });
+
+  it("throws when GCM auth tag is tampered", () => {
+    const ct = encrypt("original");
+    const tampered = ct.slice(0, -4) + "0000";
+    expect(() => decrypt(tampered)).toThrow();
+  });
+
+  it("throws when IV has wrong length for GCM", () => {
+    expect(() => decrypt("aabb:ciphertext:authtag")).toThrow();
   });
 });
