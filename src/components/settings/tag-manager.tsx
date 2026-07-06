@@ -43,7 +43,7 @@ const PRESET_COLORS = [
  */
 export function TagManager() {
   const supabase = createClient();
-  const { user, accountId, loading: authLoading } = useAuth();
+  const { user, accountId, canEditSettings, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -56,21 +56,21 @@ export function TagManager() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!accountId) {
       setLoading(false);
       return;
     }
-    fetchTags(user.id);
+    fetchTags(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, [authLoading, accountId]);
 
-  async function fetchTags(userId: string) {
+  async function fetchTags(acctId: string) {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('tags')
         .select('*')
-        .eq('user_id', userId)
+        .eq('account_id', acctId)
         .order('created_at', { ascending: true });
 
       if (error) throw error;
@@ -110,7 +110,7 @@ export function TagManager() {
       toast.success('Tag created');
       setNewTagName('');
       setSelectedColor(PRESET_COLORS[3].value);
-      await fetchTags(user.id);
+      await fetchTags(accountId!);
     } catch (err) {
       console.error('Create error:', err);
       toast.error('Failed to create tag');
@@ -183,68 +183,78 @@ export function TagManager() {
                       style={{ backgroundColor: tag.color }}
                     />
                     {tag.name}
-                    <button
-                      type="button"
-                      onClick={() => confirmDelete(tag)}
-                      aria-label={`Delete ${tag.name}`}
-                      className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
-                    >
-                      <X className="size-3" />
-                    </button>
+                    {canEditSettings && (
+                      <button
+                        type="button"
+                        onClick={() => confirmDelete(tag)}
+                        aria-label={`Delete ${tag.name}`}
+                        className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
                   </span>
                 ))}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No tags yet — create your first one below.
+                {canEditSettings
+                  ? 'No tags yet — create your first one below.'
+                  : 'No tags yet.'}
               </p>
             )}
 
-            {/* Inline create row */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              <Input
-                placeholder="e.g. Newsletter"
-                value={newTagName}
-                onChange={(e) => setNewTagName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreate();
-                }}
-                disabled={saving}
-                maxLength={40}
-                className="min-w-[180px] flex-1"
-              />
-              <div className="flex gap-1.5">
-                {PRESET_COLORS.map((color) => (
-                  <button
-                    key={color.value}
-                    type="button"
-                    onClick={() => setSelectedColor(color.value)}
-                    aria-label={`Use ${color.name}`}
-                    aria-pressed={selectedColor === color.value}
-                    className={cn(
-                      'size-6 rounded-md transition-transform hover:scale-110',
-                      selectedColor === color.value &&
-                        'outline outline-2 outline-offset-2 outline-primary',
-                    )}
-                    style={{ backgroundColor: color.value }}
-                    title={color.name}
-                  />
-                ))}
+            {canEditSettings ? (
+              /* Inline create row */
+              <div className="flex flex-wrap items-center gap-2.5">
+                <Input
+                  placeholder="e.g. Newsletter"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCreate();
+                  }}
+                  disabled={saving}
+                  maxLength={40}
+                  className="min-w-[180px] flex-1"
+                />
+                <div className="flex gap-1.5">
+                  {PRESET_COLORS.map((color) => (
+                    <button
+                      key={color.value}
+                      type="button"
+                      onClick={() => setSelectedColor(color.value)}
+                      aria-label={`Use ${color.name}`}
+                      aria-pressed={selectedColor === color.value}
+                      className={cn(
+                        'size-6 rounded-md transition-transform hover:scale-110',
+                        selectedColor === color.value &&
+                          'outline outline-2 outline-offset-2 outline-primary',
+                      )}
+                      style={{ backgroundColor: color.value }}
+                      title={color.name}
+                    />
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCreate}
+                  disabled={saving || !newTagName.trim()}
+                >
+                  {saving ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Plus className="size-4" />
+                  )}
+                  Add tag
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCreate}
-                disabled={saving || !newTagName.trim()}
-              >
-                {saving ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Plus className="size-4" />
-                )}
-                Add tag
-              </Button>
-            </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Only account admins can manage tags.
+              </p>
+            )}
           </>
         )}
       </CardContent>

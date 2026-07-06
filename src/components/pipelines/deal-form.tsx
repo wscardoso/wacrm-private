@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
@@ -52,6 +53,7 @@ export function DealForm({
   defaultStageId,
   onSaved,
 }: DealFormProps) {
+  const t = useTranslations("pipelines");
   const supabase = createClient();
   const { accountId, defaultCurrency } = useAuth();
 
@@ -252,23 +254,23 @@ export function DealForm({
         <div className="flex h-full flex-col">
           <SheetHeader className="border-b border-border/50 p-4">
             <SheetTitle className="text-popover-foreground">
-              {deal ? "Edit Deal" : "New Deal"}
+              {deal ? t("edit_deal") : t("add_deal")}
             </SheetTitle>
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             <div className="grid gap-2">
-              <Label className="text-muted-foreground">Title</Label>
+              <Label className="text-muted-foreground">{t("deal_title_field")}</Label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Deal title"
+                placeholder={t("deal_title_field")}
                 className="border-border bg-muted text-foreground"
               />
             </div>
 
             <div className="grid gap-2">
-              <Label className="text-muted-foreground">Contact</Label>
+              <Label className="text-muted-foreground">{t("deal_contact")}</Label>
               <select
                 value={contactId}
                 onChange={(e) => setContactId(e.target.value)}
@@ -295,7 +297,7 @@ export function DealForm({
 
             <div className="grid grid-cols-[1fr_110px] gap-3">
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Value</Label>
+                <Label className="text-muted-foreground">{t("deal_value")}</Label>
                 <div className="relative">
                   <DollarSign className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -308,7 +310,7 @@ export function DealForm({
                 </div>
               </div>
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Currency</Label>
+                <Label className="text-muted-foreground">{t("deal_currency")}</Label>
                 <select
                   value={currency}
                   onChange={(e) => setCurrency(e.target.value)}
@@ -334,7 +336,7 @@ export function DealForm({
             </div>
 
             <div className="grid gap-2">
-              <Label className="text-muted-foreground">Stage</Label>
+              <Label className="text-muted-foreground">{t("deal_stage")}</Label>
               <select
                 value={stageId}
                 onChange={(e) => setStageId(e.target.value)}
@@ -349,7 +351,7 @@ export function DealForm({
             </div>
 
             <div className="grid gap-2">
-              <Label className="text-muted-foreground">Assigned To</Label>
+              <Label className="text-muted-foreground">{t("deal_assigned_to")}</Label>
               <select
                 value={assignedTo}
                 onChange={(e) => setAssignedTo(e.target.value)}
@@ -365,7 +367,7 @@ export function DealForm({
             </div>
 
             <div className="grid gap-2">
-              <Label className="text-muted-foreground">Notes</Label>
+              <Label className="text-muted-foreground">{t("deal_notes")}</Label>
               <Textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -391,7 +393,7 @@ export function DealForm({
                     ) : (
                       <>
                         <Check className="mr-1 h-4 w-4" />
-                        Mark as Won
+                        {t("deal_won")}
                       </>
                     )}
                   </Button>
@@ -406,7 +408,7 @@ export function DealForm({
                     ) : (
                       <>
                         <X className="mr-1 h-4 w-4" />
-                        Mark as Lost
+                        {t("deal_lost")}
                       </>
                     )}
                   </Button>
@@ -419,7 +421,7 @@ export function DealForm({
                     disabled={!!statusAction}
                     className="w-full text-muted-foreground hover:text-foreground"
                   >
-                    Reopen deal
+                    {t("deal_reopen")}
                   </Button>
                 )}
               </div>
@@ -474,7 +476,7 @@ export function DealForm({
                   className="mt-3 flex w-full items-center justify-center gap-1 text-xs text-red-400 hover:text-red-300"
                 >
                   <Trash2 className="h-3 w-3" />
-                  Delete Deal
+                  {t("delete_deal")}
                 </button>
               ))}
           </div>

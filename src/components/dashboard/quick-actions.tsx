@@ -1,5 +1,6 @@
 "use client"
 
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { UserPlus, Briefcase, Radio, Zap } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -15,14 +16,14 @@ interface Action {
   tint: string
 }
 
-const ACTIONS: Action[] = [
-  { label: 'New Contact', href: '/contacts', icon: UserPlus, tint: 'text-primary' },
-  { label: 'New Deal', href: '/pipelines', icon: Briefcase, tint: 'text-blue-400' },
-  { label: 'New Broadcast', href: '/broadcasts/new', icon: Radio, tint: 'text-amber-400' },
-  { label: 'New Automation', href: '/automations/new', icon: Zap, tint: 'text-primary' },
-]
-
 export function QuickActions() {
+  const t = useTranslations("dashboard")
+  const ACTIONS: Action[] = [
+    { label: t("new_contact"), href: '/contacts', icon: UserPlus, tint: 'text-primary' },
+    { label: 'New Deal', href: '/pipelines', icon: Briefcase, tint: 'text-blue-400' },
+    { label: t("new_broadcast"), href: '/broadcasts/new', icon: Radio, tint: 'text-amber-400' },
+    { label: t("new_automation"), href: '/automations/new', icon: Zap, tint: 'text-primary' },
+  ]
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {ACTIONS.map((a) => {

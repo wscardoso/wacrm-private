@@ -2,13 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Upload, Trash2, Mail, CircleAlert } from 'lucide-react';
+import { Loader2, Upload, Trash2, Mail, CircleAlert, Languages } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { useLocale } from '@/lib/i18n-provider';
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Avatar,
   AvatarFallback,
@@ -32,6 +35,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function ProfileForm() {
   const { user, profile, refreshProfile } = useAuth();
+  const ts = useTranslations("settings.profile");
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -300,6 +304,15 @@ export function ProfileForm() {
             )}
           </div>
 
+          {/* Language */}
+          <div className="space-y-2">
+            <Label className="text-foreground">
+              <Languages className="mr-2 inline size-4" />
+              {ts("language")}
+            </Label>
+            <LanguageSelector />
+          </div>
+
           {/* Read-only block */}
           <div className="rounded-lg border border-border bg-muted p-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -349,5 +362,21 @@ export function ProfileForm() {
         </div>
       </form>
     </section>
+  );
+}
+
+function LanguageSelector() {
+  const { locale, setLocale } = useLocale();
+
+  return (
+    <Select value={locale} onValueChange={(v) => setLocale(v as "en" | "pt-BR")}>
+      <SelectTrigger className="w-full sm:w-48">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="en">English</SelectItem>
+        <SelectItem value="pt-BR">Português (Brasil)</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }

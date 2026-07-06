@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import type { Pipeline, PipelineStage, Deal } from "@/types";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
@@ -45,6 +46,7 @@ const SPEC_DEFAULT_STAGES = [
 ];
 
 export default function PipelinesPage() {
+  const t = useTranslations("pipelines");
   const supabase = createClient();
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
@@ -333,7 +335,7 @@ export default function PipelinesPage() {
             >
               {pipelines.length === 0 && (
                 <DropdownMenuItem disabled className="text-muted-foreground">
-                  No pipelines yet
+                  {t("empty_title")}
                 </DropdownMenuItem>
               )}
               {pipelines.map((p) => (
@@ -373,7 +375,7 @@ export default function PipelinesPage() {
             className="border-border bg-card text-foreground hover:bg-muted"
           >
             <Plus className="mr-1 h-4 w-4" />
-            Add Pipeline
+            {t("create_pipeline")}
           </GatedButton>
           <GatedButton
             canAct={canCreateDeals}
@@ -383,7 +385,7 @@ export default function PipelinesPage() {
             className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Plus className="mr-1 h-4 w-4" />
-            Add Deal
+            {t("add_deal")}
           </GatedButton>
         </div>
       </div>
@@ -393,10 +395,10 @@ export default function PipelinesPage() {
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20">
           <GitBranch className="h-12 w-12 text-muted-foreground" />
           <h3 className="mt-4 text-lg font-medium text-foreground">
-            No pipelines yet
+            {t("empty_title")}
           </h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create a pipeline to start tracking deals
+            {t("empty_description")}
           </p>
           <GatedButton
             canAct={canEditSettings}
@@ -405,7 +407,7 @@ export default function PipelinesPage() {
             className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Plus className="mr-1 h-4 w-4" />
-            Create Pipeline
+            {t("create_pipeline")}
           </GatedButton>
         </div>
       ) : (
@@ -425,10 +427,10 @@ export default function PipelinesPage() {
       <Dialog open={newPipelineOpen} onOpenChange={setNewPipelineOpen}>
         <DialogContent className="sm:max-w-sm bg-popover border-border">
           <DialogHeader>
-            <DialogTitle className="text-popover-foreground">New Pipeline</DialogTitle>
+            <DialogTitle className="text-popover-foreground">{t("create_pipeline")}</DialogTitle>
           </DialogHeader>
           <div className="py-2">
-            <Label className="text-muted-foreground">Pipeline Name</Label>
+            <Label className="text-muted-foreground">{t("pipeline_name")}</Label>
             <Input
               value={newPipelineName}
               onChange={(e) => setNewPipelineName(e.target.value)}
@@ -455,7 +457,7 @@ export default function PipelinesPage() {
               disabled={creating || !newPipelineName.trim()}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              {creating ? "Creating..." : "Create Pipeline"}
+              {creating ? "Creating..." : t("create_pipeline")}
             </Button>
           </DialogFooter>
         </DialogContent>

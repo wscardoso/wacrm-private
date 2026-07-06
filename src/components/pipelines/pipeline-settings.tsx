@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   DndContext,
   PointerSensor,
@@ -68,6 +69,7 @@ export function PipelineSettings({
   onStagesChanged,
   onCreateNewPipeline,
 }: PipelineSettingsProps) {
+  const t = useTranslations("pipelines");
   const supabase = createClient();
 
   const [name, setName] = useState(pipeline.name);
@@ -201,7 +203,7 @@ export function PipelineSettings({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md bg-popover border-border max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-popover-foreground">Manage Pipeline</DialogTitle>
+          <DialogTitle className="text-popover-foreground">{t("edit_pipeline")}</DialogTitle>
         </DialogHeader>
 
         {showDeleteConfirm ? (
@@ -210,7 +212,7 @@ export function PipelineSettings({
               <AlertTriangle className="h-5 w-5 shrink-0 text-red-400" />
               <div>
                 <p className="text-sm font-medium text-red-400">
-                  Delete Pipeline
+                  {t("delete_pipeline")}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   This will archive all deals in this pipeline. This cannot be
@@ -231,7 +233,7 @@ export function PipelineSettings({
                 disabled={deleting}
                 className="bg-red-600 text-white hover:bg-red-700"
               >
-                {deleting ? "Deleting..." : "Delete Pipeline"}
+                {deleting ? "Deleting..." : t("delete_pipeline")}
               </Button>
             </div>
           </div>
@@ -239,7 +241,7 @@ export function PipelineSettings({
           <>
             <div className="grid gap-4 py-2">
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Pipeline Name</Label>
+                <Label className="text-muted-foreground">{t("pipeline_name")}</Label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -329,7 +331,7 @@ export function PipelineSettings({
                 className="w-full border-border bg-transparent text-muted-foreground hover:bg-muted"
               >
                 <Plus className="mr-1 h-3 w-3" />
-                Create a new pipeline
+                {t("create_pipeline")}
               </Button>
             </div>
 
@@ -339,7 +341,7 @@ export function PipelineSettings({
                 onClick={() => setShowDeleteConfirm(true)}
                 className="mr-auto bg-red-600 hover:bg-red-700"
               >
-                Delete Pipeline
+                {t("delete_pipeline")}
               </Button>
               <Button
                 variant="outline"

@@ -562,40 +562,50 @@ CREATE POLICY flow_nodes_modify ON flow_nodes FOR ALL USING (
   EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_nodes.flow_id AND is_account_member(f.account_id, 'agent'))
 );
 
--- ---- flow_run_events -------------------------------------------
-DROP POLICY IF EXISTS "Users see events on their runs" ON flow_run_events;
-CREATE POLICY flow_run_events_select ON flow_run_events FOR SELECT USING (
-  EXISTS (SELECT 1 FROM flow_runs r WHERE r.id = flow_run_events.flow_run_id AND is_account_member(r.account_id))
-);
+-- ---- flow_run_events (table optional — created in 010_flows) ----
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'flow_run_events' AND relnamespace = 'public'::regnamespace) THEN
+    DROP POLICY IF EXISTS "Users see events on their runs" ON flow_run_events;
+    CREATE POLICY flow_run_events_select ON flow_run_events FOR SELECT USING (
+      EXISTS (SELECT 1 FROM flow_runs r WHERE r.id = flow_run_events.flow_run_id AND is_account_member(r.account_id))
+    );
+  END IF;
+END $$;
 
--- ---- message_reactions -----------------------------------------
-DROP POLICY IF EXISTS "Users see reactions on their conversations" ON message_reactions;
-DROP POLICY IF EXISTS "Users insert reactions on their conversations" ON message_reactions;
-DROP POLICY IF EXISTS "Users delete their own agent reactions" ON message_reactions;
-DROP POLICY IF EXISTS "Users update their own agent reactions" ON message_reactions;
-CREATE POLICY message_reactions_select ON message_reactions FOR SELECT USING (
-  EXISTS (
-    SELECT 1 FROM messages m
-    JOIN conversations c ON c.id = m.conversation_id
-    WHERE m.id = message_reactions.message_id
-      AND is_account_member(c.account_id)
-  )
-);
-CREATE POLICY message_reactions_modify ON message_reactions FOR ALL USING (
-  EXISTS (
-    SELECT 1 FROM messages m
-    JOIN conversations c ON c.id = m.conversation_id
-    WHERE m.id = message_reactions.message_id
-      AND is_account_member(c.account_id, 'agent')
-  )
-) WITH CHECK (
-  EXISTS (
-    SELECT 1 FROM messages m
-    JOIN conversations c ON c.id = m.conversation_id
-    WHERE m.id = message_reactions.message_id
-      AND is_account_member(c.account_id, 'agent')
-  )
-);
+-- ---- message_reactions (table optional — created in 009_message_actions) ----
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'message_reactions' AND relnamespace = 'public'::regnamespace) THEN
+    DROP POLICY IF EXISTS "Users see reactions on their conversations" ON message_reactions;
+    DROP POLICY IF EXISTS "Users insert reactions on their conversations" ON message_reactions;
+    DROP POLICY IF EXISTS "Users delete their own agent reactions" ON message_reactions;
+    DROP POLICY IF EXISTS "Users update their own agent reactions" ON message_reactions;
+    CREATE POLICY message_reactions_select ON message_reactions FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = message_reactions.message_id
+          AND is_account_member(c.account_id)
+      )
+    );
+    CREATE POLICY message_reactions_modify ON message_reactions FOR ALL USING (
+      EXISTS (
+        SELECT 1 FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = message_reactions.message_id
+          AND is_account_member(c.account_id, 'agent')
+      )
+    ) WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = message_reactions.message_id
+          AND is_account_member(c.account_id, 'agent')
+      )
+    );
+  END IF;
+END $$;
 
 -- ============================================================
 -- RLS — PROFILES (revised)

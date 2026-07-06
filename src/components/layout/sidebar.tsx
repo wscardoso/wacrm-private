@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
@@ -25,43 +26,8 @@ import {
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
-// Per-role chip metadata used in the sidebar's account strip + the
-// Members tab roster. Keeping this near both consumers in a single
-// place avoids drift between the two surfaces — when a designer
-// wants to recolour "agent" rows, this is the one diff.
-const ROLE_CHIP: Record<
-  AccountRole,
-  { icon: typeof Crown; label: string; className: string }
-> = {
-  owner: {
-    icon: Crown,
-    label: "Owner",
-    // Amber: scarce, immutable, "the boss" — gets visual emphasis.
-    className:
-      "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  },
-  admin: {
-    icon: Shield,
-    label: "Admin",
-    // Primary-tinted: significant but not as scarce as owner.
-    className:
-      "border-primary/40 bg-primary/10 text-primary",
-  },
-  agent: {
-    icon: UserCog,
-    label: "Agent",
-    // Neutral slate: the operational default.
-    className:
-      "border-border bg-muted text-foreground",
-  },
-  viewer: {
-    icon: User,
-    label: "Viewer",
-    // Muted slate: read-only role; visually quieter than agent.
-    className:
-      "border-border bg-card text-muted-foreground",
-  },
-};
+// Role chip labels are set dynamically in the component via t().
+// The label is overwritten before render when translations are available.
 import {
   Avatar,
   AvatarFallback,
@@ -77,7 +43,7 @@ import {
 
 interface NavItem {
   href: string;
-  label: string;
+  labelKey: string;
   icon: typeof LayoutDashboard;
   /**
    * When true, the nav row renders a small "Beta" chip after the label.
@@ -87,17 +53,17 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/inbox", label: "Inbox", icon: MessageSquare },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/pipelines", label: "Pipelines", icon: GitBranch },
-  { href: "/broadcasts", label: "Broadcasts", icon: Radio },
-  { href: "/automations", label: "Automations", icon: Zap },
-  { href: "/flows", label: "Flows", icon: Workflow, beta: true },
+  { href: "/dashboard", labelKey: "nav_dashboard", icon: LayoutDashboard },
+  { href: "/inbox", labelKey: "nav_inbox", icon: MessageSquare },
+  { href: "/contacts", labelKey: "nav_contacts", icon: Users },
+  { href: "/pipelines", labelKey: "nav_pipelines", icon: GitBranch },
+  { href: "/broadcasts", labelKey: "nav_broadcasts", icon: Radio },
+  { href: "/automations", labelKey: "nav_automations", icon: Zap },
+  { href: "/flows", labelKey: "nav_flows", icon: Workflow, beta: true },
 ];
 
 const bottomNavItems = [
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", labelKey: "nav_settings", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -108,6 +74,8 @@ interface SidebarProps {
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const t = useTranslations("layout.sidebar");
+  const tr = useTranslations("roles");
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   // Only surface the account-name strip when it actually carries
@@ -154,7 +122,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           part of the main flex row there. */}
       <button
         type="button"
-        aria-label="Close menu"
+        aria-label={t("close_menu")}
         onClick={onClose}
         className={cn(
           "fixed inset-0 z-30 bg-background/70 backdrop-blur-sm transition-opacity lg:hidden",
@@ -183,13 +151,13 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               <MessageSquare className="h-4 w-4" />
             </div>
             <span className="text-sm font-semibold text-foreground">
-              CRM Template for WhatsApp
+              {t("app_name")}
             </span>
           </Link>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close menu"
+            aria-label={t("close_menu")}
             className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
           >
             <X className="h-5 w-5" />
@@ -220,18 +188,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     )}
                   >
                     <item.icon className="h-4 w-4" />
-                    <span className="flex-1">{item.label}</span>
+                    <span className="flex-1">{t(item.labelKey)}</span>
                     {item.beta && (
                       <span
-                        aria-label="Beta feature"
+                        aria-label={t("beta")}
                         className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300"
                       >
-                        Beta
+                        {t("beta")}
                       </span>
                     )}
                     {showUnreadDot && (
                       <span
-                        aria-label={`${totalUnread} unread conversation${totalUnread === 1 ? "" : "s"}`}
+                        aria-label={t("unread_label", { count: totalUnread })}
                         className="relative flex h-2 w-2"
                       >
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
@@ -261,7 +229,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     )}
                   >
                     <item.icon className="h-4 w-4" />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 </li>
               );
@@ -292,14 +260,20 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 // from admins at a glance. Now everyone sees their
                 // role (with a colour cue) regardless of tier.
                 (() => {
-                  const meta = ROLE_CHIP[accountRole];
+                  const roleChip: Record<AccountRole, { icon: typeof Crown; className: string }> = {
+                    owner: { icon: Crown, className: "border-amber-500/40 bg-amber-500/10 text-amber-300" },
+                    admin: { icon: Shield, className: "border-primary/40 bg-primary/10 text-primary" },
+                    agent: { icon: UserCog, className: "border-border bg-muted text-foreground" },
+                    viewer: { icon: User, className: "border-border bg-card text-muted-foreground" },
+                  };
+                  const meta = roleChip[accountRole];
                   const Icon = meta.icon;
                   return (
                     <span
                       className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${meta.className}`}
                     >
                       <Icon className="size-3" />
-                      {meta.label}
+                      {tr(accountRole)}
                     </span>
                   );
                 })()
@@ -312,7 +286,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 {profile?.avatar_url ? (
                   <AvatarImage
                     src={profile.avatar_url}
-                    alt={profile.full_name ?? "Avatar"}
+                    alt={profile.full_name ?? t("avatar_alt")}
                   />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
@@ -323,7 +297,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               </Avatar>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-foreground">
-                  {profile?.full_name ?? "User"}
+                  {profile?.full_name ?? t("user_fallback")}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {profile?.email ?? ""}
@@ -346,7 +320,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 }
               >
                 <User className="size-4" />
-                Profile
+                {t("profile")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 render={
@@ -358,7 +332,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 }
               >
                 <Settings className="size-4" />
-                Settings
+                {t("settings")}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
@@ -366,7 +340,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
               >
                 <LogOut className="size-4" />
-                Sign out
+                {t("sign_out")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

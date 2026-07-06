@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   Workflow,
@@ -82,6 +83,7 @@ const TEMPLATE_ICONS = {
 } as const;
 
 export default function FlowsPage() {
+  const t = useTranslations("flows");
   const router = useRouter();
   const canCreate = useCan("send-messages");
   const [flows, setFlows] = useState<FlowRow[]>([]);
@@ -204,7 +206,7 @@ export default function FlowsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold text-foreground">Flows</h1>
+            <h1 className="text-2xl font-semibold text-foreground">{t("title")}</h1>
             <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
               Beta
             </span>
@@ -220,7 +222,7 @@ export default function FlowsPage() {
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4" />
-          New flow
+          {t("new_flow")}
         </GatedButton>
       </header>
 
@@ -249,7 +251,7 @@ export default function FlowsPage() {
             sm-scoped 384px wins at every real desktop breakpoint. */}
         <DialogContent className="sm:max-w-4xl bg-popover text-popover-foreground">
           <DialogHeader>
-            <DialogTitle>Create a new flow</DialogTitle>
+            <DialogTitle>{t("new_flow")}</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               Start from a template or build from scratch.
             </DialogDescription>
@@ -329,14 +331,15 @@ function EmptyState({
   onCreate: () => void;
   canCreate: boolean;
 }) {
+  const t = useTranslations("flows");
   return (
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card/50 px-6 py-16 text-center">
       <div className="flex h-14 w-14 items-center justify-center rounded-full bg-muted">
         <Workflow className="h-6 w-6 text-muted-foreground" />
       </div>
-      <h2 className="mt-4 text-base font-medium text-foreground">
-        No flows yet
-      </h2>
+        <h2 className="mt-4 text-base font-medium text-foreground">
+          {t("empty_title")}
+        </h2>
       <p className="mt-1 max-w-md text-sm text-muted-foreground">
         Build your first conversation — a welcome menu, an order lookup, an FAQ
         bot. Customers tap buttons; the bot routes them to the right answer (or
@@ -364,6 +367,7 @@ function FlowCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const t = useTranslations("flows");
   const triggerSummary = describeTrigger(flow);
   const StatusIcon =
     flow.status === "active"
@@ -406,7 +410,7 @@ function FlowCard({
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-border pt-3">
         <Button variant="ghost" size="sm" onClick={onEdit}>
           <Pencil className="h-3.5 w-3.5" />
-          Edit
+          {t("edit")}
         </Button>
         <Button
           variant="ghost"
@@ -415,7 +419,7 @@ function FlowCard({
           className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
         >
           <Trash2 className="h-3.5 w-3.5" />
-          Delete
+          {t("delete")}
         </Button>
       </div>
     </div>

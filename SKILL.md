@@ -155,10 +155,10 @@ Full setup: [wacrm.tech/docs](https://wacrm.tech/docs)
 |---------------|-------|------|------|--------|
 | Documentação  | 9.0   | 9.0 (teto) | ✅ SKILL.md + README completo | ✅ Feito |
 | Testes        | 1.0   | 8.0  | 37 test files (470 testes), CI workflow, badge | ✅ Feito |
-| Reuso         | 8.0   | 9.5  | Topics: `whatsapp`, `crm`, `nextjs`, `supabase`, `self-hosted` | ⏳ GitHub UI |
+| Reuso         | 8.0   | 9.5  | Topics: `crm`, `nextjs`, `react`, `self-hosted`, `supabase`, `typescript`, `whatsapp` | ✅ Feito |
 | Arquitetura   | 7.0   | 9.0  | Diagrama Mermaid no README + SKILL.md completo | ✅ Feito |
 | Manutenção    | 8.0   | 8.0 (estável) | Estável | ✅ Feito |
-| Tração        | 0.0   | 4.0  | Topics, descrição, divulgação em comunidades | ⏳ Em andamento |
+| Tração        | 0.0   | 4.0  | Topics ✅ + descrição ✅ feitos; divulgação em comunidades (Reddit, grupos BR, issue no upstream) pendente | ⏳ Em andamento (2/3) |
 
 ---
 

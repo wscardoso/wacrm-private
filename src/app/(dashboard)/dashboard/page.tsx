@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
@@ -37,6 +38,7 @@ import { ActivityFeed } from '@/components/dashboard/activity-feed'
 type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
+  const t = useTranslations("dashboard")
   const { defaultCurrency } = useAuth()
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
@@ -122,7 +124,7 @@ export default function DashboardPage() {
     <div className="space-y-5">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Live analytics across conversations, contacts, deals, broadcasts, and automations.
         </p>
@@ -135,7 +137,7 @@ export default function DashboardPage() {
         ) : (
           <>
             <MetricCard
-              title="Active Conversations"
+              title={t("active_conversations")}
               value={metrics.activeConversations.current.toLocaleString()}
               icon={MessageSquare}
               delta={{
@@ -144,7 +146,7 @@ export default function DashboardPage() {
               }}
             />
             <MetricCard
-              title="New Contacts Today"
+              title={t("new_contacts_today")}
               value={metrics.newContactsToday.current.toLocaleString()}
               icon={UserPlus}
               delta={{
@@ -157,13 +159,13 @@ export default function DashboardPage() {
               }}
             />
             <MetricCard
-              title="Open Deals Value"
+              title={t("open_deals_value")}
               value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
               icon={DollarSign}
               subtitle={`${metrics.openDealsCount} open deal${metrics.openDealsCount === 1 ? '' : 's'}`}
             />
             <MetricCard
-              title="Messages Sent Today"
+              title={t("messages_sent_today")}
               value={metrics.messagesSentToday.current.toLocaleString()}
               icon={Send}
               delta={{

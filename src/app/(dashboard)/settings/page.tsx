@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, type ReactNode } from 'react';
+import { useTranslations } from 'next-intl';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -22,6 +23,7 @@ import {
 } from '@/components/settings/settings-sections';
 
 export default function SettingsPage() {
+  const t = useTranslations("settings");
   const router = useRouter();
   const searchParams = useSearchParams();
   const { defaultCurrency } = useAuth();
@@ -67,7 +69,7 @@ export default function SettingsPage() {
     <div>
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Settings
+          {t("title")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Everything in one place — your account and your workspace. Pick a

@@ -125,7 +125,7 @@ function emptyButton(type: TemplateButton['type']): TemplateButton {
 
 export function TemplateManager() {
   const supabase = createClient();
-  const { user, loading: authLoading } = useAuth();
+  const { user, accountId, canEditSettings, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
@@ -177,21 +177,21 @@ export function TemplateManager() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!accountId) {
       setLoading(false);
       return;
     }
-    fetchTemplates(user.id);
+    fetchTemplates(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, [authLoading, accountId]);
 
-  async function fetchTemplates(userId: string) {
+  async function fetchTemplates(acctId: string) {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('message_templates')
         .select('*')
-        .eq('user_id', userId)
+        .eq('account_id', acctId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setTemplates(data || []);
@@ -484,24 +484,28 @@ export function TemplateManager() {
       <SettingsPanelHead
         title="Message templates"
         description={
-          'Create templates and submit them to Meta for approval. Use "Sync from Meta" to pull templates approved elsewhere.'
+          canEditSettings
+            ? 'Create templates and submit them to Meta for approval. Use "Sync from Meta" to pull templates approved elsewhere.'
+            : 'Only account admins can create, edit, or sync message templates.'
         }
         action={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={handleSyncFromMeta}
-              disabled={syncing}
-              title="Pull approved templates from your Meta WhatsApp Business Account"
-            >
-              <RefreshCw className={`size-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing…' : 'Sync from Meta'}
-            </Button>
-            <Button onClick={openCreate}>
-              <Plus className="size-4" />
-              New Template
-            </Button>
-          </div>
+          canEditSettings ? (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={handleSyncFromMeta}
+                disabled={syncing}
+                title="Pull approved templates from your Meta WhatsApp Business Account"
+              >
+                <RefreshCw className={`size-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing…' : 'Sync from Meta'}
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus className="size-4" />
+                New Template
+              </Button>
+            </div>
+          ) : undefined
         }
       />
 
@@ -570,57 +574,59 @@ export function TemplateManager() {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0 ml-2">
-                    {statusKey === 'APPROVED' && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEdit(template)}
-                        title="Editing triggers Meta re-review — status flips to PENDING."
-                        aria-label="Edit template"
-                        className="text-muted-foreground hover:text-primary hover:bg-primary/10 h-8 px-2"
-                      >
-                        <Pencil className="size-3.5" />
-                        Edit
-                      </Button>
-                    )}
-                    {(statusKey === 'REJECTED' || statusKey === 'PAUSED') && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEdit(template)}
-                        title="Edit the template and resubmit to Meta for review."
-                        aria-label="Edit and resubmit template"
-                        className="text-muted-foreground hover:text-primary hover:bg-primary/10 h-8 px-2"
-                      >
-                        <RotateCcw className="size-3.5" />
-                        Resubmit
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setTemplateToDelete(template)}
-                      disabled={deletingId === template.id}
-                      aria-label={
-                        template.meta_template_id
-                          ? 'Delete template from Meta and locally'
-                          : 'Delete template locally'
-                      }
-                      title={
-                        template.meta_template_id
-                          ? 'Delete from Meta and locally'
-                          : 'Delete locally'
-                      }
-                      className="text-muted-foreground hover:text-red-400 hover:bg-red-950/30 h-8 w-8"
-                    >
-                      {deletingId === template.id ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="size-4" />
+                  {canEditSettings && (
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {statusKey === 'APPROVED' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEdit(template)}
+                          title="Editing triggers Meta re-review — status flips to PENDING."
+                          aria-label="Edit template"
+                          className="text-muted-foreground hover:text-primary hover:bg-primary/10 h-8 px-2"
+                        >
+                          <Pencil className="size-3.5" />
+                          Edit
+                        </Button>
                       )}
-                    </Button>
-                  </div>
+                      {(statusKey === 'REJECTED' || statusKey === 'PAUSED') && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEdit(template)}
+                          title="Edit the template and resubmit to Meta for review."
+                          aria-label="Edit and resubmit template"
+                          className="text-muted-foreground hover:text-primary hover:bg-primary/10 h-8 px-2"
+                        >
+                          <RotateCcw className="size-3.5" />
+                          Resubmit
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setTemplateToDelete(template)}
+                        disabled={deletingId === template.id}
+                        aria-label={
+                          template.meta_template_id
+                            ? 'Delete template from Meta and locally'
+                            : 'Delete template locally'
+                        }
+                        title={
+                          template.meta_template_id
+                            ? 'Delete from Meta and locally'
+                            : 'Delete locally'
+                        }
+                        className="text-muted-foreground hover:text-red-400 hover:bg-red-950/30 h-8 w-8"
+                      >
+                        {deletingId === template.id ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="size-4" />
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             );

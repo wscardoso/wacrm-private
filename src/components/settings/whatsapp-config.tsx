@@ -42,7 +42,7 @@ export function WhatsAppConfig() {
   // context and key every read off it — so a teammate who just
   // joined an account sees the inviter's saved config without
   // having to re-enter anything.
-  const { user, accountId, loading: authLoading, profileLoading } = useAuth();
+  const { user, accountId, canEditSettings, loading: authLoading, profileLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -396,24 +396,26 @@ export function WhatsAppConfig() {
                 <AlertDescription className="text-amber-100/80 text-sm">
                   {statusMessage}
                 </AlertDescription>
-                <Button
-                  onClick={handleReset}
-                  disabled={resetting}
-                  size="sm"
-                  className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
-                >
-                  {resetting ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Resetting...
-                    </>
-                  ) : (
-                    <>
-                      <RotateCcw className="size-4" />
-                      Reset Configuration
-                    </>
-                  )}
-                </Button>
+                {canEditSettings && (
+                  <Button
+                    onClick={handleReset}
+                    disabled={resetting}
+                    size="sm"
+                    className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    {resetting ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Resetting...
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw className="size-4" />
+                        Reset Configuration
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
             </div>
           </Alert>
@@ -554,6 +556,11 @@ export function WhatsAppConfig() {
             <CardDescription className="text-muted-foreground">
               Enter your Meta WhatsApp Business API credentials.
             </CardDescription>
+            {!canEditSettings && (
+              <p className="text-xs text-muted-foreground">
+                Only account admins can edit WhatsApp connection settings.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -562,7 +569,8 @@ export function WhatsAppConfig() {
                 placeholder="e.g. 100234567890123"
                 value={phoneNumberId}
                 onChange={(e) => setPhoneNumberId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                disabled={!canEditSettings}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
 
@@ -572,7 +580,8 @@ export function WhatsAppConfig() {
                 placeholder="e.g. 100234567890456"
                 value={wabaId}
                 onChange={(e) => setWabaId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                disabled={!canEditSettings}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
 
@@ -593,7 +602,8 @@ export function WhatsAppConfig() {
                       setTokenEdited(true);
                     }
                   }}
-                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
+                  disabled={!canEditSettings}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10 disabled:cursor-not-allowed disabled:opacity-60"
                 />
                 <button
                   type="button"
@@ -616,7 +626,8 @@ export function WhatsAppConfig() {
                 placeholder="Create a custom verify token"
                 value={verifyToken}
                 onChange={(e) => setVerifyToken(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                disabled={!canEditSettings}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
               />
               <p className="text-xs text-muted-foreground">
                 A custom string you create. Must match the token you set in Meta webhook settings.
@@ -637,7 +648,8 @@ export function WhatsAppConfig() {
                 onChange={(e) =>
                   setPin(e.target.value.replace(/\D/g, '').slice(0, 6))
                 }
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest"
+                disabled={!canEditSettings}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest disabled:cursor-not-allowed disabled:opacity-60"
               />
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Needed only to wire <strong className="text-muted-foreground">inbound</strong> messages
@@ -691,20 +703,22 @@ export function WhatsAppConfig() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3">
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              'Save Configuration'
-            )}
-          </Button>
+          {canEditSettings && (
+            <Button
+              onClick={handleSave}
+              disabled={saving}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Configuration'
+              )}
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={handleTestConnection}
@@ -723,7 +737,7 @@ export function WhatsAppConfig() {
               </>
             )}
           </Button>
-          {config && (
+          {config && canEditSettings && (
             <Button
               variant="outline"
               onClick={handleReset}

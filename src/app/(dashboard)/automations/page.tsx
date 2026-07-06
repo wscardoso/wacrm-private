@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
   Zap,
@@ -58,6 +59,7 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
 }
 
 export default function AutomationsPage() {
+  const t = useTranslations("automations")
   const router = useRouter()
   const canCreate = useCan("send-messages")
   const [automations, setAutomations] = useState<Automation[] | null>(null)
@@ -102,7 +104,7 @@ export default function AutomationsPage() {
       toast.error(body?.error ?? "Failed to update")
       return
     }
-    toast.success(next ? "Automation activated" : "Automation paused")
+    toast.success(next ? t("activated") : "Automation paused")
   }
 
   async function duplicate(a: Automation) {
@@ -112,7 +114,7 @@ export default function AutomationsPage() {
       toast.error(body?.error ?? "Failed to duplicate")
       return
     }
-    toast.success("Automation duplicated")
+    toast.success(t("duplicated"))
     load()
   }
 
@@ -160,7 +162,7 @@ export default function AutomationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Automations</h1>
+          <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Build workflows that react to WhatsApp® events automatically.
           </p>
@@ -172,7 +174,7 @@ export default function AutomationsPage() {
           className="bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" />
-          Create Automation
+          {t("new_automation")}
         </GatedButton>
       </div>
 
@@ -206,9 +208,9 @@ export default function AutomationsPage() {
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
             <Zap className="h-6 w-6 text-primary" />
           </div>
-          <p className="mt-3 text-sm font-medium text-foreground">No automations yet</p>
+          <p className="mt-3 text-sm font-medium text-foreground">{t("empty_title")}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Pick a template above or create one from scratch.
+            {t("empty_description")}
           </p>
         </div>
       ) : (
