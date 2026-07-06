@@ -47,6 +47,7 @@ const SPEC_DEFAULT_STAGES = [
 
 export default function PipelinesPage() {
   const t = useTranslations("pipelines");
+  const tc = useTranslations("common");
   const supabase = createClient();
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
@@ -262,7 +263,7 @@ export default function PipelinesPage() {
     }
     // pipelines.account_id is NOT NULL post-017 with no DB default.
     if (!accountId) {
-      toast.error("Your profile is not linked to an account.");
+      toast.error(tc("no_account_linked"));
       setCreating(false);
       return;
     }
@@ -325,7 +326,7 @@ export default function PipelinesPage() {
             >
               <GitBranch className="h-4 w-4 text-primary" />
               <span className="font-semibold">
-                {selectedPipeline?.name ?? "Select Pipeline"}
+                {selectedPipeline?.name ?? t("select_pipeline")}
               </span>
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </DropdownMenuTrigger>
@@ -359,7 +360,7 @@ export default function PipelinesPage() {
                   className="text-popover-foreground"
                 >
                   <Settings className="mr-2 h-3.5 w-3.5" />
-                  Manage Pipelines
+                  {t("manage_pipelines")}
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -434,14 +435,14 @@ export default function PipelinesPage() {
             <Input
               value={newPipelineName}
               onChange={(e) => setNewPipelineName(e.target.value)}
-              placeholder="e.g., Enterprise Sales"
+              placeholder={t("pipeline_name_placeholder")}
               className="mt-2 bg-muted border-border text-foreground"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreatePipeline();
               }}
             />
             <p className="mt-2 text-xs text-muted-foreground">
-              Default stages (New Lead → Won) will be created automatically.
+              {t("default_stages_note")}
             </p>
           </div>
           <DialogFooter className="bg-popover/50 border-border">
@@ -450,14 +451,14 @@ export default function PipelinesPage() {
               onClick={() => setNewPipelineOpen(false)}
               className="border-border text-muted-foreground hover:bg-muted"
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleCreatePipeline}
               disabled={creating || !newPipelineName.trim()}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              {creating ? "Creating..." : t("create_pipeline")}
+              {creating ? t("creating") : t("create_pipeline")}
             </Button>
           </DialogFooter>
         </DialogContent>

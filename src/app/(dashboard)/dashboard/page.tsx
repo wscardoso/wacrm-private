@@ -120,13 +120,19 @@ export default function DashboardPage() {
     [series],
   )
 
+  function deltaLabel(delta: number, suffix: string): string {
+    if (delta === 0) return t("no_change", { suffix })
+    const sign = delta > 0 ? '+' : ''
+    return `${sign}${delta.toLocaleString()} ${suffix}`
+  }
+
   return (
     <div className="space-y-5">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Live analytics across conversations, contacts, deals, broadcasts, and automations.
+          {t("description")}
         </p>
       </div>
 
@@ -142,7 +148,7 @@ export default function DashboardPage() {
               icon={MessageSquare}
               delta={{
                 sign: metrics.activeConversations.previous,
-                label: deltaLabel(metrics.activeConversations.previous, 'new today vs yesterday'),
+                label: deltaLabel(metrics.activeConversations.previous, t("delta_new_today")),
               }}
             />
             <MetricCard
@@ -154,7 +160,7 @@ export default function DashboardPage() {
                   metrics.newContactsToday.current - metrics.newContactsToday.previous,
                 label: deltaLabel(
                   metrics.newContactsToday.current - metrics.newContactsToday.previous,
-                  'vs yesterday',
+                  t("delta_vs_yesterday"),
                 ),
               }}
             />
@@ -162,7 +168,7 @@ export default function DashboardPage() {
               title={t("open_deals_value")}
               value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
               icon={DollarSign}
-              subtitle={`${metrics.openDealsCount} open deal${metrics.openDealsCount === 1 ? '' : 's'}`}
+              subtitle={t("open_deals", { count: metrics.openDealsCount })}
             />
             <MetricCard
               title={t("messages_sent_today")}
@@ -173,7 +179,7 @@ export default function DashboardPage() {
                   metrics.messagesSentToday.current - metrics.messagesSentToday.previous,
                 label: deltaLabel(
                   metrics.messagesSentToday.current - metrics.messagesSentToday.previous,
-                  'vs yesterday',
+                  t("delta_vs_yesterday"),
                 ),
               }}
             />
@@ -218,10 +224,4 @@ export default function DashboardPage() {
   )
 }
 
-// ------------------------------------------------------------
 
-function deltaLabel(delta: number, suffix: string): string {
-  if (delta === 0) return `No change ${suffix}`
-  const sign = delta > 0 ? '+' : ''
-  return `${sign}${delta.toLocaleString()} ${suffix}`
-}

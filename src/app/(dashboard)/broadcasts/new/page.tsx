@@ -11,16 +11,17 @@ import { Step2SelectAudience } from '@/components/broadcasts/step2-select-audien
 import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
+import { useTranslations } from 'next-intl';
 import { Check } from 'lucide-react';
 
-const steps = [
-  { label: 'Template', key: 'template' },
-  { label: 'Audience', key: 'audience' },
-  { label: 'Personalize', key: 'personalize' },
-  { label: 'Send', key: 'send' },
-] as const;
-
 export default function NewBroadcastPage() {
+  const t = useTranslations("broadcasts.new_page");
+  const steps = [
+    { label: t("step_template"), key: 'template' },
+    { label: t("step_audience"), key: 'audience' },
+    { label: t("step_personalize"), key: 'personalize' },
+    { label: t("step_send"), key: 'send' },
+  ];
   const router = useRouter();
   const { accountId } = useAuth();
   const { createAndSendBroadcast, isProcessing, progress } = useBroadcastSending();
@@ -131,9 +132,9 @@ export default function NewBroadcastPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">New Broadcast</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Create and send a broadcast message to your contacts.
+          {t("description")}
         </p>
       </div>
 

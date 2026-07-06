@@ -143,7 +143,7 @@ export default function BroadcastsPage() {
       <div className="flex h-64 flex-col items-center justify-center gap-2">
         <p className="text-sm text-red-400">{error}</p>
         <Button variant="outline" onClick={() => window.location.reload()}>
-          Retry
+          {t("retry")}
         </Button>
       </div>
     );
@@ -183,7 +183,7 @@ export default function BroadcastsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Send bulk messages to your contacts using approved templates.
+            {t("description")}
           </p>
         </div>
         <GatedButton
@@ -211,7 +211,7 @@ export default function BroadcastsPage() {
             className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Plus className="h-4 w-4" />
-            New Broadcast
+            {t("new_broadcast_empty")}
           </GatedButton>
         </div>
       ) : (
@@ -219,15 +219,15 @@ export default function BroadcastsPage() {
           <Table>
             <TableHeader>
               <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="text-muted-foreground">Name</TableHead>
-                <TableHead className="hidden text-muted-foreground md:table-cell">Template</TableHead>
+                <TableHead className="text-muted-foreground">{t("table_name")}</TableHead>
+                <TableHead className="hidden text-muted-foreground md:table-cell">{t("table_template")}</TableHead>
                 <TableHead className="hidden text-right text-muted-foreground sm:table-cell">
-                  Recipients
+                  {t("table_recipients")}
                 </TableHead>
-                <TableHead className="hidden text-muted-foreground lg:table-cell">Delivery</TableHead>
-                <TableHead className="hidden text-muted-foreground lg:table-cell">Read</TableHead>
-                <TableHead className="text-muted-foreground">Status</TableHead>
-                <TableHead className="hidden text-muted-foreground sm:table-cell">Date</TableHead>
+                <TableHead className="hidden text-muted-foreground lg:table-cell">{t("table_delivery")}</TableHead>
+                <TableHead className="hidden text-muted-foreground lg:table-cell">{t("table_read")}</TableHead>
+                <TableHead className="text-muted-foreground">{t("table_status")}</TableHead>
+                <TableHead className="hidden text-muted-foreground sm:table-cell">{t("table_date")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

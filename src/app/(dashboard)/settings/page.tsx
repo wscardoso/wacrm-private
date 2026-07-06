@@ -72,8 +72,7 @@ export default function SettingsPage() {
           {t("title")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Everything in one place — your account and your workspace. Pick a
-          section to manage it.
+          {t("description")}
         </p>
       </div>
 

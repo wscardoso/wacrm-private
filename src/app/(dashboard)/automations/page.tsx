@@ -60,6 +60,7 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
 
 export default function AutomationsPage() {
   const t = useTranslations("automations")
+  const tc = useTranslations("common")
   const router = useRouter()
   const canCreate = useCan("send-messages")
   const [automations, setAutomations] = useState<Automation[] | null>(null)
@@ -104,7 +105,7 @@ export default function AutomationsPage() {
       toast.error(body?.error ?? "Failed to update")
       return
     }
-    toast.success(next ? t("activated") : "Automation paused")
+    toast.success(next ? t("activated") : t("pause_label"))
   }
 
   async function duplicate(a: Automation) {
@@ -128,7 +129,7 @@ export default function AutomationsPage() {
       toast.error(body?.error ?? "Failed to delete")
       return
     }
-    toast.success("Automation deleted")
+    toast.success(t("deleted"))
     setPendingDelete(null)
     load()
   }
@@ -142,7 +143,7 @@ export default function AutomationsPage() {
       <div className="flex h-64 flex-col items-center justify-center gap-2">
         <p className="text-sm text-red-400">{error}</p>
         <Button variant="outline" onClick={() => window.location.reload()}>
-          Retry
+          {tc("try_again")}
         </Button>
       </div>
     )
@@ -164,7 +165,7 @@ export default function AutomationsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Build workflows that react to WhatsApp® events automatically.
+            {t("description")}
           </p>
         </div>
         <GatedButton
@@ -180,7 +181,7 @@ export default function AutomationsPage() {
 
       {showTemplates && (
         <section>
-          <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Quick-start templates</h2>
+          <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{t("quick_start_templates")}</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {TEMPLATE_ORDER.map((slug) => {
               const t = AUTOMATION_TEMPLATES[slug]
@@ -232,11 +233,9 @@ export default function AutomationsPage() {
       <Dialog open={!!pendingDelete} onOpenChange={(v) => !v && setPendingDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete automation</DialogTitle>
+            <DialogTitle>{t("delete_title")}</DialogTitle>
             <DialogDescription>
-              This permanently removes{" "}
-              <span className="text-foreground">{pendingDelete?.name}</span> and its execution
-              history. This cannot be undone.
+              {t("delete_description", { name: pendingDelete!.name })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -245,7 +244,7 @@ export default function AutomationsPage() {
               onClick={() => setPendingDelete(null)}
               disabled={deleting}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -253,7 +252,7 @@ export default function AutomationsPage() {
               disabled={deleting}
             >
               {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              Delete
+              {t("delete_action")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -277,6 +276,7 @@ function AutomationCard({
   onLogs: () => void
   onDelete: () => void
 }) {
+  const t = useTranslations("automations")
   const meta = triggerMeta(automation.trigger_type)
   return (
     <li className="rounded-xl border border-border bg-card transition-colors hover:border-border">
@@ -317,10 +317,10 @@ function AutomationCard({
               {meta.label}
             </span>
             <span className="tabular-nums">
-              {automation.execution_count} run{automation.execution_count === 1 ? "" : "s"}
+              {t("runs", { count: automation.execution_count })}
             </span>
             <span aria-hidden>·</span>
-            <span>last {formatRelative(automation.last_executed_at)}</span>
+            <span>{t("last_run", { time: formatRelative(automation.last_executed_at) })}</span>
           </div>
         </button>
 
@@ -328,12 +328,12 @@ function AutomationCard({
           <Switch
             checked={automation.is_active}
             onCheckedChange={(v) => onToggle(!!v)}
-            aria-label={automation.is_active ? "Deactivate" : "Activate"}
+            aria-label={automation.is_active ? t("deactivate_aria") : t("activate_aria")}
           />
 
           <DropdownMenu>
             <DropdownMenuTrigger
-              aria-label="Open menu"
+              aria-label={t("open_menu_aria")}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[popup-open]:bg-muted"
             >
               <MoreVertical className="h-4 w-4" />
@@ -341,20 +341,20 @@ function AutomationCard({
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={onEdit}>
                 <Pencil className="h-4 w-4" />
-                Edit
+                {t("edit_action")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onDuplicate}>
                 <Copy className="h-4 w-4" />
-                Duplicate
+                {t("duplicate_action")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onLogs}>
                 <FileText className="h-4 w-4" />
-                View Logs
+                {t("view_logs")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={onDelete}>
                 <Trash2 className="h-4 w-4" />
-                Delete
+                {t("delete_action")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

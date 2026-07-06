@@ -346,7 +346,7 @@ export default function ContactsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your contact list. {totalCount > 0 && `${totalCount} total contacts.`}
+            Manage your contact list. {totalCount > 0 && t("total_contacts", { count: totalCount })}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -357,7 +357,7 @@ export default function ContactsPage() {
               className="border-border text-muted-foreground hover:bg-muted"
             >
               <SlidersHorizontal className="size-4" />
-              Custom fields
+              {t("custom_fields_title")}
             </Button>
           )}
           <GatedButton
@@ -368,7 +368,7 @@ export default function ContactsPage() {
             className="border-border text-muted-foreground hover:bg-muted"
           >
             <Upload className="size-4" />
-            Import
+            {t("import_csv")}
           </GatedButton>
           <GatedButton
             canAct={canEdit}
@@ -395,7 +395,7 @@ export default function ContactsPage() {
                 // set shrinks/grows, page N may no longer be valid.
                 setPage(0);
               }}
-              placeholder="Search by name, phone, or email..."
+              placeholder={t("search_placeholder")}
               className="pl-8 bg-card border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -410,7 +410,7 @@ export default function ContactsPage() {
               }
             >
               <Filter className="size-4" />
-              Filter by tags
+              {t("filter_by_tags")}
               {selectedTagIds.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
                   {selectedTagIds.length}
@@ -420,20 +420,20 @@ export default function ContactsPage() {
             <PopoverContent align="start" className="w-64 p-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-border">
                 <span className="text-sm font-medium text-popover-foreground">
-                  Filter by tags
+                  {t("filter_by_tags")}
                 </span>
                 {selectedTagIds.length > 0 && (
                   <button
                     onClick={clearTagFilters}
                     className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    Clear all
+                    {t("clear_all")}
                   </button>
                 )}
               </div>
               {allTags.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-muted-foreground text-center">
-                  No tags yet.
+                  {t("no_tags_yet")}
                 </p>
               ) : (
                 <div className="max-h-64 overflow-y-auto py-1">
@@ -492,7 +492,7 @@ export default function ContactsPage() {
               onClick={clearTagFilters}
               className="text-xs text-muted-foreground hover:text-foreground px-1"
             >
-              Clear all
+              {t("clear_all")}
             </button>
           </div>
         )}
@@ -502,8 +502,7 @@ export default function ContactsPage() {
       {selected.size > 0 && (
         <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 px-4 py-2">
           <p className="text-sm text-foreground">
-            <span className="font-medium">{selected.size}</span>{' '}
-            {selected.size === 1 ? 'contact' : 'contacts'} selected
+            {t("bulk_selected", { count: selected.size })}
           </p>
           <div className="flex items-center gap-2">
             <Button
@@ -512,7 +511,7 @@ export default function ContactsPage() {
               onClick={() => setSelected(new Set())}
               className="text-muted-foreground hover:text-foreground"
             >
-              Clear
+              {t("bulk_clear")}
             </Button>
             <GatedButton
               variant="destructive"
@@ -522,7 +521,7 @@ export default function ContactsPage() {
               onClick={() => setBulkDeleteOpen(true)}
             >
               <Trash2 className="size-4" />
-              Delete selected
+              {t("bulk_delete_selected")}
             </GatedButton>
           </div>
         </div>
@@ -557,7 +556,7 @@ export default function ContactsPage() {
                 <TableCell colSpan={8} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="size-6 animate-spin text-primary" />
-                    <p className="text-sm text-muted-foreground">Loading contacts...</p>
+                    <p className="text-sm text-muted-foreground">{t("loading")}</p>
                   </div>
                 </TableCell>
               </TableRow>
@@ -568,7 +567,7 @@ export default function ContactsPage() {
                     <Users className="size-8 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
                       {hasActiveFilters
-                        ? 'No contacts match your filters.'
+                        ? t("no_results_filter")
                         : t("empty_title")}
                     </p>
                     {!hasActiveFilters && (
@@ -579,7 +578,7 @@ export default function ContactsPage() {
                         className="mt-2 border-border text-muted-foreground hover:bg-muted"
                       >
                         <Plus className="size-3.5" />
-                        Add your first contact
+                        {t("add_first")}
                       </Button>
                     )}
                   </div>
@@ -600,7 +599,7 @@ export default function ContactsPage() {
                     />
                   </TableCell>
                   <TableCell className="text-foreground font-medium">
-                    {contact.name || <span className="text-muted-foreground italic">Unnamed</span>}
+                    {contact.name || <span className="text-muted-foreground italic">{t("unnamed")}</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">
                     {contact.phone}
@@ -696,8 +695,7 @@ export default function ContactsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalCount)} of{' '}
-            {totalCount}
+            {t("showing", { from: page * PAGE_SIZE + 1, to: Math.min((page + 1) * PAGE_SIZE, totalCount), total: totalCount })}
           </p>
           <div className="flex items-center gap-1">
             <Button
@@ -710,7 +708,7 @@ export default function ContactsPage() {
               <ChevronLeft className="size-4" />
             </Button>
             <span className="text-xs text-muted-foreground px-2">
-              Page {page + 1} of {totalPages}
+              {t("page", { current: page + 1, total: totalPages })}
             </span>
             <Button
               variant="outline"
@@ -798,14 +796,10 @@ export default function ContactsPage() {
         <DialogContent className="bg-popover border-border text-popover-foreground sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-popover-foreground">
-              Delete {selected.size} {selected.size === 1 ? 'Contact' : 'Contacts'}
+              {t("delete_bulk_title", { count: selected.size })}
             </DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Are you sure you want to delete{' '}
-              <span className="text-popover-foreground font-medium">
-                {selected.size} {selected.size === 1 ? 'contact' : 'contacts'}
-              </span>
-              ? This action cannot be undone.
+              {t("delete_bulk_description", { count: selected.size })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="bg-popover border-border">

@@ -20,7 +20,7 @@ export function QuickActions() {
   const t = useTranslations("dashboard")
   const ACTIONS: Action[] = [
     { label: t("new_contact"), href: '/contacts', icon: UserPlus, tint: 'text-primary' },
-    { label: 'New Deal', href: '/pipelines', icon: Briefcase, tint: 'text-blue-400' },
+    { label: t("new_deal"), href: '/pipelines', icon: Briefcase, tint: 'text-blue-400' },
     { label: t("new_broadcast"), href: '/broadcasts/new', icon: Radio, tint: 'text-amber-400' },
     { label: t("new_automation"), href: '/automations/new', icon: Zap, tint: 'text-primary' },
   ]

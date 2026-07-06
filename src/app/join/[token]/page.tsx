@@ -51,6 +51,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useTranslations } from 'next-intl';
 import { createClient } from '@/lib/supabase/client';
 
 interface PeekOk {
@@ -64,31 +65,6 @@ interface PeekFail {
   reason: 'not_found' | 'used' | 'expired' | 'server_error';
 }
 type PeekResult = PeekOk | PeekFail;
-
-const ROLE_LABEL: Record<PeekOk['role'], string> = {
-  admin: 'Admin',
-  agent: 'Agent',
-  viewer: 'Viewer',
-};
-
-const FAIL_COPY: Record<PeekFail['reason'], { title: string; body: string }> = {
-  not_found: {
-    title: 'Invite not found',
-    body: 'This link doesn’t match a valid invitation. Double-check the URL or ask the person who invited you to send a new one.',
-  },
-  used: {
-    title: 'Invite already used',
-    body: 'This invitation has already been accepted. If that wasn’t you, ask the account admin to send a fresh link.',
-  },
-  expired: {
-    title: 'Invite expired',
-    body: 'This invitation has expired. Ask the account admin to send a new one — they take a few seconds to generate.',
-  },
-  server_error: {
-    title: 'Something went wrong',
-    body: 'We couldn’t verify this invitation right now. Try refreshing the page in a moment.',
-  },
-};
 
 export default function JoinPage() {
   const params = useParams<{ token: string }>();
@@ -108,6 +84,10 @@ export default function JoinPage() {
   // step. Surface a blocking modal that walks them through it.
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+
+  const t = useTranslations("auth.join");
+  const tc = useTranslations("common");
+  const tr = useTranslations("roles");
 
   // Extracted so the "Try again" button on the server_error card
   // can re-run the same logic without remounting the component.
@@ -186,21 +166,21 @@ export default function JoinPage() {
               'You are already in another account. Sign in with a different email to join this one.',
           );
         } else {
-          toast.error(payload.error || 'Failed to accept invitation');
+          toast.error(payload.error || tc("failed_to_accept"));
         }
         setAccepting(false);
         return;
       }
-      toast.success('Welcome to the team');
+      toast.success(tc("welcome_to_team"));
       // Full reload (not router.push) so AuthProvider re-fetches
       // the profile with the new account_id and account_role.
       window.location.href = '/dashboard';
     } catch (err) {
       console.error('[join] redeem error:', err);
-      toast.error('Could not reach the server');
+      toast.error(tc("could_not_reach_server"));
       setAccepting(false);
     }
-  }, [token]);
+  }, [token, tc]);
 
   const handleSignOutAndRetry = useCallback(async () => {
     setSigningOut(true);
@@ -212,10 +192,10 @@ export default function JoinPage() {
       window.location.reload();
     } catch (err) {
       console.error('[join] sign-out error:', err);
-      toast.error('Could not sign out. Try refreshing the page.');
+      toast.error(tc("could_not_sign_out"));
       setSigningOut(false);
     }
-  }, []);
+  }, [tc]);
 
   // ----- Loading state (peek pending OR auth not yet resolved) -----
   if (peek === null || authedUserId === undefined) {
@@ -223,7 +203,7 @@ export default function JoinPage() {
       <Card className="w-full max-w-md border-border bg-card">
         <CardContent className="flex flex-col items-center gap-3 py-12">
           <Loader2 className="size-6 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Verifying invitation…</p>
+          <p className="text-sm text-muted-foreground">{tc("verifying_invitation")}</p>
         </CardContent>
       </Card>
     );
@@ -231,7 +211,12 @@ export default function JoinPage() {
 
   // ----- Peek failed -----
   if (!peek.ok) {
-    const copy = FAIL_COPY[peek.reason];
+    const copy = {
+      not_found: { title: t("not_found"), body: tc("invite_not_found_body") },
+      used: { title: t("already_accepted"), body: tc("invite_already_used_body") },
+      expired: { title: t("expired"), body: tc("invite_expired_body") },
+      server_error: { title: tc("something_went_wrong"), body: tc("could_not_verify_invite_body") },
+    }[peek.reason]!;
     return (
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="items-center text-center">
@@ -244,27 +229,20 @@ export default function JoinPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
-          {/* For server_error the failure is transient — the network
-              flapped or the peek endpoint hiccupped. Try-again is
-              the right primary action; the "create account" /
-              "sign in" links stay as secondary options. Other
-              failure reasons (not_found / used / expired) are
-              terminal for this token, so no retry — just the
-              signup/sign-in escape hatches. */}
           {peek.reason === 'server_error' ? (
             <>
               <Button
                 onClick={loadPeekAndAuth}
                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                Try again
+                {tc("try_again")}
               </Button>
               <Link href="/signup">
                 <Button
                   variant="outline"
                   className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
-                  Create a new account instead
+                  {tc("create_account_instead")}
                 </Button>
               </Link>
             </>
@@ -272,7 +250,7 @@ export default function JoinPage() {
             <>
               <Link href="/signup">
                 <Button className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
-                  Create a new account instead
+                  {tc("create_account_instead")}
                 </Button>
               </Link>
               <Link href="/login">
@@ -280,7 +258,7 @@ export default function JoinPage() {
                   variant="outline"
                   className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
-                  Sign in
+                  {tc("sign_in")}
                 </Button>
               </Link>
             </>
@@ -297,14 +275,16 @@ export default function JoinPage() {
         <UsersRound className="h-6 w-6 text-primary" />
       </div>
       <CardTitle className="text-xl text-foreground">
-        You&apos;re invited to{' '}
+        {t("title")}{' '}
         <span className="text-primary">{peek.account_name}</span>
       </CardTitle>
       <CardDescription className="text-muted-foreground">
-        You&apos;ll join as{' '}
+        {t("subtitle")}{' '}
+        <span className="text-primary">{peek.account_name}</span>{' '}
+        as{' '}
         <span className="inline-flex items-center gap-1 text-foreground">
           <ShieldCheck className="size-3.5 text-primary" />
-          {ROLE_LABEL[peek.role]}
+          {tr(peek.role)}
         </span>
         . Link valid until{' '}
         {new Date(peek.expires_at).toLocaleDateString(undefined, {
@@ -332,19 +312,17 @@ export default function JoinPage() {
               {accepting ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Accepting…
+                  {tc("accepting")}
                 </>
               ) : (
                 <>
                   <CheckCircle className="size-4" />
-                  Accept invitation
+                  {t("accept")}
                 </>
               )}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              Accepting moves your login into{' '}
-              <span className="text-muted-foreground">{peek.account_name}</span>. Your
-              empty personal account from signup will be cleaned up.
+              {tc("accepting_moves", { name: peek.account_name })}
             </p>
           </CardContent>
         </Card>
@@ -363,7 +341,7 @@ export default function JoinPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-popover-foreground">
                 <AlertTriangle className="size-4 text-amber-400" />
-                Can&apos;t join {peek.account_name} with this account
+                {tc("cannot_join_account", { name: peek.account_name })}
               </DialogTitle>
               <DialogDescription className="text-muted-foreground">
                 {conflictMessage}
@@ -371,11 +349,7 @@ export default function JoinPage() {
             </DialogHeader>
             <div className="space-y-2 py-2 text-xs text-muted-foreground">
               <p>
-                To join{' '}
-                <span className="text-popover-foreground">{peek.account_name}</span>,
-                sign out and sign up again with a different email address.
-                The invite link stays valid as long as it hasn&apos;t
-                expired.
+                {tc("join_instructions", { name: peek.account_name })}
               </p>
             </div>
             <DialogFooter className="bg-popover border-border">
@@ -384,7 +358,7 @@ export default function JoinPage() {
                 onClick={() => setConflictMessage(null)}
                 className="border-border text-popover-foreground hover:bg-muted"
               >
-                Stay signed in
+                {tc("stay_signed_in")}
               </Button>
               <Button
                 onClick={handleSignOutAndRetry}
@@ -394,10 +368,10 @@ export default function JoinPage() {
                 {signingOut ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Signing out…
+                    {tc("signing_out")}
                   </>
                 ) : (
-                  'Sign out & use a different email'
+                  tc("sign_out_different_email")
                 )}
               </Button>
             </DialogFooter>
@@ -414,7 +388,7 @@ export default function JoinPage() {
       <CardContent className="flex flex-col gap-2">
         <Link href={`/signup?invite=${encodeURIComponent(token!)}`}>
           <Button className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
-            Create account &amp; join
+            {tc("create_account_join")}
           </Button>
         </Link>
         <Link href={`/login?invite=${encodeURIComponent(token!)}`}>
@@ -422,7 +396,7 @@ export default function JoinPage() {
             variant="outline"
             className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            I already have an account
+            {tc("already_have_account")}
           </Button>
         </Link>
       </CardContent>

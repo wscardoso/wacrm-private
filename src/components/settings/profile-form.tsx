@@ -74,14 +74,14 @@ export function ProfileForm() {
     if (!file) return;
 
     if (!ALLOWED_MIME.has(file.type)) {
-      toast.error('Unsupported image type', {
-        description: 'Use PNG, JPG, WebP, or GIF.',
+      toast.error(ts("image_type_error"), {
+        description: ts("image_type_hint"),
       });
       return;
     }
     if (file.size > MAX_AVATAR_BYTES) {
-      toast.error('Image is too large', {
-        description: 'Maximum 2 MB.',
+      toast.error(ts("image_size_error"), {
+        description: ts("image_size_hint"),
       });
       return;
     }

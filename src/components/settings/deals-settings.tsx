@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import { Coins, Loader2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
@@ -28,6 +29,7 @@ import { SettingsPanelHead } from "./settings-panel-head";
  * admins+, so non-admins see a disabled, read-only control.
  */
 export function DealsSettings() {
+  const t = useTranslations("settings.deals");
   const supabase = createClient();
   const {
     accountId,
@@ -116,10 +118,10 @@ export function DealsSettings() {
               {saving ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Saving...
+                  {t("saving")}
                 </>
               ) : (
-                "Save"
+                t("save")
               )}
             </Button>
           )}

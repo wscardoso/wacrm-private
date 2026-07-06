@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import { useRouter } from "next/navigation"
+import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
   ArrowLeft,
@@ -464,6 +465,7 @@ function SendTemplateFields({
 
 export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   const router = useRouter()
+  const t = useTranslations("automations")
   const isEditing = !!initial.id
   const [state, setState] = useState<BuilderInitial>(initial)
   const [saving, setSaving] = useState(false)
@@ -581,7 +583,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
           className="bg-primary text-primary-foreground hover:bg-primary/90"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          {isEditing ? "Save" : "Save Draft"}
+          {isEditing ? t("save") : t("save_draft")}
         </Button>
       </header>
 

@@ -5,6 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { ThemedToaster } from "@/components/themed-toaster";
 import { I18nProvider } from "@/lib/i18n-provider";
+import { getServerLocale } from "@/lib/i18n-server";
 import {
   DEFAULT_MODE,
   DEFAULT_THEME,
@@ -76,14 +77,15 @@ const THEME_BOOT_SCRIPT = `
 })();
 `;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getServerLocale();
   return (
     <html
-      lang="en"
+      lang={locale}
       data-theme={DEFAULT_THEME}
       data-mode={DEFAULT_MODE}
       className={`${inter.variable} h-full antialiased`}
