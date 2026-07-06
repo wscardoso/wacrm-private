@@ -235,7 +235,7 @@ export default function AutomationsPage() {
           <DialogHeader>
             <DialogTitle>{t("delete_title")}</DialogTitle>
             <DialogDescription>
-              {t("delete_description", { name: pendingDelete!.name })}
+              {t("delete_description", { name: pendingDelete?.name ?? "" })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
