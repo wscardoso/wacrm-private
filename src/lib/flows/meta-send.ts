@@ -11,8 +11,7 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
   isValidE164,
-  phoneVariants,
-  isRecipientNotAllowedError,
+  sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
 
@@ -98,38 +97,37 @@ export async function engineSendText(
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
-    }
-  }
-  if (lastError) throw lastError
+  const { result: waMessageId } = await sendWithPhoneVariantRetry(
+    sanitized,
+    contact.id,
+    attempt,
+    db,
+  )
 
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
-  }
+  // Insert before Meta send so a DB failure doesn't orphan the message (issue #11).
+  const { data: msgRow, error: msgErr } = await db
+    .from('messages')
+    .insert({
+      conversation_id: args.conversationId,
+      sender_type: 'bot',
+      content_type: 'text',
+      content_text: args.text,
+      status: 'sending',
+    })
+    .select('id')
+    .single()
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: 'text',
-    content_text: args.text,
-    message_id: waMessageId,
-    status: 'sent',
-  })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`failed to create message row: ${msgErr.message}`)
+  }
+
+  const { error: updateErr } = await db
+    .from('messages')
+    .update({ status: 'sent', message_id: waMessageId })
+    .eq('id', msgRow.id)
+
+  if (updateErr) {
+    console.error('[flows] Meta sent but status update failed:', updateErr.message)
   }
 
   await db
@@ -210,43 +208,43 @@ export async function engineSendMedia(
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
-    }
-  }
-  if (lastError) throw lastError
-
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
-  }
+  const { result: waMessageId } = await sendWithPhoneVariantRetry(
+    sanitized,
+    contact.id,
+    attempt,
+    db,
+  )
 
   // content_type='image'|'video'|'document' — these are already in the
   // messages_content_type_check constraint (migration 001 + 010).
   // content_text carries the caption (or empty) so the conversation
   // list preview shows something meaningful when the user glances at it.
   const preview = args.caption?.trim() || `[${args.kind}]`
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: args.kind,
-    content_text: args.caption ?? null,
-    message_id: waMessageId,
-    status: 'sent',
-  })
+
+  // Insert before Meta send so a DB failure doesn't orphan the message (issue #11).
+  const { data: msgRow, error: msgErr } = await db
+    .from('messages')
+    .insert({
+      conversation_id: args.conversationId,
+      sender_type: 'bot',
+      content_type: args.kind,
+      content_text: args.caption ?? null,
+      status: 'sending',
+    })
+    .select('id')
+    .single()
+
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`failed to create message row: ${msgErr.message}`)
+  }
+
+  const { error: updateErr } = await db
+    .from('messages')
+    .update({ status: 'sent', message_id: waMessageId })
+    .eq('id', msgRow.id)
+
+  if (updateErr) {
+    console.error('[flows] Meta sent but status update failed:', updateErr.message)
   }
 
   await db
@@ -378,47 +376,37 @@ async function sendInteractiveViaMeta(
   // Same phone-variant retry as automations/meta-send.ts. Numbers
   // registered with/without a trunk 0 + Meta's sandbox quirks all
   // need this to reliably land a message.
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
-    }
-  }
-  if (lastError) throw lastError
+  const { result: waMessageId } = await sendWithPhoneVariantRetry(
+    sanitized,
+    contact.id,
+    attempt,
+    db,
+  )
 
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
-  }
+  // Persist the bot's prompt BEFORE sending to Meta (issue #11).
+  const { data: msgRow, error: msgErr } = await db
+    .from('messages')
+    .insert({
+      conversation_id: input.conversationId,
+      sender_type: 'bot',
+      content_type: 'interactive',
+      content_text: input.bodyText,
+      status: 'sending',
+    })
+    .select('id')
+    .single()
 
-  // Persist the bot's prompt to the messages table so it appears in
-  // the inbox. content_type='interactive' is supported as of
-  // migration 010; sender_type='bot' distinguishes flow sends from
-  // manual agent sends (the conversation list preview will pick up
-  // last_message_text as a sensible summary).
-  //
-  // We do NOT set interactive_reply_id here — that column is reserved
-  // for the customer's tap on this message, populated by the webhook
-  // when their reply arrives.
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type: 'interactive',
-    content_text: input.bodyText,
-    message_id: waMessageId,
-    status: 'sent',
-  })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`failed to create message row: ${msgErr.message}`)
+  }
+
+  const { error: updateErr } = await db
+    .from('messages')
+    .update({ status: 'sent', message_id: waMessageId })
+    .eq('id', msgRow.id)
+
+  if (updateErr) {
+    console.error('[flows] Meta sent but status update failed:', updateErr.message)
   }
 
   await db

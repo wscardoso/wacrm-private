@@ -1,3 +1,5 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+
 /**
  * Sanitize phone number for Meta WhatsApp API.
  * Meta requires digits only — no + prefix, no spaces, no dashes.
@@ -18,9 +20,14 @@ export function normalizePhone(phone: string): string {
 }
 
 /**
- * Compare two phone numbers accounting for trunk prefix differences.
- * e.g. "370063949836" (with trunk 0) matches "37063949836" (without trunk 0)
- * by comparing the last 8 digits.
+ * Loose comparison: same normalized digits, or same last 8 digits.
+ *
+ * ONLY safe for advisory surfaces ("possible duplicate" warnings) —
+ * two genuinely different numbers can share their last 8 digits
+ * across country/area codes, so treating this as identity would
+ * attach one contact's messages to another. For identity decisions
+ * (webhook attribution, find-or-create, import merge) use
+ * `phonesMatchStrict` instead.
  */
 export function phonesMatch(phone1: string, phone2: string): boolean {
   const n1 = normalizePhone(phone1)
@@ -30,6 +37,34 @@ export function phonesMatch(phone1: string, phone2: string): boolean {
     return n1.slice(-8) === n2.slice(-8)
   }
   return false
+}
+
+/**
+ * Strict identity comparison. True only when the two numbers are the
+ * same subscriber written differently:
+ *
+ *   1. identical normalized digits, or
+ *   2. one is the other with the country code omitted
+ *      ("4155551212" vs "14155551212"), or
+ *   3. they differ only by a trunk-prefix 0 after the country code
+ *      ("370063949836" vs "37063949836" — see phoneVariants).
+ *
+ * Unlike `phonesMatch`, a bare last-8-digit collision between two
+ * fully-qualified numbers with different country codes does NOT match.
+ */
+export function phonesMatchStrict(phone1: string, phone2: string): boolean {
+  const n1 = normalizePhone(phone1)
+  const n2 = normalizePhone(phone2)
+  if (!n1 || !n2) return false
+  if (n1 === n2) return true
+
+  // Missing country code: the shorter number is a full suffix of the
+  // longer one (7-digit minimum mirrors isValidE164's floor).
+  const [shorter, longer] = n1.length <= n2.length ? [n1, n2] : [n2, n1]
+  if (shorter.length >= 7 && longer.endsWith(shorter)) return true
+
+  // Trunk-prefix 0 inserted/removed after the country code.
+  return phoneVariants(n1).includes(n2) || phoneVariants(n2).includes(n1)
 }
 
 /**
@@ -101,4 +136,50 @@ export function phoneVariants(sanitized: string): string[] {
  */
 export function isRecipientNotAllowedError(message: string): boolean {
   return /131030|not in allowed list|not in the allowed list/i.test(message)
+}
+
+/**
+ * Try sending a WhatsApp message with phone-variant fallback.
+ *
+ * Meta sandboxes and numbers stored with/without a trunk 0 need
+ * retrying across phoneVariants() before giving up. If a non-primary
+ * variant lands the message we persist it back to the contact row
+ * so future sends skip the retry loop.
+ *
+ * @param sanitized   Digits-only phone (output of sanitizePhoneForMeta)
+ * @param contactId   Contact row id -- updated when a variant works
+ * @param attempt     Caller-supplied send function; throws on failure
+ * @param db          Supabase client with write access to contacts
+ */
+export async function sendWithPhoneVariantRetry(
+  sanitized: string,
+  contactId: string,
+  attempt: (phone: string) => Promise<string>,
+  db: SupabaseClient,
+): Promise<{ result: string }> {
+  const variants = phoneVariants(sanitized)
+  let workingPhone = sanitized
+  let waMessageId = ''
+  let lastError: unknown = null
+
+  for (const v of variants) {
+    try {
+      waMessageId = await attempt(v)
+      workingPhone = v
+      lastError = null
+      break
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!isRecipientNotAllowedError(msg)) throw err
+      lastError = err
+    }
+  }
+
+  if (lastError) throw lastError
+
+  if (workingPhone !== sanitized) {
+    await db.from('contacts').update({ phone: workingPhone }).eq('id', contactId)
+  }
+
+  return { result: waMessageId }
 }

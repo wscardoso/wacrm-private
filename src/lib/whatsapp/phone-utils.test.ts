@@ -5,6 +5,7 @@ import {
   normalizePhone,
   phoneVariants,
   phonesMatch,
+  phonesMatchStrict,
   sanitizePhoneForMeta,
 } from "./phone-utils";
 
@@ -60,6 +61,34 @@ describe("phonesMatch", () => {
   it("ignores formatting noise on both sides", () => {
     expect(phonesMatch("+370 6 394 9836", "37063949836")).toBe(true);
     expect(phonesMatch("(415) 555-1212", "+1 415-555-1212")).toBe(true);
+  });
+});
+
+describe("phonesMatchStrict", () => {
+  it("returns true for exact digit matches", () => {
+    expect(phonesMatchStrict("+37063949836", "37063949836")).toBe(true);
+  });
+
+  it("matches a trunk-prefix-0 variant after the country code", () => {
+    expect(phonesMatchStrict("370063949836", "37063949836")).toBe(true);
+  });
+
+  it("matches when one number omits the country code", () => {
+    expect(phonesMatchStrict("14155551212", "4155551212")).toBe(true);
+  });
+
+  it("rejects two different numbers that merely share the last 8 digits", () => {
+    // Same trailing 8 digits ("55551212"), different country codes —
+    // phonesMatch (loose) would say true; identity must say false.
+    expect(phonesMatchStrict("14155551212", "37055551212")).toBe(false);
+  });
+
+  it("rejects mismatched numbers", () => {
+    expect(phonesMatchStrict("+37063949836", "+37063949837")).toBe(false);
+  });
+
+  it("rejects empty input", () => {
+    expect(phonesMatchStrict("", "37063949836")).toBe(false);
   });
 });
 

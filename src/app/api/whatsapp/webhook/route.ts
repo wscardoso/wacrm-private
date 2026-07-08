@@ -985,36 +985,28 @@ async function findOrCreateConversation(
   configOwnerUserId: string,
   contactId: string,
 ) {
-  // Look for existing conversation in this account
-  const { data: existing, error: findError } = await supabaseAdmin()
+  // Single upsert, no separate SELECT. The unique index on
+  // (account_id, contact_id) handles the conflict; the DO UPDATE
+  // branch fires the set_updated_at trigger (harmless — the caller
+  // overwrites updated_at right after).
+  const { data, error } = await supabaseAdmin()
     .from('conversations')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .single()
-
-  if (!findError && existing) {
-    return existing
-  }
-
-  // Create new conversation. Same tenancy + audit split as
-  // findOrCreateContact above.
-  const { data: newConv, error: createError } = await supabaseAdmin()
-    .from('conversations')
-    .insert({
+    .upsert({
       account_id: accountId,
       user_id: configOwnerUserId,
       contact_id: contactId,
+    }, {
+      onConflict: 'account_id, contact_id',
     })
     .select()
     .single()
 
-  if (createError) {
-    console.error('Error creating conversation:', createError)
+  if (error) {
+    console.error('Error finding/creating conversation:', error)
     return null
   }
 
-  return newConv
+  return data
 }
 
 /**

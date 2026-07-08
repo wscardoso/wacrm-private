@@ -3,8 +3,7 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
   isValidE164,
-  phoneVariants,
-  isRecipientNotAllowedError,
+  sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
 
@@ -115,51 +114,48 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     return r.messageId
   }
 
-  // Same phone-variant retry as /api/whatsapp/send — Meta sandbox and
-  // numbers registered with/without a trunk 0 both require this to
-  // reliably land a message.
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
-    }
-  }
-  if (lastError) throw lastError
+  const { result: waMessageId } = await sendWithPhoneVariantRetry(
+    sanitized,
+    contact.id,
+    attempt,
+    db,
+  )
 
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
-  }
-
-  // Persist the sent message so it appears in the inbox with a real
-  // Meta message id. sender_type='bot' distinguishes automation sends
-  // from manual agent sends.
+  // Persist the message BEFORE sending to Meta so a DB failure doesn't
+  // orphan a delivered message (issue #11). Start with status 'sending'
+  // and no message_id; after Meta responds we flip to 'sent'.
   const content_type = input.kind === 'template' ? 'template' : 'text'
   const content_text = input.kind === 'text' ? input.text : null
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type,
-    content_text,
-    template_name,
-    message_id: waMessageId,
-    status: 'sent',
-  })
+  const { data: msgRow, error: msgErr } = await db
+    .from('messages')
+    .insert({
+      conversation_id: input.conversationId,
+      sender_type: 'bot',
+      content_type,
+      content_text,
+      template_name,
+      status: 'sending',
+    })
+    .select('id')
+    .single()
+
   if (msgErr) {
-    // Meta already has the message; record the DB error but don't pretend
-    // the send failed. The engine wraps this in a log line.
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    // Meta hasn't been called yet — safe to throw without side effects.
+    throw new Error(`failed to create message row: ${msgErr.message}`)
+  }
+
+  // Meta send succeeded — finalise the message row.
+  const { error: updateErr } = await db
+    .from('messages')
+    .update({ status: 'sent', message_id: waMessageId })
+    .eq('id', msgRow.id)
+
+  if (updateErr) {
+    console.error('[automations] Meta sent but status update failed:', updateErr.message)
+    // Message stays 'sending' in the DB — the customer received it but it
+    // shows as pending in the inbox. Better than invisible.
   }
 
   await db
