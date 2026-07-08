@@ -148,9 +148,19 @@ export const RATE_LIMITS = {
    *  instance deploy needs the Redis swap described at the top of
    *  this file (the per-key call sites don't change). */
   publicApi: { limit: 120, windowMs: 60_000 },
+  /** WhatsApp webhook verification (GET), keyed per IP. Meta calls
+   *  this once when configuring the webhook; 30/min is generous for
+   *  retries while blocking scan attempts against the verify-token. */
+  webhookVerify: { limit: 30, windowMs: 60_000 },
+  /** WhatsApp webhook delivery (POST), keyed per phone_number_id.
+   *  Meta batches messages aggressively so 300/min per number is
+   *  comfortable for a busy inbox. Keying on phone_number_id rather
+   *  than IP avoids blocking Meta delivery IPs if they rotate.
+   *  Returns 429 that Meta retries -- no messages permanently dropped. */
+  webhookInbound: { limit: 300, windowMs: 60_000 },
 } as const;
 
-/** Test-only helper. Clears the in-memory state so unit tests don't
+/** Test-only helper. Clears the in-memory state so unit tests do not
  *  leak buckets across files. Not wired up in production code. */
 export function __resetRateLimitForTests() {
   buckets.clear();

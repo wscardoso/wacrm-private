@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { supabaseAdmin } from '@/lib/supabase/admin-client'
+import type { Contact } from '@/types'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
@@ -11,19 +12,7 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
-
-// Lazy-initialized to avoid build-time crash when env vars are missing
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
-}
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 
 interface WhatsAppMessage {
   id: string
@@ -80,6 +69,10 @@ interface WhatsAppWebhookEntry {
 
 // GET - Webhook verification
 export async function GET(request: Request) {
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+  const rlVerify = checkRateLimit(`webhook:verify:${ip}`, RATE_LIMITS.webhookVerify)
+  if (!rlVerify.success) return rateLimitResponse(rlVerify)
+
   try {
     const { searchParams } = new URL(request.url)
     const mode = searchParams.get('hub.mode')
@@ -161,10 +154,27 @@ export async function GET(request: Request) {
 }
 
 // POST - Receive messages
+const MAX_WEBHOOK_BODY_BYTES = 512 * 1024 // 512 KB
+
 export async function POST(request: Request) {
+  // Reject oversized payloads before reading the body. Meta webhooks
+  // are JSON event envelopes -- even batched deliveries stay well under
+  // 512 KB. A larger body is almost certainly abuse or misconfiguration.
+  const contentLength = request.headers.get('content-length')
+  if (contentLength && parseInt(contentLength, 10) > MAX_WEBHOOK_BODY_BYTES) {
+    return NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+  }
+
   // Read raw body first so we can HMAC-verify the exact bytes Meta
   // signed. request.json() would re-encode and break the signature.
   const rawBody = await request.text()
+
+  // Belt-and-braces: also check actual body size in case Content-Length
+  // was absent or spoofed (chunked transfer encoding omits the header).
+  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) {
+    return NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+  }
+
   const signature = request.headers.get('x-hub-signature-256')
 
   if (!verifyMetaWebhookSignature(rawBody, signature)) {
@@ -180,6 +190,21 @@ export async function POST(request: Request) {
     body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  // Rate-limit per phone_number_id -- the stable identifier Meta sends.
+  // Applied after signature check (only signed requests consume quota)
+  // and after JSON parse (so we can read the field without re-parsing).
+  const phoneNumberId =
+    body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id ?? 'unknown'
+  const rlInbound = checkRateLimit(
+    `webhook:inbound:${phoneNumberId}`,
+    RATE_LIMITS.webhookInbound,
+  )
+  if (!rlInbound.success) {
+    // Return 429 -- Meta retries with exponential back-off,
+    // so no messages are permanently dropped.
+    return rateLimitResponse(rlInbound)
   }
 
   // Process asynchronously so we can ack Meta within their timeout.
@@ -331,14 +356,31 @@ async function handleStatusUpdate(status: {
   recipient_id: string
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
-  //    already match the CHECK constraint on messages.status.
-  const { error: msgErr } = await supabaseAdmin()
+  //    already match the CHECK constraint on messages.status. Guarded
+  //    by the same forward-only ladder as broadcast_recipients below:
+  //    Meta retries/reorders webhooks, and a delayed `delivered` (or a
+  //    replayed `sent`/spurious `failed`) arriving after `read` must
+  //    not regress the ticks shown in the inbox.
+  const { data: currentMsg, error: msgFetchErr } = await supabaseAdmin()
     .from('messages')
-    .update({ status: status.status })
+    .select('id, status')
     .eq('message_id', status.id)
+    .maybeSingle()
 
-  if (msgErr) {
-    console.error('Error updating message status:', msgErr)
+  if (msgFetchErr) {
+    console.error('Error fetching message for status update:', msgFetchErr)
+  } else if (
+    currentMsg &&
+    isValidStatusTransition(currentMsg.status, status.status)
+  ) {
+    const { error: msgErr } = await supabaseAdmin()
+      .from('messages')
+      .update({ status: status.status })
+      .eq('id', currentMsg.id)
+
+    if (msgErr) {
+      console.error('Error updating message status:', msgErr)
+    }
   }
 
   // 2) Mirror onto broadcast_recipients via whatsapp_message_id
@@ -703,15 +745,21 @@ async function processMessage(
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
   for (const triggerType of automationTriggers) {
-    runAutomationsForTrigger({
-      accountId,
-      triggerType,
-      contactId: contactRecord.id,
-      context: {
-        message_text: inboundText,
-        conversation_id: conversation.id,
-      },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
+    // Retry with backoff: transient Supabase / network errors
+    // should not silently lose the event (issue #13).
+    retryOnError(
+      () =>
+        runAutomationsForTrigger({
+          accountId,
+          triggerType,
+          contactId: contactRecord.id,
+          context: {
+            message_text: inboundText,
+            conversation_id: conversation.id,
+          },
+        }),
+      { label: `automation:${triggerType}` },
+    )
   }
 }
 
@@ -860,8 +908,7 @@ async function parseMessageContent(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ContactRow = any
+type ContactRow = ExistingContact
 
 interface ContactOutcome {
   contact: ContactRow
@@ -878,10 +925,13 @@ async function findOrCreateContact(
 ): Promise<ContactOutcome | null> {
   // Find an existing contact for this account by phone. The shared
   // helper pre-filters in SQL by the last-8-digit suffix (so we don't
-  // pull every contact on every inbound message) then applies the
-  // strict `phonesMatch` in JS on the small candidate set. The same
-  // helper backs the manual contact form and CSV import, so all three
-  // paths agree on what "same number" means (issue #212).
+  // pull every contact on every inbound message) then applies strict
+  // identity (`phonesMatchStrict`) in JS on the small candidate set —
+  // a loose last-8-digit match alone would risk attaching this
+  // message to an unrelated contact from a different country/area
+  // code. The same helper backs the manual contact form and CSV
+  // import, so all three paths agree on what "same number" means
+  // (issue #212).
   const existingContact = await findExistingContact(
     supabaseAdmin(),
     accountId,
@@ -965,4 +1015,32 @@ async function findOrCreateConversation(
   }
 
   return newConv
+}
+
+/**
+ * Fire a promise-returning function with retries + backoff. The
+ * function is expected to handle its own errors internally (logging
+ * etc.); this wrapper only retries when the promise rejects (e.g. a
+ * connection error that prevented the function from running at all).
+ */
+async function retryOnError<T>(
+  fn: () => Promise<T>,
+  opts: { label: string; retries?: number; backoffMs?: number },
+): Promise<void> {
+  const maxRetries = opts.retries ?? 2
+  const baseMs = opts.backoffMs ?? 200
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await fn()
+      return
+    } catch (err) {
+      const isLast = attempt === maxRetries
+      console.error(
+        `[webhook] ${opts.label} failed (attempt ${attempt + 1}/${maxRetries + 1})${isLast ? ' — giving up' : ', retrying…'}`,
+        err instanceof Error ? err.message : err,
+      )
+      if (isLast) return
+      await new Promise((r) => setTimeout(r, baseMs * (attempt + 1)))
+    }
+  }
 }
