@@ -56,6 +56,12 @@ vi.mock('@/lib/whatsapp/template-row-guard', () => ({
   isMessageTemplate: mockIsMessageTemplate,
 }))
 
+const mockAuthGetUser = vi.fn()
+const mockCreateClientImpl = vi.fn()
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: mockCreateClientImpl,
+}))
+
 const mockGetProvider = vi.fn()
 vi.mock('@/lib/whatsapp/providers', () => ({
   getProvider: mockGetProvider,
@@ -139,6 +145,20 @@ beforeEach(() => {
   mockCheckRateLimit.mockReturnValue({ success: true, remaining: 59, reset: 0, limit: 60 })
   mockRateLimitResponse.mockReturnValue(NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 }))
 
+  mockCreateClientImpl.mockResolvedValue({
+    ...db,
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
+  })
+
+  // profiles lookup used by route to resolve accountId
+  db.setResult('profiles', { data: { account_id: 'account-1' }, error: null })
+
+  mockAuthGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+  mockCreateClientImpl.mockResolvedValue({
+    auth: { getUser: mockAuthGetUser },
+    from: (table: string) => db.from(table),
+  })
+
   mockGetProvider.mockReturnValue({
     sendText: mockSendTextMessage,
     sendMedia: mockSendMediaMessage,
@@ -215,8 +235,8 @@ describe('POST /api/whatsapp/send', () => {
     expect(body.error).toContain('1024-character')
   })
 
-  it('rejects when requireRole throws', async () => {
-    mockRequireRole.mockRejectedValueOnce(new Error('Unauthorized'))
+  it('rejects when auth fails', async () => {
+    mockAuthGetUser.mockResolvedValueOnce({ data: { user: null }, error: new Error('Unauthorized') })
     const { POST } = await import('./route')
     const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'hi' }))
     expect(res.status).toBe(401)
@@ -230,14 +250,7 @@ describe('POST /api/whatsapp/send', () => {
   })
 
   it('returns 404 when conversation not found', async () => {
-    // Override conversations to simulate missing conversation
-    const localDb = createDefaultSupabase()
-    localDb.setResult('conversations', { data: null, error: { message: 'not found', code: 'PGRST116' } })
-    mockRequireRole.mockResolvedValueOnce({
-      supabase: localDb,
-      userId: 'user-1',
-      accountId: 'account-1',
-    })
+    db.setResult('conversations', { data: null, error: { message: 'not found', code: 'PGRST116' } })
     const { POST } = await import('./route')
     const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'hi' }))
     expect(res.status).toBe(404)
