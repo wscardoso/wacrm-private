@@ -16,6 +16,7 @@ import {
   sendInteractiveList as metaSendInteractiveList,
 } from '@/lib/whatsapp/meta-api'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import type { MessageTemplate } from '@/types'
 import type {
   WhatsAppProvider,
   SendResult,
@@ -79,8 +80,8 @@ export class MetaProvider implements WhatsAppProvider {
       to: args.to,
       templateName: args.templateName,
       language: args.language,
-      params: args.params,
-      template: args.template,
+      params: args.params ? Object.values(args.params) : undefined,
+      template: args.template as MessageTemplate | undefined,
       messageParams: args.messageParams,
       contextMessageId: args.contextMessageId,
     })

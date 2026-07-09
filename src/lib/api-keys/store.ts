@@ -79,22 +79,22 @@ export async function getAccountName(
  * it must never fail the request the caller is actually making.
  */
 export function touchLastUsed(id: string): void {
-  void supabaseAdmin()
-    .from('api_keys')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('id', id)
-    .then(({ error }) => {
-      if (error) {
-        console.warn(
-          '[api-keys/store] last_used_at bump failed:',
-          error.message
-        );
-      }
-    })
-    .catch((err) => {
+  Promise.resolve(
+    supabaseAdmin()
+      .from('api_keys')
+      .update({ last_used_at: new Date().toISOString() })
+      .eq('id', id)
+  ).then(({ error }) => {
+    if (error) {
       console.warn(
         '[api-keys/store] last_used_at bump failed:',
-        err instanceof Error ? err.message : String(err)
+        error.message
       );
-    });
+    }
+  }).catch((err: unknown) => {
+    console.warn(
+      '[api-keys/store] last_used_at bump failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+  });
 }

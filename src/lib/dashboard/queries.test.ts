@@ -45,7 +45,7 @@ describe('loadMetrics', () => {
       messages: query({ data: null, count: 20 }),
     })
 
-    const result = await loadMetrics(db as unknown as SupabaseClient, 'America/Sao_Paulo')
+    const result = await loadMetrics(db as unknown as SupabaseClient)
     expect(result).toEqual({
       activeConversations: { current: 12, previous: 0 },
       newContactsToday: { current: 8, previous: 8 },

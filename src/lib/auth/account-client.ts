@@ -1,28 +1,9 @@
-/**
- * Account-scoped Supabase client wrapper.
- *
- * Forces all database queries to be automatically scoped by account_id,
- * preventing data-leak vulnerabilities from forgotten `.eq('account_id', ...)` checks.
- *
- * Usage:
- *   const accountDb = createAccountScopedClient(accountId)
- *   // from() now auto-appends .eq('account_id', accountId)
- *   await accountDb.from('messages').select('*')
- *   // → WHERE account_id = <accountId>
- */
-
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 
-type AdminClient = ReturnType<typeof supabaseAdmin>
-
 export interface AccountScopedClient {
-  from(table: string): ReturnType<AdminClient['from']>
-  rpc(
-    fn: string,
-    args?: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): ReturnType<AdminClient['rpc']>
-  unsafe_raw(): AdminClient
+  from(table: string): unknown
+  rpc(fn: string, args?: Record<string, unknown>, options?: Record<string, unknown>): unknown
+  unsafe_raw(): ReturnType<typeof supabaseAdmin>
 }
 
 export function createAccountScopedClient(accountId: string): AccountScopedClient {
@@ -30,7 +11,7 @@ export function createAccountScopedClient(accountId: string): AccountScopedClien
 
   return {
     from(table: string) {
-      return db.from(table).eq('account_id', accountId)
+      return (db.from(table) as any).eq('account_id', accountId)
     },
 
     async rpc(fn: string, args?: Record<string, unknown>, options?: Record<string, unknown>) {
@@ -44,10 +25,6 @@ export function createAccountScopedClient(accountId: string): AccountScopedClien
   }
 }
 
-/**
- * Type guard — checks if a client is account-scoped (vs raw admin client).
- * Use to enforce safe patterns in middleware/helpers.
- */
 export function isAccountScoped(client: unknown): client is AccountScopedClient {
   return (
     typeof client === 'object' &&
