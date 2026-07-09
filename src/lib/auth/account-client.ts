@@ -11,6 +11,7 @@ export function createAccountScopedClient(accountId: string): AccountScopedClien
 
   return {
     from(table: string) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (db.from(table) as any).eq('account_id', accountId)
     },
 
