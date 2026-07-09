@@ -42,6 +42,17 @@ vi.mock('@/lib/whatsapp/phone-utils', () => ({
   isRecipientNotAllowedError: () => false,
 }))
 
+const mockBroadcastAuthGetUser = vi.fn()
+const mockBroadcastCreateClient = vi.fn()
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: mockBroadcastCreateClient,
+}))
+
+const mockBroadcastSupabaseAdmin = vi.fn()
+vi.mock('@/lib/flows/admin-client', () => ({
+  supabaseAdmin: mockBroadcastSupabaseAdmin,
+}))
+
 // ---------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------
@@ -87,9 +98,19 @@ beforeEach(() => {
   vi.clearAllMocks()
   db = mockDb()
 
+  mockBroadcastAuthGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+  mockBroadcastCreateClient.mockResolvedValue({
+    auth: { getUser: mockBroadcastAuthGetUser },
+    from: (table: string) => db.from(table),
+  })
+  mockBroadcastSupabaseAdmin.mockReturnValue({
+    from: (table: string) => db.from(table),
+  })
+
   mockDecrypt.mockReturnValue('decrypted-token')
   mockIsMessageTemplate.mockReturnValue(true)
 
+  db.setResult('profiles', { data: { account_id: 'account-1' }, error: null })
   db.setResult('whatsapp_config', {
     data: { id: 'cfg1', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' },
     error: null,
@@ -125,8 +146,8 @@ describe('POST /api/whatsapp/broadcast', () => {
     expect(body.error).toContain('template_name')
   })
 
-  it('rejects when requireRole throws', async () => {
-    mockRequireRole.mockRejectedValueOnce(new Error('Unauthorized'))
+  it('rejects when auth.getUser returns error', async () => {
+    mockBroadcastAuthGetUser.mockResolvedValueOnce({ data: { user: null }, error: new Error('Unauthorized') })
     const { POST } = await import('./route')
     const res = await POST(request({
       recipients: [{ phone: '+5511999999999' }],
