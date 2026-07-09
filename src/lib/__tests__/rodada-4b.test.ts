@@ -109,7 +109,7 @@ describe('Automation dedup (60s window)', () => {
     const triggerType = 'new_message_received'
 
     // Mock: no recent logs
-    const recentLogs: any[] = []
+    const recentLogs: unknown[] = []
 
     // Check: should execute if count === 0
     const shouldSkip = recentLogs.length > 0

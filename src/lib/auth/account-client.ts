@@ -24,11 +24,11 @@ export interface AccountScopedClient {
    * Scoped version of db.rpc() that auto-appends p_account_id parameter
    * Note: RPC functions should accept p_account_id as a parameter and validate it.
    */
-  rpc<T = any>(
+  rpc<T = unknown>(
     fn: string,
     args?: Record<string, unknown>,
-    options?: any,
-  ): Promise<{ data: T; error: any }>
+    options?: Record<string, unknown>,
+  ): Promise<{ data: T; error: { message: string } | null }>
 
   /**
    * Access the underlying admin client for operations that can't be auto-scoped
@@ -45,7 +45,7 @@ export function createAccountScopedClient(accountId: string): AccountScopedClien
       return db.from(table).eq('account_id', accountId)
     },
 
-    async rpc(fn: string, args?: Record<string, unknown>, options?: any) {
+    async rpc(fn: string, args?: Record<string, unknown>, options?: Record<string, unknown>) {
       const params = { ...args, p_account_id: accountId }
       return db.rpc(fn, params, options)
     },
@@ -60,7 +60,7 @@ export function createAccountScopedClient(accountId: string): AccountScopedClien
  * Type guard — checks if a client is account-scoped (vs raw admin client).
  * Use to enforce safe patterns in middleware/helpers.
  */
-export function isAccountScoped(client: any): client is AccountScopedClient {
+export function isAccountScoped(client: unknown): client is AccountScopedClient {
   return (
     typeof client === 'object' &&
     client !== null &&
