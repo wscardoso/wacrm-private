@@ -56,6 +56,17 @@ vi.mock('@/lib/whatsapp/template-row-guard', () => ({
   isMessageTemplate: mockIsMessageTemplate,
 }))
 
+const mockGetProvider = vi.fn()
+vi.mock('@/lib/whatsapp/providers', () => ({
+  getProvider: mockGetProvider,
+  ProviderUnsupportedError: class extends Error {
+    constructor(provider: string) {
+      super(`Unsupported WhatsApp provider: ${provider}`)
+      this.name = 'ProviderUnsupportedError'
+    }
+  },
+}))
+
 // ---------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------
@@ -127,6 +138,17 @@ beforeEach(() => {
 
   mockCheckRateLimit.mockReturnValue({ success: true, remaining: 59, reset: 0, limit: 60 })
   mockRateLimitResponse.mockReturnValue(NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 }))
+
+  mockGetProvider.mockReturnValue({
+    sendText: mockSendTextMessage,
+    sendMedia: mockSendMediaMessage,
+    sendTemplate: mockSendTemplateMessage,
+    sendReaction: vi.fn().mockResolvedValue({ messageId: 'reaction-id' }),
+    sendInteractiveButtons: vi.fn().mockResolvedValue({ messageId: 'interactive-id' }),
+    sendInteractiveList: vi.fn().mockResolvedValue({ messageId: 'list-id' }),
+    parseInboundMessage: vi.fn(),
+    verifyWebhookRequest: vi.fn(),
+  })
 })
 
 // ---------------------------------------------------------------
