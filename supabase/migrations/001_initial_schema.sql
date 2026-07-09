@@ -389,9 +389,6 @@ BEGIN
     NEW.email
   );
   RETURN NEW;
-EXCEPTION WHEN OTHERS THEN
-  RAISE WARNING 'Failed to create profile for user %: %', NEW.id, SQLERRM;
-  RETURN NEW;
 END;
 $$;
 

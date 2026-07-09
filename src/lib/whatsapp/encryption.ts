@@ -26,7 +26,23 @@ import crypto from 'crypto'
  *   `src/app/api/whatsapp/send/route.ts`.
  */
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!
+const ENCRYPTION_KEY = (() => {
+  const key = process.env.ENCRYPTION_KEY
+  if (!key) {
+    throw new Error(
+      'ENCRYPTION_KEY environment variable is not set. ' +
+      'Configure it as a 64-character hex string (256-bit AES key).',
+    )
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error(
+      'ENCRYPTION_KEY must be a 64-character hex string (256-bit AES key). ' +
+      `Got ${key.length} chars with invalid hex format.`,
+    )
+  }
+  return key
+})()
+
 // 12 bytes is the NIST-recommended IV length for GCM — keeps the
 // counter block well below 2^32 and matches the default web-crypto
 // behaviour, so any future port is straightforward.

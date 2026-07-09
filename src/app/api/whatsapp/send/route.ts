@@ -21,6 +21,7 @@ import {
 } from '@/lib/rate-limit'
 import type { MessageTemplate } from '@/types'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
+import { getProvider, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
 
 export async function POST(request: Request) {
   try {
@@ -60,6 +61,18 @@ export async function POST(request: Request) {
         { error: 'Your profile is not linked to an account.' },
         { status: 403 },
       )
+    }
+
+    // Guard against oversized requests before parsing JSON
+    const contentLength = request.headers.get('content-length')
+    if (contentLength) {
+      const maxBytes = 5 * 1024 * 1024 // 5MB
+      if (parseInt(contentLength, 10) > maxBytes) {
+        return NextResponse.json(
+          { error: 'Request body too large' },
+          { status: 413 },
+        )
+      }
     }
 
     const body = await request.json()
@@ -232,6 +245,92 @@ export async function POST(request: Request) {
       }
     }
 
+    // ── Non-Meta provider path ────────────────────────────────────────────
+    // If the account uses Z-API, uazapi, or Evolution API, bypass the
+    // Meta-specific retry/template logic and use the provider abstraction.
+    // We return early from this block so the Meta path below is untouched.
+    if (config.provider && config.provider !== 'meta') {
+      if (message_type === 'template') {
+        return NextResponse.json(
+          { error: 'Template messages are only available with the official Meta WhatsApp Business API. Please use a text or media message instead.' },
+          { status: 400 },
+        )
+      }
+
+      let providerMessageId = ''
+      try {
+        const provider = getProvider(config)
+        let result: { messageId: string }
+
+        if (isMediaKind) {
+          result = await provider.sendMedia({
+            to: sanitizedPhone,
+            kind: message_type as MediaKind,
+            link: media_url,
+            caption: content_text || undefined,
+            filename: filename || undefined,
+            contextMessageId,
+          })
+        } else {
+          result = await provider.sendText({
+            to: sanitizedPhone,
+            text: content_text,
+            contextMessageId,
+          })
+        }
+        providerMessageId = result.messageId
+      } catch (err) {
+        if (err instanceof ProviderUnsupportedError) {
+          return NextResponse.json(
+            { error: err.message },
+            { status: 400 },
+          )
+        }
+        const msg = err instanceof Error ? err.message : 'Unknown WhatsApp API error'
+        console.error('[whatsapp/send] provider send failed:', msg)
+        return NextResponse.json({ error: `WhatsApp API error: ${msg}` }, { status: 502 })
+      }
+
+      const { data: messageRecord, error: msgError } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id,
+          sender_type: 'agent',
+          content_type: message_type,
+          content_text: content_text || null,
+          media_url: media_url || null,
+          message_id: providerMessageId,
+          status: 'sent',
+          reply_to_message_id: reply_to_message_id || null,
+        })
+        .select()
+        .single()
+
+      if (msgError) {
+        console.error('[whatsapp/send] Error inserting sent message (non-Meta):', msgError)
+        return NextResponse.json(
+          { error: `Message sent but failed to save to DB: ${msgError.message}` },
+          { status: 500 },
+        )
+      }
+
+      await supabase
+        .from('conversations')
+        .update({
+          last_message_text: content_text || `[${message_type}]`,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversation_id)
+
+      return NextResponse.json({
+        success: true,
+        message_id: messageRecord.id,
+        whatsapp_message_id: providerMessageId,
+      })
+    }
+
+    // ── Meta provider path (unchanged) ───────────────────────────────────
     // Send via Meta API — retry with phone-number variants if Meta rejects
     // with "recipient not in allowed list" (common in sandbox / when a
     // number was registered with/without a trunk 0). If an alternate

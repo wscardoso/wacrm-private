@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import type { AutomationTriggerType } from '@/types'
 
 /**
@@ -15,6 +16,12 @@ export async function POST(request: Request) {
     accountId = ctx.accountId
   } catch (err) {
     return toErrorResponse(err)
+  }
+
+  // Rate-limit per account to prevent abuse
+  const limit = checkRateLimit(`automations:${accountId}`, RATE_LIMITS.send)
+  if (!limit.success) {
+    return rateLimitResponse(limit)
   }
 
   const body = await request.json().catch(() => null)
