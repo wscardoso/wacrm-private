@@ -60,7 +60,7 @@ describe('submitMessageTemplate', () => {
   });
 
   it('throws Meta\'s error message on non-OK responses', async () => {
-    fetchMock.mockResolvedValueOnce(
+    fetchMock.mockResolvedValue(
       errorResponse(429, {
         error: { message: 'Rate limit (#80007).' },
       }),
