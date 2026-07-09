@@ -18,17 +18,19 @@ export function useLocale() {
   return ctx;
 }
 
+function getInitialLocale(): Locale {
+  if (typeof document === "undefined") return DEFAULT_LOCALE;
+  const saved = getCookie(LOCALE_COOKIE);
+  return saved === "pt-BR" || saved === "en" ? saved : getBrowserLocale();
+}
+
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
+  const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
   const [messages, setMessages] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
-    const saved = getCookie(LOCALE_COOKIE);
-    const initial: Locale =
-      saved === "pt-BR" || saved === "en" ? saved : getBrowserLocale();
-    setLocaleState(initial);
-    loadMessages(initial).then(setMessages);
-  }, []);
+    loadMessages(locale).then(setMessages);
+  }, [locale]);
 
   const setLocale = useCallback((locale: Locale) => {
     setLocaleState(locale);
