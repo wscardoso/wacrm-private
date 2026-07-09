@@ -97,6 +97,28 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
 
     for (const automation of automations as Automation[]) {
       if (!triggerMatches(automation, input.context)) continue
+
+      // Dedup: skip if this exact trigger was just executed (within 60s).
+      // Handles Meta webhook retries that fire the same automation twice.
+      if (input.contactId) {
+        const sixtySecondsAgo = new Date(Date.now() - 60_000).toISOString()
+        const { count, error } = await db
+          .from('automation_logs')
+          .select('id', { count: 'exact' })
+          .eq('automation_id', automation.id)
+          .eq('contact_id', input.contactId)
+          .eq('trigger_event', input.triggerType)
+          .gt('created_at', sixtySecondsAgo)
+
+        if (!error && (count ?? 0) > 0) {
+          console.debug(
+            '[automations] skipping duplicate trigger within dedup window',
+            automation.id,
+          )
+          continue
+        }
+      }
+
       try {
         await executeAutomation(automation, input)
       } catch (err) {
@@ -138,6 +160,12 @@ export async function resumePendingExecution(pending: {
   if (error || !automation) {
     console.error('[automations] resume: missing automation', pending.automation_id, error)
     await markPending(pending.id, 'failed')
+    return
+  }
+
+  if (!automation.is_active) {
+    console.warn('[automations] resume: automation is disabled', pending.automation_id)
+    await markPending(pending.id, 'done')
     return
   }
 

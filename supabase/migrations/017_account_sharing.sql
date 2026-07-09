@@ -686,9 +686,6 @@ BEGIN
   VALUES (NEW.id, v_full_name, NEW.email, v_account_id, 'owner');
 
   RETURN NEW;
-EXCEPTION WHEN OTHERS THEN
-  RAISE WARNING 'Failed to bootstrap account/profile for user %: %', NEW.id, SQLERRM;
-  RETURN NEW;
 END;
 $$;
 

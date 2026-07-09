@@ -197,7 +197,9 @@ BEGIN
     UNION ALL SELECT 1 FROM broadcasts WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM automations WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM flows WHERE account_id = v_old_account_id
+    UNION ALL SELECT 1 FROM flow_runs WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM pipelines WHERE account_id = v_old_account_id
+    UNION ALL SELECT 1 FROM deals WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM message_templates WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM tags WHERE account_id = v_old_account_id
     UNION ALL SELECT 1 FROM custom_fields WHERE account_id = v_old_account_id

@@ -90,5 +90,11 @@ export function touchLastUsed(id: string): void {
           error.message
         );
       }
+    })
+    .catch((err) => {
+      console.warn(
+        '[api-keys/store] last_used_at bump failed:',
+        err instanceof Error ? err.message : String(err)
+      );
     });
 }
