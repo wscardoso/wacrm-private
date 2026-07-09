@@ -145,11 +145,6 @@ beforeEach(() => {
   mockCheckRateLimit.mockReturnValue({ success: true, remaining: 59, reset: 0, limit: 60 })
   mockRateLimitResponse.mockReturnValue(NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 }))
 
-  mockCreateClientImpl.mockResolvedValue({
-    ...db,
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
-  })
-
   // profiles lookup used by route to resolve accountId
   db.setResult('profiles', { data: { account_id: 'account-1' }, error: null })
 
