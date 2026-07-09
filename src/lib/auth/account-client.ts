@@ -11,30 +11,18 @@
  *   // → WHERE account_id = <accountId>
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 
-export interface AccountScopedClient {
-  /**
-   * Scoped version of db.from() that auto-appends .eq('account_id', accountId)
-   */
-  from<T extends string>(table: T): ReturnType<SupabaseClient['from']>
+type AdminClient = ReturnType<typeof supabaseAdmin>
 
-  /**
-   * Scoped version of db.rpc() that auto-appends p_account_id parameter
-   * Note: RPC functions should accept p_account_id as a parameter and validate it.
-   */
-  rpc<T = unknown>(
+export interface AccountScopedClient {
+  from(table: string): ReturnType<AdminClient['from']>
+  rpc(
     fn: string,
     args?: Record<string, unknown>,
     options?: Record<string, unknown>,
-  ): Promise<{ data: T; error: { message: string } | null }>
-
-  /**
-   * Access the underlying admin client for operations that can't be auto-scoped
-   * (use sparingly — only for operations that explicitly handle tenancy)
-   */
-  unsafe_raw(): SupabaseClient
+  ): ReturnType<AdminClient['rpc']>
+  unsafe_raw(): AdminClient
 }
 
 export function createAccountScopedClient(accountId: string): AccountScopedClient {
@@ -64,7 +52,7 @@ export function isAccountScoped(client: unknown): client is AccountScopedClient 
   return (
     typeof client === 'object' &&
     client !== null &&
-    typeof client.from === 'function' &&
-    typeof client.unsafe_raw === 'function'
+    typeof (client as Record<string, unknown>).from === 'function' &&
+    typeof (client as Record<string, unknown>).unsafe_raw === 'function'
   )
 }

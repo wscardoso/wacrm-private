@@ -176,9 +176,14 @@ describe('DLQ enqueue', () => {
   })
 
   it('should track retry count on DLQ entry', () => {
-    const dlqEntry = {
+    const dlqEntry: {
+      id: string
+      status: 'pending' | 'abandoned'
+      retry_count: number
+      last_retry_at: string | null
+    } = {
       id: 'dlq-1',
-      status: 'pending' as const,
+      status: 'pending',
       retry_count: 0,
       last_retry_at: null,
     }
@@ -193,16 +198,20 @@ describe('DLQ enqueue', () => {
 
   it('should mark DLQ as abandoned after max retries', () => {
     const maxRetries = 10
-    let dlqEntry = {
+    let dlqEntry: {
+      id: string
+      status: 'pending' | 'abandoned'
+      retry_count: number
+    } = {
       id: 'dlq-1',
-      status: 'pending' as const,
+      status: 'pending',
       retry_count: 0,
     }
 
     // Simulate max retries reached
     dlqEntry.retry_count = maxRetries
     if (dlqEntry.retry_count >= maxRetries) {
-      dlqEntry = { ...dlqEntry, status: 'abandoned' as const }
+      dlqEntry = { ...dlqEntry, status: 'abandoned' }
     }
 
     expect(dlqEntry.status).toBe('abandoned')
