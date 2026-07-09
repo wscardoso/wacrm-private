@@ -68,6 +68,7 @@ vi.mock("./admin-client", () => {
       upsert: (p: unknown) => ((ops.type = "upsert"), (ops.payload = p), b),
       eq: (k: string, v: unknown) => (ops.filters.push(["eq", k, v]), b),
       gte: () => b,
+      gt: () => b,
       is: () => b,
       order: () => b,
       limit: () => b,
