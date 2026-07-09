@@ -11,6 +11,61 @@
 
 const META_API_VERSION = 'v21.0'
 const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
+const FETCH_TIMEOUT_MS = 30_000
+
+/**
+ * Wrapper around fetch that adds a timeout via AbortSignal.
+ * Meta API calls should not hang indefinitely.
+ */
+async function fetchWithTimeout(
+  url: string | URL,
+  options?: RequestInit,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/**
+ * Wrapper around fetchWithTimeout that adds exponential backoff retry.
+ * Retries on 429 (rate limit), 503 (service unavailable), 504 (gateway timeout).
+ * Meta's rate limit is 80 requests/second/WABA; this helps absorb spikes.
+ */
+async function fetchWithRetry(
+  url: string | URL,
+  options?: RequestInit,
+  maxRetries = 3,
+): Promise<Response> {
+  const retryableStatuses = new Set([429, 503, 504])
+  let lastResponse: Response | null = null
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    lastResponse = await fetchWithTimeout(url, options)
+
+    if (!retryableStatuses.has(lastResponse.status)) {
+      return lastResponse
+    }
+
+    if (attempt === maxRetries) {
+      // Last attempt — return the 429/5xx response as-is
+      return lastResponse
+    }
+
+    // Exponential backoff: 1s, 2s, 4s, 8s...
+    const backoffMs = 1000 * Math.pow(2, attempt)
+    await new Promise((r) => setTimeout(r, backoffMs))
+  }
+
+  // Unreachable, but satisfy TypeScript
+  return lastResponse!
+}
 
 export interface MetaSendResult {
   messageId: string
@@ -56,7 +111,7 @@ export async function verifyPhoneNumber(
 ): Promise<MetaPhoneInfo> {
   const { phoneNumberId, accessToken } = args
   const url = `${META_API_BASE}/${phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!response.ok) {
@@ -125,7 +180,7 @@ export async function registerPhoneNumber(
 ): Promise<RegisterPhoneNumberResult> {
   const { phoneNumberId, accessToken, pin } = args
   const url = `${META_API_BASE}/${phoneNumberId}/register`
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -169,7 +224,7 @@ export async function subscribeWabaToApp(
 ): Promise<void> {
   const { wabaId, accessToken } = args
   const url = `${META_API_BASE}/${wabaId}/subscribed_apps`
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
   })
@@ -201,7 +256,7 @@ export async function getSubscribedApps(
 ): Promise<SubscribedApp[]> {
   const { wabaId, accessToken } = args
   const url = `${META_API_BASE}/${wabaId}/subscribed_apps`
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!response.ok) {
@@ -244,7 +299,7 @@ export async function sendTextMessage(
   if (contextMessageId) {
     body.context = { message_id: contextMessageId }
   }
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -255,7 +310,10 @@ export async function sendTextMessage(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -310,7 +368,7 @@ export async function sendMediaMessage(
   }
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -321,7 +379,10 @@ export async function sendMediaMessage(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -428,7 +489,7 @@ export async function sendTemplateMessage(
     body.context = { message_id: contextMessageId }
   }
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -439,7 +500,10 @@ export async function sendTemplateMessage(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -486,7 +550,7 @@ export async function uploadResumableMedia(
     file_type: mimeType,
     access_token: accessToken,
   })
-  const startRes = await fetch(
+  const startRes = await fetchWithRetry(
     `${META_API_BASE}/${appId}/uploads?${startParams.toString()}`,
     { method: 'POST' },
   )
@@ -500,7 +564,7 @@ export async function uploadResumableMedia(
 
   // Step 2 — upload the bytes. Note the `OAuth` auth scheme (not Bearer)
   // and the file_offset header, both required by this endpoint.
-  const uploadRes = await fetch(`${META_API_BASE}/${startData.id}`, {
+  const uploadRes = await fetchWithRetry(`${META_API_BASE}/${startData.id}`, {
     method: 'POST',
     headers: {
       Authorization: `OAuth ${accessToken}`,
@@ -556,7 +620,7 @@ export async function submitMessageTemplate(
 ): Promise<SubmitMessageTemplateResult> {
   const { wabaId, accessToken, payload } = args
   const url = `${META_API_BASE}/${wabaId}/message_templates`
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -608,7 +672,7 @@ export async function editMessageTemplate(
   const { metaTemplateId, accessToken, components, category } = args
   const body: Record<string, unknown> = { components }
   if (category) body.category = category
-  const response = await fetch(`${META_API_BASE}/${metaTemplateId}`, {
+  const response = await fetchWithTimeout(`${META_API_BASE}/${metaTemplateId}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -647,7 +711,7 @@ export async function deleteMessageTemplate(
   const params = new URLSearchParams({ name })
   if (metaTemplateId) params.set('hsm_id', metaTemplateId)
   const url = `${META_API_BASE}/${wabaId}/message_templates?${params.toString()}`
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
   })
@@ -682,7 +746,7 @@ export async function sendReactionMessage(
 ): Promise<MetaSendResult> {
   const { phoneNumberId, accessToken, to, targetMessageId, emoji } = args
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -699,7 +763,10 @@ export async function sendReactionMessage(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -810,7 +877,7 @@ export async function sendInteractiveButtons(
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -821,7 +888,10 @@ export async function sendInteractiveButtons(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -942,7 +1012,7 @@ export async function sendInteractiveList(
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -953,7 +1023,10 @@ export async function sendInteractiveList(
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
-  const data = await response.json()
+  const data = await response.json() as { messages?: Array<{ id?: string }> }
+  if (!data.messages?.[0]?.id) {
+    throw new Error('Meta accepted message but returned no message id.')
+  }
   return { messageId: data.messages[0].id }
 }
 
@@ -999,7 +1072,7 @@ export async function getMediaUrl(
   args: GetMediaUrlArgs
 ): Promise<{ url: string; mimeType: string }> {
   const { mediaId, accessToken } = args
-  const response = await fetch(`${META_API_BASE}/${mediaId}`, {
+  const response = await fetchWithTimeout(`${META_API_BASE}/${mediaId}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!response.ok) {
@@ -1023,7 +1096,7 @@ export async function downloadMedia(
   args: DownloadMediaArgs
 ): Promise<{ buffer: Buffer; contentType: string }> {
   const { downloadUrl, accessToken } = args
-  const response = await fetch(downloadUrl, {
+  const response = await fetchWithTimeout(downloadUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!response.ok) {
