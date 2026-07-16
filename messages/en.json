@@ -198,6 +198,7 @@
     "title": "Inbox",
     "no_conversation_selected": "Select a conversation",
     "no_conversation_selected_desc": "Choose a conversation from the list to start chatting",
+    "lead_origin": "Lead origin",
     "no_conversations": "No conversations yet",
     "no_conversations_desc": "When a contact sends a message, it will appear here",
     "composer_placeholder": "Type a message...",

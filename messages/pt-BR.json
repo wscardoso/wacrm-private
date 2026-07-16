@@ -198,6 +198,7 @@
     "title": "Caixa de entrada",
     "no_conversation_selected": "Selecione uma conversa",
     "no_conversation_selected_desc": "Escolha uma conversa da lista para começar a conversar",
+    "lead_origin": "Origem do lead",
     "no_conversations": "Nenhuma conversa ainda",
     "no_conversations_desc": "Quando um contato enviar uma mensagem, ela aparecerá aqui",
     "composer_placeholder": "Digite uma mensagem...",
