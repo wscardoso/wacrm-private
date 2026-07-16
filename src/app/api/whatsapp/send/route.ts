@@ -257,9 +257,21 @@ export async function POST(request: Request) {
         )
       }
 
+      // Decrypt client token (stored in waba_id for Z-API)
+      let clientToken: string | undefined
+      if (config.provider === 'zapi' && config.waba_id) {
+        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+      }
+
       let providerMessageId = ''
       try {
-        const provider = getProvider(config)
+        const provider = getProvider(
+          config.provider === 'zapi'
+            ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+            : config.provider === 'uazapi'
+              ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+              : config,
+        )
         let result: { messageId: string }
 
         if (isMediaKind) {

@@ -284,9 +284,12 @@ export async function processInboundMessage(
   const isFirstInboundMessage = (priorCount ?? 0) === 0
 
   // 7) Parse timestamp
-  const createdAt = isNaN(Number(inbound.timestamp))
+  // Z-API sends momment in milliseconds; Meta sends in seconds.
+  // Detect by magnitude: if > 1e12 it's already ms, otherwise treat as seconds.
+  const tsNum = Number(inbound.timestamp)
+  const createdAt = isNaN(tsNum)
     ? new Date().toISOString()
-    : new Date(Number(inbound.timestamp) * 1000).toISOString()
+    : new Date(tsNum > 1e12 ? tsNum : tsNum * 1000).toISOString()
 
   // 8) Insert message
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
