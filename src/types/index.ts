@@ -98,6 +98,13 @@ export interface Contact {
   email?: string;
   company?: string;
   avatar_url?: string;
+  /** First-touch attribution (migration 033) — set once, never
+   *  overwritten. Null for contacts created before P0 or with no
+   *  captured origin (manual add, CSV import, organic). */
+  first_attribution_id?: string | null;
+  /** Denormalised copy of `first_attribution_id`'s source_channel for
+   *  fast list rendering without a join. */
+  first_source_channel?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -156,6 +163,9 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  /** Attribution that opened this conversation (migration 033). Most
+   *  recent touch — see `Contact.first_attribution_id` for first-touch. */
+  attribution_id?: string | null;
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';
@@ -205,9 +215,14 @@ export interface MessageReaction {
   created_at: string;
 }
 
+export type WhatsAppProviderKind = 'meta' | 'zapi' | 'uazapi';
+
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
+  /** Which provider is handling this account. Defaults to 'meta'. */
+  provider?: WhatsAppProviderKind;
+  // ── Meta fields ──────────────────────────────────────────────
   phone_number_id: string;
   waba_id?: string;
   access_token: string;
@@ -224,6 +239,11 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  // ── Non-Meta fields (added by 032_whatsapp_provider.sql) ─────
+  /** Z-API instance ID or uazapi instance name. */
+  instance_id?: string;
+  /** uazapi server base URL, e.g. https://my-server.com */
+  base_url?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
@@ -510,6 +530,75 @@ export interface Automation {
   last_executed_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ============================================================
+// LEAD ATTRIBUTION (ADR-ATTR-001 / migration 033)
+// ============================================================
+
+/**
+ * The `referral` object Meta attaches to the first inbound message of
+ * a Click-to-WhatsApp (CTWA) conversation. Only present on messages
+ * that originated from an ad or a post with a WhatsApp CTA — absent
+ * for organic messages. See:
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages
+ */
+export interface Referral {
+  source_url?: string;
+  source_type?: string; // 'ad' | 'post'
+  source_id?: string; // the ad ID
+  headline?: string;
+  body?: string;
+  media_type?: string; // 'image' | 'video'
+  image_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  ctwa_clid?: string;
+}
+
+export type LeadAttributionSourceChannel =
+  | 'ctwa_meta'
+  | 'tracked_link'
+  | 'organic'
+  | 'unknown';
+
+/** Canonical attribution record — mirrors `lead_attributions`
+ *  (migration 033). Enrichment fields (campaign/adset/ad names,
+ *  placement) are filled in asynchronously (P1) and are null until
+ *  then. */
+export interface LeadAttribution {
+  id: string;
+  account_id: string;
+  contact_id?: string | null;
+  conversation_id?: string | null;
+  source_channel: LeadAttributionSourceChannel;
+  /** wamid of the inbound message that carried this referral — the
+   *  idempotency key for Fonte A (migration 033). */
+  origin_message_id?: string | null;
+
+  ad_source_id?: string | null;
+  ad_source_type?: string | null;
+  ad_source_url?: string | null;
+  ad_headline?: string | null;
+  ad_body?: string | null;
+  ad_media_type?: string | null;
+  ad_media_url?: string | null;
+  ctwa_clid?: string | null;
+  fbclid?: string | null;
+  gclid?: string | null;
+  utm?: Record<string, string> | null;
+
+  campaign_id?: string | null;
+  campaign_name?: string | null;
+  adset_id?: string | null;
+  adset_name?: string | null;
+  ad_id?: string | null;
+  ad_name?: string | null;
+  placement?: string | null;
+  enriched_at?: string | null;
+
+  raw?: unknown;
+  created_at: string;
 }
 
 export interface AutomationStep {

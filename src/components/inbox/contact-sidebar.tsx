@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
-import type { Contact, Deal, ContactNote, Tag } from "@/types";
+import type { Contact, Deal, ContactNote, Tag, LeadAttribution } from "@/types";
 import {
   Phone,
   Mail,
@@ -16,6 +16,7 @@ import {
   DollarSign,
   StickyNote,
   Plus,
+  Megaphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -34,6 +35,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  const [attribution, setAttribution] = useState<LeadAttribution | null>(null);
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -68,6 +70,20 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           contact_tag_id: ct.id as string,
         }));
       setTags(mapped);
+    }
+
+    // First-touch attribution (migration 033 / ADR-ATTR-001). Only
+    // fetched when the contact actually has one — most contacts
+    // created before P0, or from organic/manual sources, won't.
+    if (contact.first_attribution_id) {
+      const { data: attrData } = await supabase
+        .from("lead_attributions")
+        .select("*")
+        .eq("id", contact.first_attribution_id)
+        .maybeSingle();
+      setAttribution(attrData ?? null);
+    } else {
+      setAttribution(null);
     }
   }, [contact]);
 
@@ -175,6 +191,51 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               </div>
             )}
           </div>
+
+          {/* Lead origin — Click-to-WhatsApp attribution (ADR-ATTR-001) */}
+          {attribution && attribution.source_channel === "ctwa_meta" && (
+            <>
+              <div className="my-4 border-t border-border" />
+              <div>
+                <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <Megaphone className="h-3 w-3" />
+                  {t("lead_origin")}
+                </div>
+                <div className="mt-2 overflow-hidden rounded-lg border border-border">
+                  {attribution.ad_media_url && (
+                    <img
+                      src={attribution.ad_media_url}
+                      alt={attribution.ad_headline ?? "Ad creative"}
+                      className="h-28 w-full object-cover"
+                    />
+                  )}
+                  <div className="space-y-1 bg-muted px-3 py-2">
+                    {attribution.ad_headline && (
+                      <p className="text-xs font-semibold text-foreground">
+                        {attribution.ad_headline}
+                      </p>
+                    )}
+                    {attribution.ad_body && (
+                      <p className="line-clamp-2 text-xs text-muted-foreground">
+                        {attribution.ad_body}
+                      </p>
+                    )}
+                    {attribution.campaign_name && (
+                      <p className="text-[10px] text-muted-foreground">
+                        {attribution.campaign_name}
+                        {attribution.adset_name ? ` · ${attribution.adset_name}` : ""}
+                      </p>
+                    )}
+                    {!attribution.ad_headline && !attribution.ad_body && (
+                      <p className="text-xs text-muted-foreground">
+                        Click-to-WhatsApp
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Divider */}
           <div className="my-4 border-t border-border" />
