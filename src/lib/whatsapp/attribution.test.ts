@@ -187,6 +187,12 @@ function makeFakeSupabase() {
           ? { data: arr[0], error: null }
           : { data: null, error: { message: 'no rows' } }
       },
+      // Makes the builder awaitable when the caller doesn't chain a
+      // terminal method (e.g. `await supabase.from(t).update(x).eq(...)`,
+      // as attribution.ts does for the conversations/contacts writes).
+      // Without this, `await builder` resolves to the builder object
+      // itself and `resolve()` — which is what actually applies
+      // insert/update/upsert to the fake table — never runs.
       then: (onFulfilled: (value: ReturnType<typeof resolve>) => unknown) =>
         Promise.resolve(resolve()).then(onFulfilled),
     }

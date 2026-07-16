@@ -58,6 +58,16 @@ describe("verifyMetaWebhookSignature — invalid", () => {
     const hmac = createHmac("sha256", SECRET).update(body).digest("hex");
     expect(verifyMetaWebhookSignature(body, hmac)).toBe(false);
   });
+
+  // Regression: reproduces the "amputated header" symptom seen when a
+  // test script fails to compute the hash (e.g. the signing secret is
+  // unset in that shell session) but still concatenates the prefix —
+  // producing a syntactically valid but hash-less header. Confirmed
+  // 2026-07-16: not a webhook bug, the header itself was malformed
+  // before it ever left the client.
+  it("returns false for a valid-prefix header with an empty hash (sha256=)", () => {
+    expect(verifyMetaWebhookSignature("payload", "sha256=")).toBe(false);
+  });
 });
 
 // ─── Timing safety ─────────────────────────────────────────────────────────
