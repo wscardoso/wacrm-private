@@ -463,7 +463,18 @@ export function WhatsAppConfig() {
   }
 
   const showResetBanner = resetReason === 'token_corrupted';
+  // `PROVIDERS` (the master list, includes zapi) stays untouched so this
+  // lookup never returns undefined — that would crash the page for any
+  // account with a legacy Z-API config.
   const selectedProviderInfo = PROVIDERS.find((p) => p.value === provider)!;
+
+  // Z-API is an internal/testing-only provider — hidden from new
+  // selections by default. Never hidden for an account that already has
+  // it saved (config?.provider), so a legacy Z-API config keeps its
+  // matching <option> and doesn't silently fall back to another provider.
+  const zapiVisible =
+    process.env.NEXT_PUBLIC_WHATSAPP_ENABLE_ZAPI === 'true' || config?.provider === 'zapi';
+  const visibleProviders = PROVIDERS.filter((p) => p.value !== 'zapi' || zapiVisible);
 
   return (
     <section className="animate-in fade-in-50 duration-200">
@@ -647,7 +658,7 @@ export function WhatsAppConfig() {
                 disabled={!canEditSettings}
                 className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {PROVIDERS.map((p) => (
+                {visibleProviders.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
                   </option>
