@@ -200,7 +200,23 @@ function makeFakeSupabase() {
     return builder
   }
 
-  return { fake: { from, db }, client: { from } as unknown as SupabaseClient }
+  async function rpc(fn: string, params: Record<string, unknown>) {
+    if (fn === 'insert_lead_attribution') {
+      const row: Record<string, unknown> = { id: genId(), created_at: new Date().toISOString() }
+      for (const [k, v] of Object.entries(params)) {
+        if (k.startsWith('p_')) row[k.slice(2)] = v
+      }
+      const existing = db.lead_attributions.find(
+        (r) => r.origin_message_id === row.origin_message_id,
+      )
+      if (existing) return { data: null, error: null }
+      db.lead_attributions.push(row as Row)
+      return { data: row.id, error: null }
+    }
+    return { data: null, error: null }
+  }
+
+  return { fake: { from, db }, client: { from, rpc } as unknown as SupabaseClient }
 }
 
 describe('persistAttribution', () => {

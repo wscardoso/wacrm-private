@@ -136,7 +136,45 @@ function makeFakeSupabase() {
     return builder
   }
 
-  return { from, db }
+  async function rpc(fn: string, params: Record<string, unknown>) {
+    if (fn === 'insert_inbound_message') {
+      const messageId = params.p_message_id as string | undefined
+      if (messageId) {
+        const existing = db.messages.find((r) => r.message_id === messageId)
+        if (existing) return { data: null, error: null }
+      }
+      const row: Row = {
+        id: genId(),
+        created_at: new Date().toISOString(),
+        conversation_id: params.p_conversation_id,
+        sender_type: params.p_sender_type,
+        content_type: params.p_content_type,
+        content_text: params.p_content_text,
+        media_url: params.p_media_url,
+        message_id: messageId ?? null,
+        status: params.p_status,
+        reply_to_message_id: params.p_reply_to_message_id ?? null,
+        interactive_reply_id: params.p_interactive_reply_id ?? null,
+      }
+      db.messages.push(row)
+      return { data: row.id, error: null }
+    }
+    if (fn === 'insert_lead_attribution') {
+      const row: Row = { id: genId(), created_at: new Date().toISOString() }
+      for (const [k, v] of Object.entries(params)) {
+        if (k.startsWith('p_')) row[k.slice(2)] = v
+      }
+      const existing = db.lead_attributions.find(
+        (r) => r.origin_message_id === row.origin_message_id,
+      )
+      if (existing) return { data: null, error: null }
+      db.lead_attributions.push(row)
+      return { data: row.id, error: null }
+    }
+    return { data: null, error: null }
+  }
+
+  return { from, db, rpc }
 }
 
 let fakeSupabase: ReturnType<typeof makeFakeSupabase>

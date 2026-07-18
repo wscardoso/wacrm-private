@@ -291,23 +291,40 @@ export async function processInboundMessage(
     ? new Date().toISOString()
     : new Date(tsNum > 1e12 ? tsNum : tsNum * 1000).toISOString()
 
-  // 8) Insert message
-  const { error: msgError } = await supabaseAdmin().from('messages').insert({
-    conversation_id: conversation.id,
-    sender_type: 'customer',
-    content_type: contentType,
-    content_text: contentText,
-    media_url: mediaUrl,
-    message_id: inbound.messageId,
-    status: 'delivered',
-    created_at: createdAt,
-    reply_to_message_id: replyToInternalId,
-    interactive_reply_id:
-      inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
-  })
+  // 8) Insert message (C4 idempotency). The RPC insert_inbound_message
+  //    uses ON CONFLICT (conversation_id, message_id) WHERE <partial
+  //    predicate> DO NOTHING RETURNING id — the only correct way to
+  //    dedupe against a partial unique index (supabase-js upsert would
+  //    emit ON CONFLICT without the predicate and fail with 42P10).
+  //    Returns the new row id on a genuine insert, NULL on redelivery.
+  const { data: insertedId, error: msgError } = await supabaseAdmin().rpc(
+    'insert_inbound_message',
+    {
+      p_conversation_id: conversation.id,
+      p_sender_type: 'customer',
+      p_content_type: contentType,
+      p_content_text: contentText,
+      p_media_url: mediaUrl,
+      p_message_id: inbound.messageId,
+      p_status: 'delivered',
+      p_created_at: createdAt,
+      p_reply_to_message_id: replyToInternalId,
+      p_interactive_reply_id:
+        inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
+    },
+  )
 
   if (msgError) {
     console.error('[inbound-processor] Error inserting message:', msgError)
+    return
+  }
+
+  const wasInserted = !!insertedId
+  if (!wasInserted) {
+    console.log(
+      '[inbound-processor] Duplicate inbound (message_id=%s) — skipping downstream effects',
+      inbound.messageId,
+    )
     return
   }
 

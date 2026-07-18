@@ -119,32 +119,65 @@ export async function persistAttribution(
 
   let attribution: LeadAttribution | null = null
 
-  // ON CONFLICT (origin_message_id) DO NOTHING. supabase-js expresses
-  // this as an upsert with ignoreDuplicates: true — on a replayed
-  // webhook (same wamid), the conflicting row is left untouched and
-  // .select() returns no rows for it, rather than erroring or
-  // silently overwriting.
-  const { data: upserted, error: upsertError } = await supabase
-    .from('lead_attributions')
-    .upsert(payload, { onConflict: 'origin_message_id', ignoreDuplicates: true })
-    .select()
-    .maybeSingle()
+  // Idempotent insert via RPC. supabase-js upsert with ignoreDuplicates
+  // emits ON CONFLICT (origin_message_id) WITHOUT the partial-index
+  // predicate, which fails against the partial unique index (error
+  // 42P10). The RPC insert_lead_attribution supplies the WHERE clause
+  // explicitly and returns the new row id, or NULL when this exact
+  // origin_message_id was already processed (redelivery).
+  const { data: insertedId, error: insertError } = await supabase.rpc(
+    'insert_lead_attribution',
+    {
+      p_account_id: payload.account_id,
+      p_contact_id: payload.contact_id,
+      p_conversation_id: payload.conversation_id,
+      p_source_channel: payload.source_channel,
+      p_origin_message_id: payload.origin_message_id,
+      p_ad_source_id: payload.ad_source_id,
+      p_ad_source_type: payload.ad_source_type,
+      p_ad_source_url: payload.ad_source_url,
+      p_ad_headline: payload.ad_headline,
+      p_ad_body: payload.ad_body,
+      p_ad_media_type: payload.ad_media_type,
+      p_ad_media_url: payload.ad_media_url,
+      p_ctwa_clid: payload.ctwa_clid,
+      p_fbclid: payload.fbclid,
+      p_gclid: payload.gclid,
+      p_utm: payload.utm,
+      p_campaign_id: payload.campaign_id,
+      p_campaign_name: payload.campaign_name,
+      p_adset_id: payload.adset_id,
+      p_adset_name: payload.adset_name,
+      p_ad_id: payload.ad_id,
+      p_ad_name: payload.ad_name,
+      p_placement: payload.placement,
+      p_raw: payload.raw,
+    },
+  )
 
-  if (upsertError) {
-    console.error('[attribution] insert failed:', upsertError.message)
+  if (insertError) {
+    console.error('[attribution] insert failed:', insertError.message)
     return { attribution: null, firstTouchWritten: false }
   }
 
-  if (upserted) {
-    attribution = upserted
+  if (insertedId) {
+    // New row created. Re-fetch the full row to return it.
+    const { data: created, error: fetchError } = await supabase
+      .from('lead_attributions')
+      .select('*')
+      .eq('id', insertedId)
+      .maybeSingle()
+    if (fetchError) {
+      console.error('[attribution] fetch after insert failed:', fetchError.message)
+      return { attribution: null, firstTouchWritten: false }
+    }
+    attribution = created
   } else {
     // Conflict hit — this exact message (by wamid) was already
-    // processed by an earlier delivery. Re-fetch the row that
-    // delivery created instead of treating this as "nothing to do":
+    // processed by an earlier delivery. Re-fetch the existing row so
     // every downstream write below (conversation pointer, first-touch)
-    // is itself idempotent, so replaying them is harmless and keeps
-    // this call's result consistent regardless of which delivery
-    // "won".
+    // is itself idempotent, keeping this call's result consistent
+    // regardless of which delivery "won".
     const { data: existing, error: fetchError } = await supabase
       .from('lead_attributions')
       .select('*')
