@@ -114,7 +114,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             </p>
             {account?.name && (
               <p className="truncate text-[11px] text-muted-foreground mt-1">
-                Workspace: {account.name}
+                {th("workspace", { name: account.name })}
               </p>
             )}
           </div>
@@ -133,7 +133,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           <DropdownMenuItem
             render={
               <Link
-                href="/settings?tab=whatsapp"
+                href="/settings"
                 className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
               />
             }

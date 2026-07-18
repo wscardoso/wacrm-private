@@ -10,6 +10,8 @@
       "password_label": "Password",
       "password_placeholder": "Enter your password",
       "forgot_password": "Forgot password?",
+      "show_password": "Show password",
+      "hide_password": "Hide password",
       "sign_in": "Sign in",
       "signing_in": "Signing in...",
       "no_account": "Don't have an account?",
@@ -18,7 +20,7 @@
     "signup": {
       "title": "Create account",
       "title_invite": "Create account & join",
-      "description": "Get started with CRM Template for WhatsApp",
+      "description": "Get started with Force CRM",
       "description_invite": "Verify your email, then accept the invitation to join your team.",
       "full_name_label": "Full name",
       "full_name_placeholder": "John Doe",
@@ -64,7 +66,7 @@
   },
   "layout": {
     "sidebar": {
-      "app_name": "CRM Template for WhatsApp",
+      "app_name": "Force CRM",
       "close_menu": "Close menu",
       "nav_dashboard": "Dashboard",
       "nav_inbox": "Inbox",
@@ -89,7 +91,8 @@
       "avatar_alt": "Avatar",
       "profile": "Profile",
       "settings": "Settings",
-      "sign_out": "Sign out"
+      "sign_out": "Sign out",
+      "workspace": "Workspace: {name}"
     }
   },
   "roles": {
@@ -533,6 +536,7 @@
     "title": "Settings",
     "description": "Everything in one place \u2014 your account and your workspace. Pick a section to manage it.",
     "tabs": {
+      "overview": "Overview",
       "profile": "Profile",
       "security": "Security",
       "appearance": "Appearance",
@@ -542,6 +546,26 @@
       "deals": "Deals",
       "members": "Members",
       "api_keys": "API Keys"
+    },
+    "groups": {
+      "account": "Account",
+      "workspace": "Workspace"
+    },
+    "overview": {
+      "not_set_up": "Not set up yet",
+      "connected": "Connected",
+      "needs_reconnecting": "Needs reconnecting",
+      "view_members": "View team members",
+      "member_count": "{count, plural, =1 {# member} other {# members}}",
+      "pending_invite_count": "{count, plural, =1 {# pending invite} other {# pending invites}}",
+      "manage_templates": "Manage message templates",
+      "template_count": "{count, plural, =1 {# template} other {# templates}}",
+      "pending_review_count": "{count, plural, =1 {# pending review} other {# pending review}}",
+      "tags_and_fields": "Tags and custom fields",
+      "tag_count": "{count, plural, =1 {# tag} other {# tags}}",
+      "custom_field_count": "{count, plural, =1 {# custom field} other {# custom fields}}",
+      "loading": "Loading…",
+      "your_account": "Your account"
     },
     "profile": {
       "title": "Profile",
@@ -557,16 +581,39 @@
     "image_type_error": "Unsupported image type",
     "image_type_hint": "Use PNG, JPG, WebP, or GIF.",
     "image_size_error": "Image is too large",
-    "image_size_hint": "Maximum 2 MB."
+    "image_size_hint": "Maximum 2 MB.",
+    "avatar_hint": "PNG, JPG, WebP, or GIF. Up to 2 MB.",
+    "save_changes": "Save changes",
+    "saving": "Saving…",
+    "account_details": "Account details",
+    "role": "Role",
+    "joined": "Joined",
+    "user_id": "User ID",
+    "loading": "Loading your profile…",
+    "name_required": "Display name is required",
+    "email_invalid": "Enter a valid email address",
+    "profile_saved": "Profile saved",
+    "profile_saved_pending": "Profile saved — check your email to confirm the address change",
+    "upload_failed": "Upload failed: {message}",
+    "save_failed": "Save failed: {message}",
+    "email_change_failed": "Email change failed: {message}",
+    "email_change_notice": "Check the inbox for {oldEmail} and {newEmail} — both need to confirm before the change takes effect."
   },
     "password": {
       "title": "Change Password",
       "description": "Update your password",
+      "hint": "Use at least {min} characters. You will stay signed in on this device after changing it.",
       "current": "Current Password",
       "new": "New Password",
       "confirm": "Confirm New Password",
       "update": "Update Password",
-      "updated": "Password updated"
+      "updating": "Updating…",
+      "updated": "Password updated",
+      "error_no_email": "Cannot change password without a current email",
+      "error_incorrect_current": "Current password is incorrect",
+      "error_mismatch": "New password and confirmation do not match",
+      "error_min_length": "Password must be at least {min} characters",
+      "error_update_failed": "Password update failed: {message}"
     },
     "security": {
       "title": "Security",

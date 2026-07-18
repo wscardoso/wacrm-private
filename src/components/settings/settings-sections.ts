@@ -45,23 +45,28 @@ export interface SectionMeta {
   group: 'top' | 'account' | 'workspace';
 }
 
+// `label` holds an i18n key resolved against the `settings.tabs`
+// namespace (see settings-rail.tsx / settings-overview.tsx), not
+// display text — keeps this module locale-agnostic.
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
-  overview: { id: 'overview', label: 'Overview', icon: LayoutGrid, group: 'top' },
-  profile: { id: 'profile', label: 'Your profile', icon: User, group: 'account' },
-  security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
-  appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
-  whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
-  templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
-  fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
-  deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
-  members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
-  api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
+  overview: { id: 'overview', label: 'overview', icon: LayoutGrid, group: 'top' },
+  profile: { id: 'profile', label: 'profile', icon: User, group: 'account' },
+  security: { id: 'security', label: 'security', icon: Shield, group: 'account' },
+  appearance: { id: 'appearance', label: 'appearance', icon: Palette, group: 'account' },
+  whatsapp: { id: 'whatsapp', label: 'whatsapp', icon: PlugZap, group: 'workspace' },
+  templates: { id: 'templates', label: 'templates', icon: FileText, group: 'workspace' },
+  fields: { id: 'fields', label: 'fields_tags', icon: Tags, group: 'workspace' },
+  deals: { id: 'deals', label: 'deals', icon: Coins, group: 'workspace' },
+  members: { id: 'members', label: 'members', icon: UsersRound, group: 'workspace' },
+  api: { id: 'api', label: 'api_keys', icon: KeyRound, group: 'workspace' },
 };
 
+// `label` here is an i18n key against `settings.groups` (null for the
+// ungrouped top section, which renders no header at all).
 export const RAIL_GROUPS: { label: string | null; group: SectionMeta['group'] }[] = [
   { label: null, group: 'top' },
-  { label: 'Account', group: 'account' },
-  { label: 'Workspace', group: 'workspace' },
+  { label: 'account', group: 'account' },
+  { label: 'workspace', group: 'workspace' },
 ];
 
 function isSection(value: string | null): value is SettingsSection {

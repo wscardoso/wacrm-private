@@ -564,7 +564,7 @@ export function WhatsAppConfig() {
                     className={'mb-0 ' + (isRegistered ? 'text-emerald-200' : 'text-amber-200')}
                   >
                     {isRegistered
-                      ? 'Registrado — Meta entregará eventos ao wacrm'
+                      ? 'Registrado — Meta entregará eventos ao Force CRM'
                       : 'Não registrado — Meta não entregará eventos'}
                   </AlertTitle>
                 </div>
