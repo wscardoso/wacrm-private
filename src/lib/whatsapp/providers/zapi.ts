@@ -260,8 +260,9 @@ export class ZApiProvider implements WhatsAppProvider {
 
   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {
     // Z-API doesn't sign webhook payloads by default.
-    // The webhook URL is secured by embedding the verify_token as a path segment
-    // (see /api/whatsapp/webhook/zapi/[webhookSecret]/route.ts).
+    // The webhook URL is secured by embedding the webhook secret as a path
+    // segment (see /api/whatsapp/webhook/zapi/[connectionId]/[webhookSecret]/route.ts,
+    // ADR-SEC-001 / C7). There is no fallback to the legacy verify_token.
     return true
   }
 }
