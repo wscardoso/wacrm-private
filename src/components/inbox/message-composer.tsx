@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCan } from "@/hooks/use-can";
+import { usePlatformContext } from "@/hooks/use-platform-context";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -157,7 +158,12 @@ export function MessageComposer({
   // For solo users this is always true — single-owner accounts pass
   // every capability — so the disabled branch is a no-op there.
   const canSend = useCan("send-messages");
-  const readOnly = !canSend;
+  // In platform (operator) context the inbox is strictly read-only: the
+  // operator is viewing a supervised tenant and must never send. This is
+  // independent of `canSend` (which reflects the operator's OWN account
+  // role, not the target tenant) — see P1b read-only gate.
+  const { isPlatformContext } = usePlatformContext();
+  const readOnly = !canSend || isPlatformContext;
   // Media (like free-form text) is only allowed inside the 24h window.
   const inputsDisabled = readOnly || sessionExpired;
 

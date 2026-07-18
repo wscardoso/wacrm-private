@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
+import { usePlatformContext } from "@/hooks/use-platform-context";
 import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag, LeadAttribution } from "@/types";
 import {
@@ -29,6 +30,9 @@ interface ContactSidebarProps {
 export function ContactSidebar({ contact }: ContactSidebarProps) {
   const t = useTranslations("inbox");
   const { accountId } = useAuth();
+  // Platform read-only context: creating notes is a mutation on the
+  // supervised tenant and must be suppressed (P1b read-only gate).
+  const { isPlatformContext } = usePlatformContext();
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -107,6 +111,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const handleAddNote = useCallback(async () => {
     if (!contact || !newNote.trim()) return;
     if (!accountId) return;
+    if (isPlatformContext) return; // read-only in platform context
     setAddingNote(true);
 
     const supabase = createClient();
@@ -131,7 +136,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
       setNewNote("");
     }
     setAddingNote(false);
-  }, [contact, newNote, accountId]);
+  }, [contact, newNote, accountId, isPlatformContext]);
 
   if (!contact) {
     return (
@@ -320,23 +325,25 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               Notes
             </div>
             <div className="mt-2">
-              <div className="flex gap-2">
-                <textarea
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  placeholder="Add a note..."
-                  rows={2}
-                  className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
-                />
-                <Button
-                  size="sm"
-                  className="h-auto bg-primary px-2 hover:bg-primary/90"
-                  onClick={handleAddNote}
-                  disabled={!newNote.trim() || addingNote}
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
-              </div>
+              {!isPlatformContext && (
+                <div className="flex gap-2">
+                  <textarea
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="Add a note..."
+                    rows={2}
+                    className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-auto bg-primary px-2 hover:bg-primary/90"
+                    onClick={handleAddNote}
+                    disabled={!newNote.trim() || addingNote}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
 
               <div className="mt-2 space-y-2">
                 {notes.map((note) => (

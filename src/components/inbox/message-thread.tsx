@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
+import { usePlatformContext } from "@/hooks/use-platform-context";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
@@ -166,6 +167,10 @@ export function MessageThread({
   onToggleContactPanel,
 }: MessageThreadProps) {
   const { user } = useAuth();
+  // Platform (operator) read-only context. When true, every mutating
+  // control below is suppressed and its handler short-circuits, so the
+  // supervised tenant's data is view-only. Reads are unaffected. (P1b)
+  const { isPlatformContext } = usePlatformContext();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -420,6 +425,9 @@ export function MessageThread({
   // is 0 the condition is false, so no further UPDATE is issued.
   useEffect(() => {
     if (!conversationId || !hasUnread) return;
+    // Platform context is read-only: the operator must not mutate the
+    // tenant's unread state (and the write would be RLS-denied anyway).
+    if (isPlatformContext) return;
     const supabase = createClient();
     supabase
       .from("conversations")
@@ -428,7 +436,7 @@ export function MessageThread({
       .then(({ error }) => {
         if (error) console.error("Failed to reset unread_count:", error);
       });
-  }, [conversationId, hasUnread]);
+  }, [conversationId, hasUnread, isPlatformContext]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -564,6 +572,7 @@ export function MessageThread({
   const handleStatusChange = useCallback(
     async (status: ConversationStatus) => {
       if (!conversation) return;
+      if (isPlatformContext) return; // read-only in platform context
 
       const supabase = createClient();
       await supabase
@@ -573,7 +582,7 @@ export function MessageThread({
 
       onStatusChange(conversation.id, status);
     },
-    [conversation, onStatusChange]
+    [conversation, onStatusChange, isPlatformContext]
   );
 
   const handleOpenTemplates = useCallback(() => {
@@ -699,6 +708,9 @@ export function MessageThread({
   // function dependency-free w.r.t. the reaction list.
   const postReaction = useCallback(
     async (messageId: string, emoji: string) => {
+      // Read-only in platform context — blocks BOTH reaction entry points
+      // (the MessageActions picker and the MessageBubble pill toggle).
+      if (isPlatformContext) return;
       if (!user?.id || !conversation) {
         console.warn("[reactions] missing user or conversation");
         return;
@@ -754,12 +766,13 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, user?.id, isPlatformContext],
   );
 
   const handleAssignChange = useCallback(
     async (agentId: string | null) => {
       if (!conversation) return;
+      if (isPlatformContext) return; // read-only in platform context
 
       const supabase = createClient();
       const { error } = await supabase
@@ -775,7 +788,7 @@ export function MessageThread({
 
       onAssignChange(conversation.id, agentId);
     },
-    [conversation, onAssignChange],
+    [conversation, onAssignChange, isPlatformContext],
   );
 
   // Empty state — same WhatsApp-style doodle background as the active
@@ -905,7 +918,8 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Status dropdown */}
+          {/* Status dropdown — mutating; hidden in platform read-only context */}
+          {!isPlatformContext && (
           <DropdownMenu>
             <DropdownMenuTrigger className={cn(
                   "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
@@ -929,8 +943,10 @@ export function MessageThread({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
 
-          {/* Assign dropdown */}
+          {/* Assign dropdown — mutating; hidden in platform read-only context */}
+          {!isPlatformContext && (
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
@@ -994,6 +1010,7 @@ export function MessageThread({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
         </div>
       </div>
 
@@ -1048,6 +1065,7 @@ export function MessageThread({
                       <MessageActions
                         key={msg.id}
                         message={msg}
+                        readOnly={isPlatformContext}
                         onReply={() => handleStartReply(msg)}
                         onReact={(emoji) => {
                           if (emoji) void postReaction(msg.id, emoji);
