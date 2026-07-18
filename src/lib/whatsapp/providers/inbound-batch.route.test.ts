@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server'
 // Batch processing via the REAL provider webhook route.
 //
 // The identified risk is the `for (const event of events)` loop in
-// src/app/api/whatsapp/webhook/[provider]/[webhookSecret]/route.ts:
+// src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts:
 // uazapi may deliver an array of messages inside `payload.data`, and
 // each element must be parsed + dispatched to processInboundMessage
 // independently. A single-event test would not exercise that loop, so
@@ -13,16 +13,28 @@ import type { NextRequest } from 'next/server'
 //
 // Provider classes, parseInboundMessage and processInboundMessage run
 // for real; only I/O (DB, decrypt) is mocked.
+//
+// The route now authenticates via indexed connection_id + SHA-256 hash of
+// the URL secret (ADR-SEC-001 / C7). This test wires the mock config to use
+// connection_id + webhook_secret_hash and asserts the batch loop still runs
+// AFTER a successful auth.
 // =============================================================
+
+import { hashWebhookSecret } from '@/lib/whatsapp/webhook-auth';
 
 const rpcCalls: string[] = []
 let rpcInserts = true
 
+const TEST_CONNECTION_ID = 'conn-test-uazapi-1'
+const TEST_SECRET = 's3cr3t-n0nm3ta-uazapi-batch'
+const TEST_HASH = hashWebhookSecret(TEST_SECRET)
+
 function makeChain(table: string) {
-  const chain: any = { __table: table }
-  for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'maybeSingle', 'single', 'is', 'not', 'gte', 'lt', 'head']) {
+  const chain: any = { __table: table, __maybeSingle: false }
+  for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'single', 'is', 'not', 'gte', 'lt', 'head']) {
     chain[m] = vi.fn(() => chain)
   }
+  chain.maybeSingle = vi.fn(() => { chain.__maybeSingle = true; return chain })
   chain.then = (resolve: (v: any) => void) => {
     let data: any = null
     let error: any = null
@@ -32,12 +44,15 @@ function makeChain(table: string) {
           account_id: 'acc-1',
           user_id: 'user-1',
           access_token: 'enc-token',
-          verify_token: 'secret-123',
+          verify_token: 'legacy-secret-untouched',
           instance_id: 'inst-1',
           base_url: 'https://my.uazapi.dev',
           provider: 'uazapi',
+          connection_id: TEST_CONNECTION_ID,
+          webhook_secret_hash: TEST_HASH,
         },
       ]
+      if (chain.__maybeSingle) data = Array.isArray(data) ? data[0] ?? null : data
     } else if (table === 'conversations') {
       data = { id: 'conv-1', unread_count: 0, account_id: 'acc-1', user_id: 'user-1', contact_id: 'contact-1' }
     } else if (table === 'contacts') {
@@ -93,10 +108,10 @@ vi.mock('@/lib/automations/engine', () => ({
 const { processInboundMessage } = await import('@/lib/whatsapp/inbound-processor')
 const spy = vi.spyOn(await import('@/lib/whatsapp/inbound-processor'), 'processInboundMessage')
 
-const { POST } = await import('@/app/api/whatsapp/webhook/[provider]/[webhookSecret]/route')
+const { POST } = await import('@/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route')
 
 function postRequest(body: unknown): NextRequest {
-  return new Request('http://localhost/api/whatsapp/webhook/uazapi/secret-123', {
+  return new Request(`http://localhost/api/whatsapp/webhook/uazapi/${TEST_CONNECTION_ID}/${TEST_SECRET}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -149,7 +164,7 @@ describe('uazapi batch data[] via real provider route', () => {
     }
 
     const res = await POST(postRequest(payload), {
-      params: Promise.resolve({ provider: 'uazapi', webhookSecret: 'secret-123' }),
+      params: Promise.resolve({ provider: 'uazapi', connectionId: TEST_CONNECTION_ID, webhookSecret: TEST_SECRET }),
     } as any)
 
     expect(res.status).toBe(200)
@@ -195,7 +210,7 @@ describe('uazapi batch data[] via real provider route', () => {
     }
 
     const res = await POST(postRequest(payload), {
-      params: Promise.resolve({ provider: 'uazapi', webhookSecret: 'secret-123' }),
+      params: Promise.resolve({ provider: 'uazapi', connectionId: TEST_CONNECTION_ID, webhookSecret: TEST_SECRET }),
     } as any)
 
     expect(res.status).toBe(200)

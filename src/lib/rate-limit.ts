@@ -158,6 +158,13 @@ export const RATE_LIMITS = {
    *  than IP avoids blocking Meta delivery IPs if they rotate.
    *  Returns 429 that Meta retries -- no messages permanently dropped. */
   webhookInbound: { limit: 300, windowMs: 60_000 },
+  /** Non-Meta webhook auth (Z-API / uazapi), keyed per connection_id.
+   *  Reuses the same fixed-window mechanism as webhookInbound — no second
+   *  limiter system. 120/min per connection is comfortable for a busy
+   *  inbox (Z-API/uazapi retry on 5xx) while bounding brute-force attempts
+   *  against the webhook secret. A 401 or 429 still counts toward the
+   *  budget so a scanner cannot burn the limit to mask its hit rate. */
+  webhookNonMeta: { limit: 120, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests do not
