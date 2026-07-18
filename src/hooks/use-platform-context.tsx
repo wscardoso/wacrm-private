@@ -19,6 +19,8 @@ export interface PlatformContextValue {
   actorUserId: string | null;
   /** Operator's per-tenant access role, when in platform context. */
   accessRole: string | null;
+  /** Display name of the tenant being viewed (validated server-side). */
+  accountName: string | null;
 }
 
 const PlatformContext = createContext<PlatformContextValue | null>(null);
@@ -57,6 +59,7 @@ export function usePlatformContext(): PlatformContextValue {
       accessMode: null,
       actorUserId: null,
       accessRole: null,
+      accountName: null,
     };
   }
   return ctx;
