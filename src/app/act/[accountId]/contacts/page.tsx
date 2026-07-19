@@ -3,17 +3,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { usePlatformContext } from '@/hooks/use-platform-context';
-import {
-  listContacts,
-  listTags,
-  type ContactWithTags,
-} from '@/lib/contacts/queries';
+import { type ContactWithTags } from '@/lib/contacts/queries';
 import {
   PAGE_SIZE,
   onSearchChange,
   onToggleTag,
   onTenantChange,
   totalPagesFrom,
+  createContactsLoader,
+  createTagsLoader,
 } from '@/lib/contacts/list-state';
 import type { Tag } from '@/types';
 import { Input } from '@/components/ui/input';
@@ -47,9 +45,25 @@ import {
 // already-validated platform context (the /act layout re-derived the
 // operator's authorization server-side). No writes, no auth resolution, no
 // detail/form/import components are wired here.
+//
+// All data loading is delegated to the reusable loaders in list-state.ts,
+// which own INDEPENDENT sequence guards for the contacts and tags flows. A
+// contacts page/filter change never cancels a pending tags load, and vice
+// versa. Switching tenants calls reset() on both loaders so any response from
+// the previous tenant is discarded, and the first contact fetch after a
+// switch uses the reset (empty) filters so no stale-filter query is sent.
 export default function PlatformContactsPage() {
   const { activeAccountId } = usePlatformContext();
   const supabase = createClient();
+
+  const contactsLoader = useRef(createContactsLoader());
+  const tagsLoader = useRef(createTagsLoader());
+
+  // The tenant the last fetch actually used. When it changes, the very next
+  // contact fetch must run with reset (empty) filters instead of the state
+  // still belonging to the previous tenant — this avoids a redundant first
+  // query carrying stale filters.
+  const appliedAccountRef = useRef<string | null>(activeAccountId);
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,58 +77,50 @@ export default function PlatformContactsPage() {
   const [tagsLoading, setTagsLoading] = useState(true);
   const [tagsError, setTagsError] = useState<string | null>(null);
 
-  // Guards against out-of-order fetch responses: each fetchContacts run
-  // claims a sequence number and only the latest is allowed to commit its
-  // results. Without this, rapidly toggling tag filters (or switching
-  // tenants) could let a slower earlier request resolve last and render
-  // stale rows belonging to a different tenant or filter set.
-  const fetchSeq = useRef(0);
-
   const fetchTags = useCallback(async () => {
     if (!activeAccountId) return;
-    const seq = ++fetchSeq.current;
     setTagsLoading(true);
     setTagsError(null);
-    try {
-      const data = await listTags(supabase, activeAccountId);
-      if (seq !== fetchSeq.current) return; // superseded
-      setTags(data);
-    } catch (err) {
-      if (seq !== fetchSeq.current) return; // superseded
-      setTagsError(
-        err instanceof Error ? err.message : 'Failed to load tags',
-      );
-    } finally {
-      if (seq === fetchSeq.current) setTagsLoading(false);
-    }
+    const tagsResult = await tagsLoader.current.load({
+      supabase,
+      accountId: activeAccountId,
+    });
+    if (tagsResult === null) return; // superseded (tenant switch / newer load)
+    setTags(tagsResult);
+    setTagsLoading(false);
   }, [supabase, activeAccountId]);
 
   const fetchContacts = useCallback(async () => {
     if (!activeAccountId) return;
-    const seq = ++fetchSeq.current;
     setLoading(true);
     setError(null);
 
-    try {
-      const result = await listContacts(supabase, activeAccountId, {
-        search: search.trim() || undefined,
-        tagIds: selectedTagIds,
-        page,
-        pageSize: PAGE_SIZE,
-      });
-      if (seq !== fetchSeq.current) return; // superseded by newer fetch
-      setContacts(result.contacts);
-      setTotalCount(result.totalCount);
-    } catch (err) {
-      if (seq !== fetchSeq.current) return; // superseded by newer fetch
-      setError(err instanceof Error ? err.message : 'Failed to load contacts');
-    } finally {
-      if (seq === fetchSeq.current) setLoading(false);
+    // On tenant switch, the local filter state still belongs to the previous
+    // tenant for this first render. Use the reset defaults so we never send a
+    // query carrying the old tenant's search/tags/page.
+    const tenantChanged = appliedAccountRef.current !== activeAccountId;
+    const effective = tenantChanged ? onTenantChange() : { search, selectedTagIds, page };
+    if (tenantChanged) {
+      appliedAccountRef.current = activeAccountId;
+      // Also discard any pending tags response from the previous tenant.
+      tagsLoader.current.reset();
     }
+
+    const result = await contactsLoader.current.load({
+      supabase,
+      accountId: activeAccountId,
+      search: effective.search,
+      selectedTagIds: effective.selectedTagIds,
+      page: effective.page,
+      pageSize: PAGE_SIZE,
+    });
+    if (result === null) return; // superseded by a newer contacts fetch
+
+    setContacts(result.contacts);
+    setTotalCount(result.totalCount);
+    setLoading(false);
   }, [supabase, activeAccountId, search, selectedTagIds, page]);
 
-  // Tag loading is independent of the contacts fetch but still gated by the
-  // same sequence so a tenant switch invalidates an in-flight tag load.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTags();
@@ -125,18 +131,20 @@ export default function PlatformContactsPage() {
     fetchContacts();
   }, [fetchContacts]);
 
-  // Tenant switch: wipe local filters so list A is replaced by list B and
-  // never merged. activeAccountId is in the dependency arrays above, so the
-  // effects refire with the new tenant; these setters guarantee a clean slate.
-  const prevAccount = useRef<string | null>(activeAccountId);
+  // Tenant switch: wipe local UI filters so list A is replaced by list B and
+  // never merged, and reset the contacts loader so the stale-filter fetch
+  // (already guarded in fetchContacts) is also discarded if it somehow races.
   useEffect(() => {
-    if (prevAccount.current !== activeAccountId) {
-      prevAccount.current = activeAccountId;
-      const reset = onTenantChange();
-      setSearch(reset.search);
-      setPage(reset.page);
-      setSelectedTagIds(reset.selectedTagIds);
-    }
+    if (appliedAccountRef.current === activeAccountId) return;
+    contactsLoader.current.reset();
+    const reset = onTenantChange();
+    setSearch(reset.search);
+    setPage(reset.page);
+    setSelectedTagIds(reset.selectedTagIds);
+    appliedAccountRef.current = activeAccountId;
+    // Re-fetch now that filters are clean. fetchContacts is keyed on these
+    // values, so it will also run; the guard above ensures the earlier stale
+    // fetch is discarded.
   }, [activeAccountId]);
 
   const totalPages = totalPagesFrom(totalCount);

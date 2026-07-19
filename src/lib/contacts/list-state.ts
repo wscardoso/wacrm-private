@@ -49,51 +49,72 @@ export function totalPagesFrom(totalCount: number, pageSize = PAGE_SIZE): number
   return Math.ceil(totalCount / pageSize)
 }
 
-export interface LoadListParams {
-  supabase: ReturnType<typeof createClient>
-  accountId: string
-  search: string
-  selectedTagIds: string[]
-  page: number
-  pageSize: number
-  seq: number
-  latestSeq: () => number
-}
-
-export interface LoadListResult {
-  contacts: ContactWithTags[]
-  totalCount: number
-}
-
 /**
- * Runs listContacts, honoring the fetchSeq guard. The caller owns the
- * `seq`/`latestSeq` pair; the function returns null when superseded so the
- * caller knows NOT to commit the (now stale) result. This is the same
- * protection the dashboard page uses — a plain `cancelled` boolean would be
- * weaker because it can't represent concurrent overlapping fetches.
+ * Loaders with INDEPENDENT sequence guards.
+ *
+ * The contacts loader and the tags loader each own their own monotonic
+ * sequence counter. Bumping one flow's sequence never invalidates a pending
+ * response of the other flow — a contacts page change must not cancel a
+ * still-in-flight tags load, and a tags reload must not cancel a contacts
+ * load. A tenant switch calls `reset()` on BOTH loaders so any pending
+ * response from the previous tenant is discarded in both flows.
+ *
+ * The loader returns `null` when its own sequence was superseded, so the
+ * caller knows NOT to commit a stale result. This is the same protection the
+ * dashboard page uses — a plain `cancelled` boolean would be weaker because it
+ * can't represent concurrent overlapping fetches within a single flow.
  */
-export async function loadList(
-  params: LoadListParams,
-): Promise<LoadListResult | null> {
-  const { supabase, accountId, search, selectedTagIds, page, pageSize, seq, latestSeq } =
-    params
-
-  const result = await listContacts(supabase, accountId, {
-    search: search.trim() || undefined,
-    tagIds: selectedTagIds,
-    page,
-    pageSize,
-  })
-
-  // A newer fetch started while we awaited — discard this response.
-  if (seq !== latestSeq()) return null
-
-  return { contacts: result.contacts, totalCount: result.totalCount }
+export interface ContactsLoader {
+  reset(): void
+  load(params: {
+    supabase: ReturnType<typeof createClient>
+    accountId: string
+    search: string
+    selectedTagIds: string[]
+    page: number
+    pageSize: number
+  }): Promise<{ contacts: ContactWithTags[]; totalCount: number } | null>
 }
 
-export async function loadTags(
-  supabase: ReturnType<typeof createClient>,
-  accountId: string,
-): Promise<Tag[]> {
-  return listTags(supabase, accountId)
+export interface TagsLoader {
+  reset(): void
+  load(params: {
+    supabase: ReturnType<typeof createClient>
+    accountId: string
+  }): Promise<Tag[] | null>
+}
+
+export function createContactsLoader(): ContactsLoader {
+  let seq = 0
+  return {
+    reset() {
+      seq++
+    },
+    async load({ supabase, accountId, search, selectedTagIds, page, pageSize }) {
+      const my = ++seq
+      const result = await listContacts(supabase, accountId, {
+        search: search.trim() || undefined,
+        tagIds: selectedTagIds,
+        page,
+        pageSize,
+      })
+      if (my !== seq) return null
+      return { contacts: result.contacts, totalCount: result.totalCount }
+    },
+  }
+}
+
+export function createTagsLoader(): TagsLoader {
+  let seq = 0
+  return {
+    reset() {
+      seq++
+    },
+    async load({ supabase, accountId }) {
+      const my = ++seq
+      const tags = await listTags(supabase, accountId)
+      if (my !== seq) return null
+      return tags
+    },
+  }
 }
