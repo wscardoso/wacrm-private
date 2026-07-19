@@ -22,6 +22,14 @@ interface ConversationListProps {
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
   /**
+   * Active tenant in a platform-operator context. When set, the list is
+   * explicitly scoped to that tenant (defense-in-depth on top of RLS,
+   * which otherwise permits the UNION of every tenant the operator is
+   * authorized for). When null (normal member context) RLS scopes as
+   * before. P1b.2.
+   */
+  activeAccountId?: string | null;
+  /**
    * Increment to force the fetch effect below to refire. The parent
    * bumps this on realtime reconnect / tab visibility → visible so the
    * list catches up on any events sent while the WS was disconnected
@@ -51,6 +59,7 @@ export function ConversationList({
   onSelect,
   conversations,
   onConversationsLoaded,
+  activeAccountId = null,
   resyncToken = 0,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
@@ -79,10 +88,20 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
+      // P1b.2: in a platform-operator context, scope the list to the
+      // active tenant explicitly. RLS alone would return the UNION of all
+      // tenants the operator supervises, leaking cross-tenant data into
+      // a single inbox view. When activeAccountId is null (normal member)
+      // we rely on RLS as before.
+      let query = supabase
         .from("conversations")
         .select("*, contact:contacts(*)")
         .order("last_message_at", { ascending: false });
+      if (activeAccountId) {
+        query = query.eq("account_id", activeAccountId);
+      }
+
+      const { data, error } = await query;
 
       if (cancelled) return;
 

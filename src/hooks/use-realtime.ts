@@ -15,6 +15,17 @@ interface UseRealtimeOptions {
   channelName: string;
   onMessageEvent?: (event: RealtimeEvent<Message>) => void;
   onConversationEvent?: (event: RealtimeEvent<Conversation>) => void;
+  /**
+   * Active tenant (platform-operator context only). When provided, the
+   * `conversations` channel is filtered to `account_id=eq.<accountId>` so
+   * the operator's realtime feed is scoped to the selected tenant instead
+   * of the UNION of all supervised tenants. The `messages` table has no
+   * `account_id` column, so its channel cannot be filtered server-side;
+   * cross-tenant message events are dropped in the caller's message
+   * handler (InboxPage.handleMessageEvent) using the known-conversation set.
+   * P1b.2.
+   */
+  accountId?: string | null;
   enabled?: boolean;
 }
 
@@ -22,6 +33,7 @@ export function useRealtime({
   channelName,
   onMessageEvent,
   onConversationEvent,
+  accountId = null,
   enabled = true,
 }: UseRealtimeOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -55,18 +67,29 @@ export function useRealtime({
             new: payload.new as Message,
             old: payload.old as Partial<Message>,
           });
-        }
+        },
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
+        // P1b.2: scope conversations to the active tenant when in a
+        // platform context. `messages` is intentionally NOT filtered here
+        // (no account_id column); cross-tenant messages are dropped in the
+        // caller's handler.
+        accountId
+          ? {
+              event: "*",
+              schema: "public",
+              table: "conversations",
+              filter: `account_id=eq.${accountId}`,
+            }
+          : { event: "*", schema: "public", table: "conversations" },
         (payload) => {
           onConversationRef.current?.({
             eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
             new: payload.new as Conversation,
             old: payload.old as Partial<Conversation>,
           });
-        }
+        },
       )
       .subscribe((status) => {
         setIsConnected(status === "SUBSCRIBED");
@@ -79,7 +102,7 @@ export function useRealtime({
       channelRef.current = null;
       setIsConnected(false);
     };
-  }, [channelName, enabled]);
+  }, [channelName, accountId, enabled]);
 
   const unsubscribe = useCallback(() => {
     if (channelRef.current) {

@@ -119,11 +119,18 @@ export default function InboxPage() {
     hydratingConvIdsRef.current.add(convId);
     try {
       const supabase = createClient();
-      const { data, error } = await supabase
+      // P1b.2: when viewing a tenant as a platform operator, scope the
+      // hydrate to the active tenant. A conversation id from another
+      // tenant the operator also supervises must NOT resolve here — RLS
+      // alone would permit it (union of authorized tenants).
+      let query = supabase
         .from("conversations")
         .select("*, contact:contacts(*)")
-        .eq("id", convId)
-        .maybeSingle();
+        .eq("id", convId);
+      if (activeAccountId) {
+        query = query.eq("account_id", activeAccountId);
+      }
+      const { data, error } = await query.maybeSingle();
       if (error) {
         // Supabase errors have non-enumerable properties — log fields
         // explicitly so the console message isn't just `{}`.
@@ -168,7 +175,7 @@ export default function InboxPage() {
   // members of that tenant, and whatsapp_config is deliberately excluded
   // from the operator read grant (secrets). So the connection banner is
   // meaningless there; skip it instead of showing a false "not connected".
-  const { isPlatformContext } = usePlatformContext();
+  const { isPlatformContext, activeAccountId } = usePlatformContext();
 
   // Check WhatsApp connection status once the account id is known.
   useEffect(() => {
@@ -196,10 +203,61 @@ export default function InboxPage() {
     checkConnection();
   }, [accountId]);
 
-  // Handle realtime message events
+  // P1b.2: In a platform context, validate an unknown conversation_id
+  // against the active tenant before processing. Handles the race where a
+  // message event arrives before the conversation INSERT event. The realtime
+  // payload is NEVER trusted as proof of tenancy — authorization is the
+  // account-scoped query (id + account_id). This is the SINGLE source of the
+  // unknown-conversation flow used by handleMessageEvent.
+  //
+  // Returns true iff the conversation belongs to the active tenant (in which
+  // case it also marks it known synchronously and hydrates it); false for any
+  // other tenant (e.g. client B) or when not in platform context.
+  const validateAndHydrateUnknownConversation = useCallback(
+    async (convId: string): Promise<boolean> => {
+      if (!isPlatformContext || !activeAccountId) return false;
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("id", convId)
+        .eq("account_id", activeAccountId)
+        .maybeSingle();
+      if (error || !data) return false; // not this tenant (e.g. client B) — discard
+      // Mark known SYNCHRONOUSLY so the first valid message is accepted
+      // without waiting for the render/effect that rebuilds knownConvIdsRef.
+      knownConvIdsRef.current.add(convId);
+      await hydrateConversation(convId);
+      return true;
+    },
+    [isPlatformContext, activeAccountId, hydrateConversation],
+  );
+
+// Handle realtime message events
   const handleMessageEvent = useCallback(
-    (event: { eventType: string; new: Message; old: Partial<Message> }) => {
+    async (event: { eventType: string; new: Message; old: Partial<Message> }) => {
       const newMsg = event.new;
+
+      // P1b.2 (messages realtime scoping): `messages` has no account_id
+      // column, so the realtime channel cannot be filtered by tenant. We
+      // instead trust the conversations channel (filtered by account_id)
+      // to drive the known-conversation set, and DROP any message event
+      // whose conversation is not part of the active tenant's view. In a
+      // platform context the known set is built exclusively from
+      // tenant-scoped reads, so a message for client B can never be
+      // processed here.
+      if (isPlatformContext && activeAccountId && !knownConvIdsRef.current.has(newMsg.conversation_id)) {
+        // P1b.2: unknown conversation in a platform context. Do NOT trust the
+        // realtime payload as proof of tenancy. Await the single-source
+        // validator, which runs the account-scoped query (id + account_id):
+        //   * client B (or any non-active tenant) -> false -> discard, no
+        //     state touched, return without processing.
+        //   * client A (valid, race before conv-INSERT) -> true: the id is
+        //     added to knownConvIdsRef SYNCHRONOUSLY and the row is hydrated,
+        //     so we fall through and process this very message normally.
+        const ok = await validateAndHydrateUnknownConversation(newMsg.conversation_id);
+        if (!ok) return;
+      }
 
       if (event.eventType === "INSERT") {
         // Add to messages if it belongs to active conversation
@@ -256,7 +314,11 @@ export default function InboxPage() {
         );
       }
     },
-    [activeConversation, hydrateConversation]
+    [
+      activeConversation,
+      hydrateConversation,
+      validateAndHydrateUnknownConversation,
+    ]
   );
 
   // Handle realtime conversation events
@@ -329,6 +391,11 @@ export default function InboxPage() {
     channelName: "inbox-realtime",
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
+    // P1b.2: scope the realtime channels to the active tenant whenever we
+    // are in a platform context. The conversations channel is filtered by
+    // account_id; messages have no account_id column, so they are filtered
+    // client-side (see useRealtime + handleMessageEvent).
+    accountId: isPlatformContext ? activeAccountId : null,
     enabled: true,
   });
 
@@ -573,6 +640,7 @@ export default function InboxPage() {
             onSelect={handleSelectConversation}
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
+            activeAccountId={isPlatformContext ? activeAccountId : null}
             resyncToken={resyncToken}
           />
         </div>
