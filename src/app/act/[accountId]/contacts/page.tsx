@@ -13,6 +13,13 @@ import {
   createContactsLoader,
   createTagsLoader,
 } from '@/lib/contacts/list-state';
+import {
+  onSelectContact,
+  onCloseDetail,
+  onTenantChangeDetail,
+  initialDetailSelection,
+} from '@/lib/contacts/detail-state';
+import { PlatformContactDetailView } from '@/components/contacts/platform-contact-detail-view';
 import type { Tag } from '@/types';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -76,6 +83,11 @@ export default function PlatformContactsPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagsLoading, setTagsLoading] = useState(true);
   const [tagsError, setTagsError] = useState<string | null>(null);
+
+  // Read-only detail Sheet selection. The detail loader lives inside
+  // PlatformContactDetailView (own independent sequence guard); here we only
+  // own which contact is selected and whether the Sheet is open.
+  const [detail, setDetail] = useState(initialDetailSelection);
 
   const fetchTags = useCallback(async () => {
     if (!activeAccountId) return;
@@ -141,6 +153,11 @@ export default function PlatformContactsPage() {
     setSearch(reset.search);
     setPage(reset.page);
     setSelectedTagIds(reset.selectedTagIds);
+    // Tenant switch: close the detail Sheet and wipe the selection so a
+    // contact of the previous tenant is never shown (or refetched) under the
+    // new one. The Sheet's own loader is reset inside the component when its
+    // contactId/activeAccountId change to null.
+    setDetail(onTenantChangeDetail());
     appliedAccountRef.current = activeAccountId;
     // Re-fetch now that filters are clean. fetchContacts is keyed on these
     // values, so it will also run; the guard above ensures the earlier stale
@@ -348,7 +365,8 @@ export default function PlatformContactsPage() {
               contacts.map((contact) => (
                 <TableRow
                   key={contact.id}
-                  className="border-border hover:bg-muted/50"
+                  onClick={() => setDetail(onSelectContact(contact.id))}
+                  className="border-border hover:bg-muted/50 cursor-pointer"
                 >
                   <TableCell className="text-foreground font-medium">
                     {contact.name || (
@@ -425,6 +443,16 @@ export default function PlatformContactsPage() {
           </div>
         </div>
       )}
+
+      {/* Read-only detail Sheet. Tenant is resolved inside the component from
+          usePlatformContext().activeAccountId — the sole tenant source. */}
+      <PlatformContactDetailView
+        open={detail.open}
+        contactId={detail.selectedContactId}
+        onOpenChange={(open) => {
+          if (!open) setDetail(onCloseDetail());
+        }}
+      />
     </div>
   );
 }
