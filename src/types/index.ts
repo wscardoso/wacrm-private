@@ -45,8 +45,20 @@ export interface Profile {
 export interface Account {
   id: string;
   name: string;
-  /** auth.users.id of the immutable owner. */
-  owner_user_id: string;
+  /**
+   * auth.users.id of the human Owner. Nullable since
+   * `041_accounts_owner_nullable_and_cnpj.sql`: a Workspace provisioned
+   * by a Superadmin exists with `owner_user_id = NULL` until its human
+   * Owner is associated. Normal signup accounts still get an Owner at
+   * creation (handle_new_user is unchanged).
+   */
+  owner_user_id: string | null;
+  /**
+   * Normalized CNPJ (exactly 14 digits, no mask) for Workspaces
+   * provisioned administratively. Null for signup accounts. Added by
+   * `041_accounts_owner_nullable_and_cnpj.sql`.
+   */
+  cnpj?: string | null;
   created_at: string;
   updated_at: string;
 }
