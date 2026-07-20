@@ -120,9 +120,22 @@ export function createContactDetailLoader(): ContactDetailLoader {
         listContactCustomValues(supabase, accountId, contactId),
         listContactDeals(supabase, accountId, contactId),
       ])
-      const attribution = contact.first_attribution_id
-        ? await getContactAttribution(supabase, accountId, contact.first_attribution_id)
-        : null
+      // Attribution is a SECONDARY, optional fetch. A failure here must not
+      // take down the whole detail — the contact/tags/notes/fields/deals are
+      // still shown. Absence of first_attribution_id is a normal empty state;
+      // a rejected attribution fetch degrades to null as well.
+      let attribution: LeadAttribution | null = null
+      if (contact.first_attribution_id) {
+        try {
+          attribution = await getContactAttribution(
+            supabase,
+            accountId,
+            contact.first_attribution_id,
+          )
+        } catch {
+          attribution = null
+        }
+      }
 
       if (my !== seq) return null // superseded during the dependent fetches
 

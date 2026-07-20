@@ -180,4 +180,32 @@ describe('P2.1 Lote 3 — detail loader: independent sequence + tenant scoping',
       loader.load({ supabase, accountId: 'accA', contactId: 'c1' }),
     ).rejects.toThrow('boom')
   })
+
+  it('a rejected getContactAttribution is non-fatal (attribution null, rest shown)', async () => {
+    getContactByIdMock.mockResolvedValue({ id: 'c1', first_attribution_id: 'a1' } as never)
+    primeDependents()
+    // The secondary attribution fetch fails — must NOT reject the loader.
+    getContactAttributionMock.mockRejectedValue(new Error('attribution-down'))
+
+    const loader = createContactDetailLoader()
+    const res = await loader.load({ supabase, accountId: 'accA', contactId: 'c1' })
+
+    // Success state, not a rejection.
+    expect(res).not.toBeNull()
+    expect(res!.status).toBe('found')
+    expect(res).toEqual(
+      expect.objectContaining({
+        status: 'found',
+        data: expect.objectContaining({
+          contact: { id: 'c1', first_attribution_id: 'a1' },
+          tags: [{ id: 't1', name: 'VIP' }],
+          notes: [{ id: 'n1', note_text: 'hi' }],
+          customFields: [{ id: 'f1', field_name: 'CPF' }],
+          customValues: { f1: '123' },
+          deals: [{ id: 'd1', title: 'Deal' }],
+          attribution: null,
+        }),
+      }),
+    )
+  })
 })
