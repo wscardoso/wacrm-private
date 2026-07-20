@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
 import { listPlatformOperatorAccounts } from "@/lib/auth/platform-accounts";
+import { CreateWorkspaceDialog } from "@/components/workspaces/create-workspace-dialog";
 
 // P1c / Lot 2 — Platform Account Discovery page (server component).
 //
@@ -45,12 +46,17 @@ export default async function ActDiscoveryPage() {
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="text-xl font-semibold text-foreground">
-        Supervised tenants
-      </h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Select a tenant to open its inbox in read-only platform view.
-      </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">
+            Supervised tenants
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Select a tenant to open its inbox in read-only platform view.
+          </p>
+        </div>
+        <CreateWorkspaceDialog />
+      </div>
 
       {accounts.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">
