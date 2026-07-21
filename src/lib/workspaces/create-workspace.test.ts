@@ -350,6 +350,27 @@ describe("createPlatformWorkspace", () => {
     expect(args.p_owner_email).toBe(OWNER_EMAIL);
   });
 
+  it("translates a 'No user found' RPC error to a validation error on ownerEmail", async () => {
+    const { client } = fakeClient({
+      rpc: {
+        data: null,
+        error: pgError("22023", 'No user found with email nonexistent@test.com'),
+      },
+    });
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", ownerEmail: "nonexistent@test.com" },
+      client,
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("validation");
+      expect(result.error.field).toBe("ownerEmail");
+      expect(result.error.message).toBe("No user found with this email.");
+    }
+  });
+
   it("rejects an obviously-invalid owner email format without calling the RPC", async () => {
     const { client, rpc } = fakeClient({});
 

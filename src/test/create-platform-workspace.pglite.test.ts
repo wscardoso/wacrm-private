@@ -167,6 +167,7 @@ beforeAll(async () => {
   await db.exec(loadMigration('041_accounts_owner_nullable_and_cnpj.sql'))
   await db.exec(loadMigration('042_create_platform_workspace_rpc.sql'))
   await db.exec(loadMigration('043_workspace_provision_with_owner.sql'))
+  await db.exec(loadMigration('044_workspace_owner_required.sql'))
 
   // Bootstrap platform roles out-of-band (as 037 documents): one active
   // admin (Superadmin) and one active non-admin operator.
@@ -226,7 +227,7 @@ describe('P2.2 Lote 1 — create_platform_workspace authorization', () => {
   it('common user (no platform role) is rejected', async () => {
     await asUser(U.stranger, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Nope Inc', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Nope Inc', null, OWNER_EMAIL]),
       ).rejects.toThrow(/admin/i)
     })
   })
@@ -234,7 +235,7 @@ describe('P2.2 Lote 1 — create_platform_workspace authorization', () => {
   it('non-admin platform operator is rejected', async () => {
     await asUser(U.operator, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Nope Inc', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Nope Inc', null, OWNER_EMAIL]),
       ).rejects.toThrow(/admin/i)
     })
   })
@@ -243,7 +244,7 @@ describe('P2.2 Lote 1 — create_platform_workspace authorization', () => {
     await run(`UPDATE platform_operators SET is_active = FALSE WHERE user_id = $1`, [U.admin])
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Nope Inc', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Nope Inc', null, OWNER_EMAIL]),
       ).rejects.toThrow(/admin/i)
     })
     await run(`UPDATE platform_operators SET is_active = TRUE WHERE user_id = $1`, [U.admin])
@@ -403,7 +404,7 @@ describe('P2.2 Lote 1 — atomicity / rollback', () => {
     const before = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Orphan Attempt', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Orphan Attempt', null, null]),
       ).rejects.toThrow(/owner is required/i)
     })
     const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
@@ -544,7 +545,7 @@ describe('P2.3-B — create_platform_workspace with owner', () => {
     const before = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['No Owner', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['No Owner', null, null]),
       ).rejects.toThrow(/owner is required/i)
     })
     const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
