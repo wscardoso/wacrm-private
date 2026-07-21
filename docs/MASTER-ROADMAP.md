@@ -268,7 +268,7 @@ E5, E7 e E9 não dependem de messaging e podem avançar em paralelo a E0/E1.
 
 ## 9. Roadmap por fases
 
-**FASE 0 — Decisão (sem código).** E0; opcionalmente E10 em paralelo. Único item cujo custo de adiamento é multiplicativo. Validação: ADR revisado adversarialmente e marcado `Aceito`. **Estado: ADR v4 escrito e aprovado tecnicamente; promoção a `Aceito` pendente de ratificação formal de D1.**
+**FASE 0 — Decisão (sem código).** E0; opcionalmente E10 em paralelo. Único item cujo custo de adiamento é multiplicativo. Validação: ADR revisado adversarialmente e marcado `Aceito`. **Estado: CONCLUÍDA — `ADR-MSG-001 v4` promovido a `Aceito` em 2026-07-21, com D1 ratificada e N-3 reclassificado como risco aberto não-bloqueante (ADR §13). E1 liberado.**
 
 **FASE 1 — Quick wins paralelos.** E5 e E7. Independentes do ADR, baixo risco. Validação: testes PGlite do RPC (4 cenários de autorização), partial update não apaga campos omitidos.
 

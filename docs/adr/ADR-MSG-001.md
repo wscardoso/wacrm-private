@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Proposto — aguardando aprovação arquitetural** |
+| **Status** | **Aceito** — ratificado em 2026-07-21 (ver §13) |
 | **Versão** | **v4** — consolidação das correções convergentes das revisões de 2026-07-21 (ver §12) |
 | **Épico** | E0 (MASTER ROADMAP v1.1, §7) |
 | **Snapshot auditado** | HEAD `c8f1585`, working tree limpa |
@@ -439,18 +439,20 @@ Quando as cinco etapas estiverem concluídas, as afirmações abaixo serão verd
 | Estratégia de migração sequenciada, com reversibilidade declarada por etapa | ✅ |
 | Compatibilidade declarada por provider, por etapa e por convivência de estados | ✅ |
 | Riscos de execução mapeados | ✅ |
-| **Ratificação de D1 por Weyner** (D1, §15 do roadmap) | ⬜ **pendente** |
-| **Achado N-3 — deduplicação de efeitos no caminho de saída** | ⬜ **aberto, ver §12** |
-| **Promoção a `Aceito`** | ⬜ **bloqueada pelos itens acima** |
+| **Ratificação de D1 por Weyner** (D1, §15 do roadmap) | ✅ ratificada em 2026-07-21 |
+| **Achado N-3 — deduplicação de efeitos no caminho de saída** | ⚠️ **risco aberto / dependência futura — não bloqueante** (§13) |
+| **Promoção a `Aceito`** | ✅ **promovido em 2026-07-21** |
 
 **Contratos derivados previstos por este ADR:**
 
 | Contrato | Deriva de | Estado |
 |---|---|---|
+| `DLB-001 — Delivery Layer Boundary Contract` | D3, D3.b, D4, D6 | **Aprovado** — `docs/architecture/DLB-001-delivery-layer-boundary.md` |
 | `EIS-001 — External Identity Storage Specification` | D2, D3 | **Aprovado** — `docs/architecture/EIS-001-external-identity-storage.md` |
+| `DN-001 — Pré-condições de implementação do EIS-001` | D2, D3, D4, invariante A | **Aprovada** — `docs/architecture/DN-001-eis001-implementation-preconditions.md` |
+| Mecanismo de registro e seleção de provider | D3.b | **Escrito** — `DLB-001` §7 |
 | Normatização das transições da máquina de estados e da regra de estados terminais | D7 | Não escrito |
 | Mecanismo de resolução de conexão | D3.a | Não escrito |
-| Mecanismo de registro e seleção de provider | D3.b | Não escrito |
 | Retenção de variante de evento não reconhecida | D3 | Não escrito |
 
 Este ADR **não decide**: o destino do ADR-ATTR-001 (D3 do roadmap), o tratamento do acervo histórico de estados (D4), a apresentação de conversas multi-conexão (D5), a paridade de templates em providers não-oficiais (D6), a convergência entre os dois motores de automação (ADR-AUT-001) ou o processo de migração em produção (D7).
@@ -477,6 +479,38 @@ Este ADR **não decide**: o destino do ADR-ATTR-001 (D3 do roadmap), o tratament
 
 Classificado como **omissão arquitetural** na segunda revisão. Não aplicado por estar fora da lista de correções autorizadas na consolidação da v4. A correção seria uma frase no invariante A estendendo o princípio ao caminho de saída, sem prescrever mecanismo.
 
-### Pendências de forma, registradas e não executadas
+### Reclassificação de N-3 — não altera decisão
+
+O achado N-3 constava de §11 como bloqueador da promoção a `Aceito`. Foi **reclassificado como risco arquitetural aberto / dependência futura**, deixando de bloquear a promoção deste ADR e o início de E1.
+
+Fundamento registrado:
+
+- O objetivo de E1 é estabelecer a fronteira de entrega, não implementar a política completa de deduplicação de efeitos de saída.
+- `DLB-001` §6.4 preserva o ponto correto para a futura introdução do gate, sem presumi-lo e sem obstruí-lo.
+- Nenhuma decisão deste ADR depende de N-3 estar resolvido para que seus invariantes permaneçam válidos. O invariante A continua vigente e íntegro no caminho de entrada, que é o seu escopo declarado.
+- Resolvê-lo agora misturaria escopos: introduziria comportamento de entrega e idempotência dentro de uma etapa cujo objetivo é apenas criar a fronteira arquitetural.
+
+A resolução de N-3 pertence ao contrato responsável pelo caminho de saída, quando houver definição completa de persistência de intenção, retry e deduplicação — isto é, E4a.
+
+**Esta reclassificação não altera decisão, invariante, alternativa rejeitada ou consequência deste ADR.** Altera a classificação de um achado em aberto e o efeito dessa classificação sobre o ciclo de vida do documento.
+
+---
+
+## 13. Registro de promoção
+
+**Promovido a `Aceito` em 2026-07-21.**
+
+| Condição de §11 | Resolução |
+|---|---|
+| Ratificação de D1 | Ratificada por Weyner. `Connection` é a unidade de integração, com a consequência de produto aceita: um contato alcançado por duas conexões constitui, por padrão, duas conversas (D5) |
+| Achado N-3 | Reclassificado como risco aberto não-bloqueante (§12) |
+
+**Efeito:** E1 fica liberado para implementação, conforme `DLB-001` §12. A cadeia de precedência dura `E1 → E2.0 → E2.1` permanece integralmente vigente e não é afetada por esta promoção.
+
+**Pendências que permanecem abertas e não bloqueiam:** N-3 · convivência `delivered`/`received` sem portador documental · retenção de variante de evento não reconhecida · mecanismo de resolução de conexão (D3.a) · normatização das transições da máquina de estados (D7).
+
+---
+
+## 14. Pendências de forma, registradas e não executadas
 
 Três achados de classificação *design derivado* / *governança* permanecem no documento por não constarem da lista autorizada: as pré-condições de execução de **§6.3**, as mitigações operacionais em **§9**, e o checklist de **§11**. As duas revisões arquiteturais recomendaram removê-los do ADR por serem estratégia operacional. A pendência fica registrada; a remoção é subtração, e subtrair fora de escopo autorizado é tão indevido quanto acrescentar.

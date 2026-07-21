@@ -225,13 +225,33 @@ src/lib/contacts/*                          (P2.1 fechado)
 1. `from '@/lib/whatsapp/meta-api'` aparece somente em `src/lib/whatsapp/providers/**` e `src/lib/whatsapp/delivery/**`, verificado por lint **e** por teste de arquitetura.
 2. Nenhuma rota instancia adaptador de provider; todas delegam à camada de entrega.
 3. A criação de mensagem de saída ocorre em **exatamente um** lugar do código — pré-condição do critério 1 de `EIS-001` (`DN-001` D-2).
-4. Matriz `{meta,zapi,uazapi} × {texto,mídia,template,reação}`: cada célula envia, ou falha com erro tipado.
+4. Matriz `{meta,zapi,uazapi} × {texto,mídia,template,reação}`: cada célula envia, ou falha com erro tipado. **Nenhuma célula pode ficar indefinida** — ver §10.1.
 5. Broadcast em conta Z-API envia de fato.
 6. Reaction em conta uazapi envia ou falha com erro legível — nunca 500 opaco.
 7. `SendResult` carrega identidades declaradas, e o identificador primário é valor de exatamente uma delas (§5.1), verificado nos três adaptadores.
 8. O webhook Meta usa `MetaProvider.parseInboundMessage`; o parser inline é removido.
 9. Suíte Meta 100% verde **antes** de qualquer alteração e depois dela — critério de regressão do caminho em produção.
 10. `tsc --noEmit`, `vitest run` e `next build` verdes.
+
+---
+
+### 10.1 D6 — pendência de fechamento de E1
+
+**Capacidade não é suposição otimista; é contrato.** Se o provider não declara capacidade, o sistema falha de forma tipada (§8). Disso decorre a posição da matriz enquanto D6 do roadmap não tiver evidência documental:
+
+```
+template × meta     → supported            (modelo WABA/HSM)
+template × zapi     → unsupported (pending provider verification)
+template × uazapi   → unsupported (pending provider verification)
+```
+
+`unsupported (pending provider verification)` é estado **declarado**, não omissão: a célula existe na matriz, o comportamento é falha tipada, e o teste a verifica. O que permanece aberto é se a declaração está correta, não qual é o comportamento.
+
+Fundamento provisório: template HSM é objeto da WABA — pré-aprovado pela Meta, com categoria, ciclo de aprovação e cobrança por conversa. Providers baseados em biblioteca não-oficial conectam-se por *Linked Devices* fora da WABA, e endpoints que chamam de "template" entregam mensagens estruturadas com botões, que não são o mesmo objeto. O caminho de template do ForceCRM depende de `waba_id`, submissão, sincronização e status de aprovação — nada disso existe em provider não-oficial. A busca pública não produziu evidência conclusiva, e o `AUD-001` §4.2 já classificara a alegação contrária como duvidosa.
+
+**Efeito no ciclo de E1:** D6 **não bloqueia o início** de E1. **Bloqueia o seu fechamento** — E1 não pode ser declarado concluído com a matriz do critério 4 em aberto. A verificação nas contas Z-API e uazapi é pré-requisito de conclusão, não de partida.
+
+Se a verificação demonstrar suporte real em algum provider, a célula muda de `unsupported` para `supported` e o teste correspondente passa a exercitar o envio. O custo dessa direção é uma capacidade temporariamente subutilizada. O custo da direção oposta — presumir suporte inexistente — é envio quebrado em produção.
 
 ---
 
@@ -251,6 +271,8 @@ src/lib/contacts/*                          (P2.1 fechado)
 
 **Bloqueia:** E2.0 (`DN-001` D-2 — precedência dura registrada em `MASTER-ROADMAP` §8.1).
 
-**Bloqueado por:** E0 — promoção de `ADR-MSG-001` a `Aceito`, pendente de ratificação de D1.
+**Bloqueado por:** nada. `ADR-MSG-001` foi promovido a `Aceito` em 2026-07-21 (ADR §13), com D1 ratificada e N-3 reclassificado como risco aberto não-bloqueante. **E1 está liberado para implementação.**
 
-**Abertas:** N-3 (dedup de efeitos na saída) · resolução de conexão (D3.a) · retenção de variante desconhecida (D3) · D6 do roadmap (capacidade de template em providers não-oficiais).
+**Pendência de fechamento (não de início):** D6 do roadmap — capacidade de template em providers não-oficiais (§10.1).
+
+**Abertas, sem efeito sobre E1:** N-3 (dedup de efeitos na saída, reclassificado como risco não-bloqueante em `ADR-MSG-001` §12) · resolução de conexão (D3.a) · retenção de variante desconhecida (D3).
