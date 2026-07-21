@@ -85,13 +85,13 @@ function mockSupabase(defaultResult: unknown = { data: null, error: null }) {
   const tables = new Map<string, unknown>()
 
   const chain = { then: (resolve: (v: unknown) => void) => resolve(defaultResult) }
-  for (const m of ['select', 'eq', 'single', 'maybeSingle', 'order', 'limit', 'gte', 'lt', 'update', 'insert']) {
+  for (const m of ['select', 'eq', 'single', 'maybeSingle', 'order', 'limit', 'gte', 'lt', 'update', 'insert', 'rpc']) {
     ;(chain as Record<string, unknown>)[m] = vi.fn(() => chain)
   }
 
   const withResult = (result: unknown) => {
     const c = { then: (resolve: (v: unknown) => void) => resolve(result) }
-    for (const m of ['select', 'eq', 'single', 'maybeSingle', 'order', 'limit', 'gte', 'lt', 'update', 'insert']) {
+    for (const m of ['select', 'eq', 'single', 'maybeSingle', 'order', 'limit', 'gte', 'lt', 'update', 'insert', 'rpc']) {
       ;(c as Record<string, unknown>)[m] = vi.fn(() => c)
     }
     return c
@@ -99,6 +99,7 @@ function mockSupabase(defaultResult: unknown = { data: null, error: null }) {
 
   return {
     from: vi.fn((table: string) => tables.get(table) ?? chain),
+    rpc: vi.fn((name: string, args?: Record<string, unknown>) => { void name; void args; return chain }),
     /**
      * Override the result for a specific table.
      */
@@ -109,7 +110,7 @@ function mockSupabase(defaultResult: unknown = { data: null, error: null }) {
 }
 
 function createDefaultSupabase() {
-  const db = mockSupabase()
+  const db = mockSupabase({ data: '{"messageId":"msg-1","outcome":"sent"}', error: null })
   db.setResult('conversations', { data: { id: 'c1', account_id: 'a1', contact: { id: 'contact-1', phone: '+5511999999999' } }, error: null })
   db.setResult('whatsapp_config', { data: { id: 'cfg1', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' }, error: null })
   db.setResult('messages', { data: { id: 'msg-1' }, error: null })
@@ -152,6 +153,7 @@ beforeEach(() => {
   mockCreateClientImpl.mockResolvedValue({
     auth: { getUser: mockAuthGetUser },
     from: (table: string) => db.from(table),
+    rpc: (name: string, args?: Record<string, unknown>) => db.rpc(name, args),
   })
 
   mockGetProvider.mockReturnValue({
@@ -295,6 +297,39 @@ describe('POST /api/whatsapp/send', () => {
     expect(res.status).toBe(502)
     const body = await res.json()
     expect(body.error).toContain('Meta API error')
+    expect(body).toHaveProperty('message_id')
+  })
+
+  it('settles as failed when provider throws', async () => {
+    mockSendTextMessage.mockRejectedValue(new Error('downstream timeout'))
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'text',
+      content_text: 'Will fail',
+    }))
+    expect(res.status).toBe(502)
+    expect(db.rpc).toHaveBeenCalledWith(
+      'settle_outbound_message',
+      expect.objectContaining({ p_status: 'failed' }),
+    )
+  })
+
+  it('does not trigger conversation effects when outcome is not sent', async () => {
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.ok' })
+    // Override settlement response to simulate failed outcome
+    const failedSettlement = Promise.resolve({ data: '{"messageId":"msg-1","outcome":"failed"}', error: null })
+    db.rpc.mockReturnValueOnce(failedSettlement)
+
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'text',
+      content_text: 'No effects',
+    }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
   })
 
   it('retries with phone variants on sandbox error', async () => {

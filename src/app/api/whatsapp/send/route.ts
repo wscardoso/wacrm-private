@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import {
-  sendTextMessage,
-  sendTemplateMessage,
-  sendMediaMessage,
-  type MediaKind,
-} from '@/lib/whatsapp/meta-api'
+import { sendText, sendMedia, sendTemplate } from '@/lib/whatsapp/delivery/sender'
+import { createIntent, settleMessage } from '@/lib/whatsapp/delivery/settlement'
+import type { SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
@@ -21,7 +18,9 @@ import {
 } from '@/lib/rate-limit'
 import type { MessageTemplate } from '@/types'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
-import { getProvider, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+import { getProvider, type WhatsAppProvider, type ExternalIdentity, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+
+type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
 export async function POST(request: Request) {
   try {
@@ -245,10 +244,29 @@ export async function POST(request: Request) {
       }
     }
 
+    // ── Provider dispatch (ADR-MSG-001/D3.b) ──────────────────────────────
+    // Unified creation via getProvider — sole dispatch authority.
+    let provider: WhatsAppProvider
+    try {
+      let clientToken: string | undefined
+      if (config.provider === 'zapi' && config.waba_id) {
+        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+      }
+      provider = getProvider(
+        config.provider === 'zapi'
+          ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+          : config.provider === 'uazapi'
+            ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+            : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
+      )
+    } catch (err) {
+      if (err instanceof ProviderUnsupportedError) {
+        return NextResponse.json({ error: err.message }, { status: 400 })
+      }
+      throw err
+    }
+
     // ── Non-Meta provider path ────────────────────────────────────────────
-    // If the account uses Z-API, uazapi, or Evolution API, bypass the
-    // Meta-specific retry/template logic and use the provider abstraction.
-    // We return early from this block so the Meta path below is untouched.
     if (config.provider && config.provider !== 'meta') {
       if (message_type === 'template') {
         return NextResponse.json(
@@ -257,87 +275,80 @@ export async function POST(request: Request) {
         )
       }
 
-      // Decrypt client token (stored in waba_id for Z-API)
-      let clientToken: string | undefined
-      if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
-      }
-
-      let providerMessageId = ''
+      // ── ODI-001 §4: create intent before provider call ──
+      const messageId = crypto.randomUUID()
+      let settlement: SettlementResult = { messageId: '', outcome: 'noop' }
       try {
-        const provider = getProvider(
-          config.provider === 'zapi'
-            ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-            : config.provider === 'uazapi'
-              ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-              : config,
-        )
-        let result: { messageId: string }
-
-        if (isMediaKind) {
-          result = await provider.sendMedia({
-            to: sanitizedPhone,
-            kind: message_type as MediaKind,
-            link: media_url,
-            caption: content_text || undefined,
-            filename: filename || undefined,
-            contextMessageId,
-          })
-        } else {
-          result = await provider.sendText({
-            to: sanitizedPhone,
-            text: content_text,
-            contextMessageId,
-          })
-        }
-        providerMessageId = result.messageId
-      } catch (err) {
-        if (err instanceof ProviderUnsupportedError) {
-          return NextResponse.json(
-            { error: err.message },
-            { status: 400 },
-          )
-        }
-        const msg = err instanceof Error ? err.message : 'Unknown WhatsApp API error'
-        console.error('[whatsapp/send] provider send failed:', msg)
-        return NextResponse.json({ error: `WhatsApp API error: ${msg}` }, { status: 502 })
-      }
-
-      const { data: messageRecord, error: msgError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id,
-          sender_type: 'agent',
-          content_type: message_type,
-          content_text: content_text || null,
-          media_url: media_url || null,
-          message_id: providerMessageId,
-          status: 'sent',
-          reply_to_message_id: reply_to_message_id || null,
+        await createIntent(supabase, {
+          messageId,
+          conversationId: conversation_id,
+          contentType: message_type,
+          connectionRef: config.id,
+          contentText: content_text,
+          mediaUrl: media_url,
+          replyToMessageId: reply_to_message_id,
         })
-        .select()
-        .single()
-
-      if (msgError) {
-        console.error('[whatsapp/send] Error inserting sent message (non-Meta):', msgError)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        console.error('[whatsapp/send] Error creating intent (non-Meta):', msg)
         return NextResponse.json(
-          { error: `Message sent but failed to save to DB: ${msgError.message}` },
+          { error: `Failed to create message in database: ${msg}` },
           { status: 500 },
         )
       }
 
-      await supabase
-        .from('conversations')
-        .update({
-          last_message_text: content_text || `[${message_type}]`,
-          last_message_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', conversation_id)
+      let providerMessageId = ''
+      let sendError: unknown = null
+      try {
+        const result = isMediaKind
+          ? await sendMedia(provider, {
+              to: sanitizedPhone,
+              kind: message_type as MediaKind,
+              link: media_url,
+              caption: content_text || undefined,
+              filename: filename || undefined,
+              contextMessageId,
+            })
+          : await sendText(provider, {
+              to: sanitizedPhone,
+              text: content_text,
+              contextMessageId,
+            })
+        providerMessageId = result.messageId
+        settlement = await settleMessage(supabase, messageId, 'sent', config.id, result.externalIdentities, result.messageId)
+      } catch (err) {
+        sendError = err
+      }
+
+      if (sendError) {
+        try {
+          settlement = await settleMessage(supabase, messageId, 'failed', config.id, [])
+        } catch (settleErr) {
+          console.error('[whatsapp/send] Provider send + settlement both failed:', settleErr)
+        }
+        const msg = sendError instanceof Error ? sendError.message : 'Unknown WhatsApp API error'
+        console.error('[whatsapp/send] provider send failed:', msg)
+        return NextResponse.json(
+          { error: `WhatsApp API error: ${msg}`, message_id: messageId },
+          { status: 502 },
+        )
+      }
+
+      // ── ODI-001 §7: gate N-3 — effects fire only on outcome === 'sent' ──
+      if (settlement.outcome === 'sent') {
+        await supabase
+          .from('conversations')
+          .update({
+            last_message_text: content_text || `[${message_type}]`,
+            last_message_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', conversation_id)
+      }
 
       return NextResponse.json({
         success: true,
-        message_id: messageRecord.id,
+        message_id: messageId,
         whatsapp_message_id: providerMessageId,
       })
     }
@@ -382,30 +393,45 @@ export async function POST(request: Request) {
       templateRow = data ?? null
     }
 
-    const attempt = async (phone: string): Promise<string> => {
+    // ── ODI-001 §4: create intent before provider call (Meta path) ──
+    const messageId = crypto.randomUUID()
+    let metaSettlement: SettlementResult = { messageId: '', outcome: 'noop' }
+    try {
+      await createIntent(supabase, {
+        messageId,
+        conversationId: conversation_id,
+        contentType: message_type,
+        connectionRef: config.id,
+        contentText: content_text,
+        mediaUrl: media_url,
+        templateName: template_name,
+        replyToMessageId: reply_to_message_id,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      console.error('[whatsapp/send] Error creating intent (Meta):', msg)
+      return NextResponse.json(
+        { error: `Failed to create message in database: ${msg}` },
+        { status: 500 },
+      )
+    }
+
+    // ── ODI-001 §5: send then settle ──
+    const attemptOne = async (phone: string): Promise<{ messageId: string; identities: ExternalIdentity[] }> => {
       if (message_type === 'template') {
-        const result = await sendTemplateMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
+        const result = await sendTemplate(provider, {
           to: phone,
           templateName: template_name,
           language: template_language || 'en_US',
-          template: templateRow ?? undefined,
+          template: (templateRow ?? undefined) as Record<string, unknown> | undefined,
           messageParams: template_message_params ?? undefined,
-          // Legacy body-only fallback — only consulted when
-          // messageParams.body isn't set.
-          params: template_params || [],
+          params: template_params || undefined,
           contextMessageId,
         })
-        return result.messageId
+        return { messageId: result.messageId, identities: result.externalIdentities }
       }
       if (isMediaKind) {
-        // content_text doubles as the caption (ignored for audio inside
-        // sendMediaMessage). filename surfaces in the recipient's chat
-        // for documents only.
-        const result = await sendMediaMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
+        const result = await sendMedia(provider, {
           to: phone,
           kind: message_type as MediaKind,
           link: media_url,
@@ -413,16 +439,14 @@ export async function POST(request: Request) {
           filename: filename || undefined,
           contextMessageId,
         })
-        return result.messageId
+        return { messageId: result.messageId, identities: result.externalIdentities }
       }
-      const result = await sendTextMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
+      const result = await sendText(provider, {
         to: phone,
         text: content_text,
         contextMessageId,
       })
-      return result.messageId
+      return { messageId: result.messageId, identities: result.externalIdentities }
     }
 
     try {
@@ -431,15 +455,14 @@ export async function POST(request: Request) {
 
       for (const variant of variants) {
         try {
-          waMessageId = await attempt(variant)
+          const out = await attemptOne(variant)
+          waMessageId = out.messageId
           workingPhone = variant
+          metaSettlement = await settleMessage(supabase, messageId, 'sent', config.id, out.identities, out.messageId)
           lastError = null
           break
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
-          // Only retry when the failure is specifically that the
-          // recipient isn't in Meta's allowed list. Any other error
-          // (bad token, invalid template, etc.) bubbles up immediately.
           if (!isRecipientNotAllowedError(message)) {
             throw err
           }
@@ -450,17 +473,21 @@ export async function POST(request: Request) {
 
       if (lastError) throw lastError
     } catch (err) {
+      try {
+        metaSettlement = await settleMessage(supabase, messageId, 'failed', config.id, [])
+      } catch (settleErr) {
+        console.error('[whatsapp/send] Meta send + settlement both failed:', settleErr)
+      }
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('Meta API send failed for all variants:', message)
       return NextResponse.json(
-        { error: `Meta API error: ${message}` },
+        { error: `Meta API error: ${message}`, message_id: messageId },
         { status: 502 }
       )
     }
 
     // If a non-original variant succeeded, update the contact so future
-    // sends go straight through. sanitizePhoneForMeta on workingPhone
-    // will yield workingPhone itself, so re-storing preserves it.
+    // sends go straight through.
     if (workingPhone !== sanitizedPhone) {
       console.log(
         `[whatsapp/send] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
@@ -471,78 +498,42 @@ export async function POST(request: Request) {
         .eq('id', contact.id)
     }
 
-    // Insert message into DB — field names MUST match the messages schema
-    // (see supabase/migrations/001_initial_schema.sql):
-    //   conversation_id, sender_type, content_type, content_text,
-    //   media_url, template_name, message_id, status, created_at
-    const { data: messageRecord, error: msgError } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id,
-        sender_type: 'agent',
-        content_type: message_type,
-        content_text: content_text || null,
-        media_url: media_url || null,
-        template_name: template_name || null,
-        message_id: waMessageId,
-        status: 'sent',
-        reply_to_message_id: reply_to_message_id || null,
-      })
-      .select()
-      .single()
-
-    if (msgError) {
-      console.error('Error inserting sent message:', msgError)
-      return NextResponse.json(
-        { error: `Message sent to Meta but failed to save to DB: ${msgError.message}` },
-        { status: 500 }
-      )
-    }
-
-    // Update conversation
-    await supabase
-      .from('conversations')
-      .update({
-        last_message_text: content_text || `[${message_type}]`,
-        last_message_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', conversation_id)
-
-    // Pause any active Flow run for this contact — the agent stepping
-    // in is the strongest "yield, human is here" signal. See PR #2
-    // plan for why we pause (not end): preserves diagnostic state +
-    // lets the agent or the 24h timeout sweep cleanly resolve the
-    // run later. For accounts with no active runs the UPDATE matches
-    // zero rows — cheap and harmless.
-    try {
-      const { error: pauseErr } = await supabaseAdmin()
-        .from('flow_runs')
+    // ── ODI-001 §7: gate N-3 — effects only on outcome === 'sent' ──
+    if (metaSettlement.outcome === 'sent') {
+      await supabase
+        .from('conversations')
         .update({
-          status: 'paused_by_agent',
-          ended_at: new Date().toISOString(),
-          end_reason: 'agent_replied',
+          last_message_text: content_text || `[${message_type}]`,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
-        .eq('account_id', accountId)
-        .eq('contact_id', contact.id)
-        .eq('status', 'active')
-      if (pauseErr) {
-        // Best-effort — log + continue. The agent's message already
-        // landed at Meta; don't fail the response over a bookkeeping
-        // miss. Worst case: a stale active run gets caught by the
-        // stale-run cron sweep within 24h.
-        console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+        .eq('id', conversation_id)
+
+      try {
+        const { error: pauseErr } = await supabaseAdmin()
+          .from('flow_runs')
+          .update({
+            status: 'paused_by_agent',
+            ended_at: new Date().toISOString(),
+            end_reason: 'agent_replied',
+          })
+          .eq('account_id', accountId)
+          .eq('contact_id', contact.id)
+          .eq('status', 'active')
+        if (pauseErr) {
+          console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+        }
+      } catch (err) {
+        console.error(
+          '[flows] pause-on-agent-send threw:',
+          err instanceof Error ? err.message : err,
+        )
       }
-    } catch (err) {
-      console.error(
-        '[flows] pause-on-agent-send threw:',
-        err instanceof Error ? err.message : err,
-      )
     }
 
     return NextResponse.json({
       success: true,
-      message_id: messageRecord.id,
+      message_id: messageId,
       whatsapp_message_id: waMessageId,
     })
   } catch (error) {
