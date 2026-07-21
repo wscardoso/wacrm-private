@@ -83,21 +83,35 @@ describe("isValidCnpj / isValidCnpjDigits", () => {
 // ------------------------------------------------------------
 
 describe("createPlatformWorkspace", () => {
+  // Expected RPC args helper — ownerEmail maps to p_owner_email.
+  function rpcArgs(
+    overrides: { p_name?: string; p_cnpj?: string | null; p_owner_email?: string | null } = {},
+  ) {
+    return {
+      p_name: "Acme",
+      p_cnpj: null,
+      p_owner_email: OWNER_EMAIL,
+      ...overrides,
+    };
+  }
+
+  const OWNER_EMAIL = "izabela@oralunic.com.br";
+
   it("provisions with a valid masked CNPJ and returns the account id", async () => {
     const { client, rpc } = fakeClient({
       rpc: { data: "acc-123", error: null },
     });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_MASKED },
+      { name: "Acme", cnpj: VALID_CNPJ_MASKED, ownerEmail: OWNER_EMAIL },
       client,
     );
 
     expect(result).toEqual({ success: true, accountId: "acc-123" });
-    expect(rpc).toHaveBeenCalledExactlyOnceWith("create_platform_workspace", {
-      p_name: "Acme",
-      p_cnpj: VALID_CNPJ_DIGITS,
-    });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith(
+      "create_platform_workspace",
+      rpcArgs({ p_cnpj: VALID_CNPJ_DIGITS, p_owner_email: OWNER_EMAIL }),
+    );
   });
 
   it("provisions with a valid unmasked CNPJ", async () => {
@@ -106,7 +120,7 @@ describe("createPlatformWorkspace", () => {
     });
 
     const result = await createPlatformWorkspace(
-      { name: "Beta", cnpj: VALID_CNPJ_DIGITS_2 },
+      { name: "Beta", cnpj: VALID_CNPJ_DIGITS_2, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -114,6 +128,7 @@ describe("createPlatformWorkspace", () => {
     expect(rpc).toHaveBeenCalledWith("create_platform_workspace", {
       p_name: "Beta",
       p_cnpj: VALID_CNPJ_DIGITS_2,
+      p_owner_email: OWNER_EMAIL,
     });
   });
 
@@ -121,7 +136,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({ rpc: { data: "acc-1", error: null } });
 
     await createPlatformWorkspace(
-      { name: "Gamma", cnpj: VALID_CNPJ_MASKED },
+      { name: "Gamma", cnpj: VALID_CNPJ_MASKED, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -134,25 +149,27 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({ rpc: { data: "acc-1", error: null } });
 
     await createPlatformWorkspace(
-      { name: "  Acme Co  ", cnpj: VALID_CNPJ_DIGITS },
+      { name: "  Acme Co  ", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
     expect(rpc).toHaveBeenCalledWith("create_platform_workspace", {
       p_name: "Acme Co",
       p_cnpj: VALID_CNPJ_DIGITS,
+      p_owner_email: OWNER_EMAIL,
     });
   });
 
   it("allows an omitted CNPJ (optional at the DB level) → passes null", async () => {
     const { client, rpc } = fakeClient({ rpc: { data: "acc-1", error: null } });
 
-    const result = await createPlatformWorkspace({ name: "No Cnpj" }, client);
+    const result = await createPlatformWorkspace({ name: "No Cnpj", ownerEmail: OWNER_EMAIL }, client);
 
     expect(result).toEqual({ success: true, accountId: "acc-1" });
     expect(rpc).toHaveBeenCalledWith("create_platform_workspace", {
       p_name: "No Cnpj",
       p_cnpj: null,
+      p_owner_email: OWNER_EMAIL,
     });
   });
 
@@ -160,7 +177,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({});
 
     const result = await createPlatformWorkspace(
-      { name: "   ", cnpj: VALID_CNPJ_DIGITS },
+      { name: "   ", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -175,7 +192,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({});
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: "123" },
+      { name: "Acme", cnpj: "123", ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -191,7 +208,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({});
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: "11222333000180" },
+      { name: "Acme", cnpj: "11222333000180", ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -204,7 +221,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({});
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: "00000000000000" },
+      { name: "Acme", cnpj: "00000000000000", ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -217,7 +234,7 @@ describe("createPlatformWorkspace", () => {
     const { client, rpc } = fakeClient({ user: null });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_DIGITS },
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -232,7 +249,7 @@ describe("createPlatformWorkspace", () => {
     });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_DIGITS },
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -249,7 +266,7 @@ describe("createPlatformWorkspace", () => {
     });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_DIGITS },
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -273,7 +290,7 @@ describe("createPlatformWorkspace", () => {
     });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_DIGITS },
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -292,7 +309,7 @@ describe("createPlatformWorkspace", () => {
     const { client } = fakeClient({ rpc: { data: null, error: null } });
 
     const result = await createPlatformWorkspace(
-      { name: "Acme", cnpj: VALID_CNPJ_DIGITS },
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
       client,
     );
 
@@ -301,13 +318,14 @@ describe("createPlatformWorkspace", () => {
     spy.mockRestore();
   });
 
-  it("never forwards a caller-supplied identity as an RPC argument", async () => {
+  it("forwards email as p_owner_email; drops attacker-supplied user_id / actor fields", async () => {
     const { client, rpc } = fakeClient({ rpc: { data: "acc-1", error: null } });
 
     await createPlatformWorkspace(
       {
         name: "Acme",
         cnpj: VALID_CNPJ_DIGITS,
+        ownerEmail: OWNER_EMAIL,
         // Attacker-controlled extras must be ignored by the contract.
         ...({ owner_user_id: "attacker", actor_user_id: "attacker", user_id: "x" } as object),
       },
@@ -315,6 +333,53 @@ describe("createPlatformWorkspace", () => {
     );
 
     const [, args] = rpc.mock.calls[0];
-    expect(Object.keys(args).sort()).toEqual(["p_cnpj", "p_name"]);
+    // Only the three recognised fields reach the RPC; attacker extras are dropped.
+    expect(Object.keys(args).sort()).toEqual(["p_cnpj", "p_name", "p_owner_email"]);
+    expect(args.p_owner_email).toBe(OWNER_EMAIL);
+  });
+
+  it("forwards a valid ownerEmail to the RPC as p_owner_email", async () => {
+    const { client, rpc } = fakeClient({ rpc: { data: "acc-1", error: null } });
+
+    await createPlatformWorkspace(
+      { name: "Oral Unic", ownerEmail: OWNER_EMAIL },
+      client,
+    );
+
+    const [, args] = rpc.mock.calls[0];
+    expect(args.p_owner_email).toBe(OWNER_EMAIL);
+  });
+
+  it("rejects an obviously-invalid owner email format without calling the RPC", async () => {
+    const { client, rpc } = fakeClient({});
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", ownerEmail: "not-an-email" },
+      client,
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("validation");
+      expect(result.error.field).toBe("ownerEmail");
+    }
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty owner email without calling the RPC", async () => {
+    const { client, rpc } = fakeClient({});
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", ownerEmail: "" },
+      client,
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("validation");
+      expect(result.error.field).toBe("ownerEmail");
+      expect(result.error.message).toBe("Owner email is required.");
+    }
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

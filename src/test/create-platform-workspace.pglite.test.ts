@@ -48,9 +48,13 @@ CREATE TABLE accounts (
 CREATE UNIQUE INDEX idx_accounts_one_per_owner ON accounts(owner_user_id);
 
 CREATE TABLE profiles (
-  user_id UUID PRIMARY KEY REFERENCES auth.users(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
   account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
-  account_role account_role_enum
+  account_role account_role_enum,
+  UNIQUE(user_id)
 );
 
 CREATE OR REPLACE FUNCTION is_account_member(
@@ -137,27 +141,32 @@ const U = {
   operator: '10000000-0000-0000-0000-000000000002', // non-admin platform operator
   stranger: '10000000-0000-0000-0000-000000000003', // common user, no platform role
   signup: '10000000-0000-0000-0000-000000000004', // used for signup regression
+  owner: '20000000-0000-0000-0000-000000000001', // Owner for P2.3-B — Oral Unic Contagem
+  digital: '20000000-0000-0000-0000-000000000002', // Owner for P2.2 — Digitall Force
 }
 
 const CNPJ_A = '44252012000189'
+const CNPJ_B = '71456288000108'
+const OWNER_EMAIL = 'owner@x'
+const DIGITAL_EMAIL = 'digital@x'
 
 beforeAll(async () => {
   db = new PGlite()
   await db.exec(SCHEMA)
 
-  // Seed the platform actors as auth.users. We intentionally seed them
-  // BEFORE any trigger-driven signup so we control their accounts. But
-  // the trigger fires on every insert — so these get personal accounts
-  // too. That's fine; the provisioning tests create NEW workspaces.
+  // Seed the platform actors and owner users. The trigger fires on every
+  // insert — so these get personal accounts too. That's fine; the
+  // provisioning tests disown and reassign them.
   await run(
-    `INSERT INTO auth.users (id, email) VALUES ($1,'admin@x'),($2,'op@x'),($3,'stranger@x')`,
-    [U.admin, U.operator, U.stranger],
+    `INSERT INTO auth.users (id, email) VALUES ($1,'admin@x'),($2,'op@x'),($3,'stranger@x'),($4,'owner@x'),($5,'digital@x')`,
+    [U.admin, U.operator, U.stranger, U.owner, U.digital],
   )
 
   // Apply migrations under test, in order.
   await db.exec(loadMigration('037_platform_admin_foundation.sql'))
   await db.exec(loadMigration('041_accounts_owner_nullable_and_cnpj.sql'))
   await db.exec(loadMigration('042_create_platform_workspace_rpc.sql'))
+  await db.exec(loadMigration('043_workspace_provision_with_owner.sql'))
 
   // Bootstrap platform roles out-of-band (as 037 documents): one active
   // admin (Superadmin) and one active non-admin operator.
@@ -242,12 +251,12 @@ describe('P2.2 Lote 1 — create_platform_workspace authorization', () => {
 })
 
 describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
-  it('Superadmin provisions a Workspace: NULL owner, BRL, cnpj, supervision, audit', async () => {
+  it('Superadmin provisions a Workspace: Owner assigned, BRL, cnpj, supervision, audit', async () => {
     let newId = ''
     await asUser(U.admin, async () => {
       const r = await run<{ create_platform_workspace: string }>(
-        `SELECT create_platform_workspace($1, $2) AS create_platform_workspace`,
-        ['Digitall Force', CNPJ_A],
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Digitall Force', CNPJ_A, DIGITAL_EMAIL],
       )
       newId = r[0].create_platform_workspace
     })
@@ -262,10 +271,14 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
       `SELECT owner_user_id, default_currency, cnpj, name FROM accounts WHERE id = $1`,
       [newId],
     )
-    expect(acc[0].owner_user_id).toBeNull()
+    // Owner is set — workspaces are never born orphan
+    expect(acc[0].owner_user_id).toBe(U.digital)
     expect(acc[0].default_currency).toBe('BRL')
     expect(acc[0].cnpj).toBe(CNPJ_A)
     expect(acc[0].name).toBe('Digitall Force')
+
+    // Superadmin is NOT the Owner
+    expect(acc[0].owner_user_id).not.toBe(U.admin)
 
     // Superadmin is a SUPERVISOR (platform_operator_accounts), never owner/member.
     const assoc = await run<{ access_role: string }>(
@@ -282,7 +295,7 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
     )
     expect(mem[0].c).toBe(0)
 
-    // Audit row stamped with the real actor.
+    // Audit row stamped with the real actor (Superadmin), not the Owner.
     const log = await run<{ actor_user_id: string; target_account_id: string; metadata: Record<string, unknown> }>(
       `SELECT actor_user_id, target_account_id, metadata FROM platform_audit_log
        WHERE action = 'create_workspace' AND target_account_id = $1
@@ -293,14 +306,17 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
     expect(log[0].target_account_id).toBe(newId)
     expect(log[0].metadata.default_currency).toBe('BRL')
     expect(log[0].metadata.cnpj).toBe(CNPJ_A)
+    // Owner is recorded in metadata but actor is separate
+    expect(log[0].metadata.owner_user_id).toBe(U.digital)
+    expect(log[0].actor_user_id).not.toBe(log[0].metadata.owner_user_id)
   })
 
-  it('provisions a CNPJ-less Workspace (cnpj NULL allowed)', async () => {
+  it('provisions a CNPJ-less Workspace (cnpj NULL allowed) with Owner', async () => {
     let newId = ''
     await asUser(U.admin, async () => {
       const r = await run<{ create_platform_workspace: string }>(
-        `SELECT create_platform_workspace($1, $2) AS create_platform_workspace`,
-        ['No CNPJ Workspace', null],
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['No CNPJ Workspace', null, DIGITAL_EMAIL],
       )
       newId = r[0].create_platform_workspace
     })
@@ -308,26 +324,36 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
       `SELECT owner_user_id, cnpj FROM accounts WHERE id = $1`,
       [newId],
     )
-    expect(acc[0].owner_user_id).toBeNull()
+    // Owner is set even when CNPJ is omitted
+    expect(acc[0].owner_user_id).toBe(U.digital)
     expect(acc[0].cnpj).toBeNull()
   })
 
-  it('multiple owner-less Workspaces coexist (NULLs do not collide on unique owner index)', async () => {
+  it('multiple Workspaces with distinct Owners coexist (idx_accounts_one_per_owner preserved)', async () => {
     await asUser(U.admin, async () => {
-      await run(`SELECT create_platform_workspace($1, $2)`, ['Owner-less One', null])
-      await run(`SELECT create_platform_workspace($1, $2)`, ['Owner-less Two', null])
+      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct One', null, DIGITAL_EMAIL])
+      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct Two', null, OWNER_EMAIL])
     })
+    // Both workspaces have non-NULL owner_user_id
     const r = await run<{ c: number }>(
-      `SELECT count(*)::int AS c FROM accounts WHERE owner_user_id IS NULL`,
+      `SELECT count(*)::int AS c FROM accounts WHERE owner_user_id IS NOT NULL`,
     )
-    // At least the two just created plus earlier NULL-owner workspaces.
     expect(r[0].c).toBeGreaterThanOrEqual(2)
+    // No two workspaces share the same non-NULL owner_user_id
+    // (the second provisioning with DIGITAL_EMAIL disowns the first)
+    const dupes = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM (
+        SELECT owner_user_id FROM accounts WHERE owner_user_id IS NOT NULL
+        GROUP BY owner_user_id HAVING count(*) > 1
+      ) dupes`,
+    )
+    expect(dupes[0].c).toBe(0)
   })
 
   it('rejects duplicate CNPJ (partial unique index)', async () => {
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Dup CNPJ', CNPJ_A]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Dup CNPJ', CNPJ_A, DIGITAL_EMAIL]),
       ).rejects.toThrow(/idx_accounts_cnpj_unique|duplicate key/i)
     })
   })
@@ -335,7 +361,7 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
   it('rejects malformed CNPJ argument before insert', async () => {
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Bad CNPJ', '12.345']),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Bad CNPJ', '12.345', DIGITAL_EMAIL]),
       ).rejects.toThrow(/CNPJ/i)
     })
   })
@@ -343,7 +369,7 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
   it('rejects empty name', async () => {
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['   ', null]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['   ', null, DIGITAL_EMAIL]),
       ).rejects.toThrow(/name is required/i)
     })
   })
@@ -357,7 +383,7 @@ describe('P2.2 Lote 1 — atomicity / rollback', () => {
     )
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2)`, ['Rollback Co', CNPJ_A]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Rollback Co', CNPJ_A, DIGITAL_EMAIL]),
       ).rejects.toThrow()
     })
     const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
@@ -371,6 +397,17 @@ describe('P2.2 Lote 1 — atomicity / rollback', () => {
       `SELECT count(*)::int AS c FROM accounts WHERE name = 'Rollback Co'`,
     )
     expect(named[0].c).toBe(0)
+  })
+
+  it('a failing owner-required guard leaves NO partial state', async () => {
+    const before = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2)`, ['Orphan Attempt', null]),
+      ).rejects.toThrow(/owner is required/i)
+    })
+    const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    expect(after[0].c).toBe(before[0].c)
   })
 })
 
@@ -393,6 +430,184 @@ describe('P2.2 Lote 1 — signup regression', () => {
     await expect(
       run(`INSERT INTO accounts (name, owner_user_id) VALUES ('dup owner', $1)`, [U.signup]),
     ).rejects.toThrow(/idx_accounts_one_per_owner|duplicate key/i)
+  })
+})
+
+describe('P2.3-B — create_platform_workspace with owner', () => {
+  it('provisions a Workspace with an Owner: owner_user_id set, profile created', async () => {
+    let newId = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Oral Unic Contagem', CNPJ_B, OWNER_EMAIL],
+      )
+      newId = r[0].create_platform_workspace
+    })
+    expect(newId).toBeTruthy()
+
+    // Workspace has owner_user_id set (not NULL)
+    const acc = await run<{ owner_user_id: string | null; name: string; cnpj: string | null }>(
+      `SELECT owner_user_id, name, cnpj FROM accounts WHERE id = $1`,
+      [newId],
+    )
+    expect(acc[0].owner_user_id).toBe(U.owner)
+    expect(acc[0].name).toBe('Oral Unic Contagem')
+    expect(acc[0].cnpj).toBe(CNPJ_B)
+
+    // Owner has a profile row for this workspace with role 'owner'
+    const prof = await run<{ account_id: string; account_role: string }>(
+      `SELECT account_id, account_role FROM profiles WHERE user_id = $1`,
+      [U.owner],
+    )
+    expect(prof[0].account_id).toBe(newId)
+    expect(prof[0].account_role).toBe('owner')
+
+    // Superadmin is SUPERVISOR (platform_operator_accounts), not owner/member
+    const assoc = await run<{ access_role: string }>(
+      `SELECT access_role FROM platform_operator_accounts
+       WHERE operator_user_id = $1 AND account_id = $2`,
+      [U.admin, newId],
+    )
+    expect(assoc[0].access_role).toBe('admin')
+
+    // Superadmin is NOT a member
+    const mem = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM profiles WHERE user_id = $1 AND account_id = $2`,
+      [U.admin, newId],
+    )
+    expect(mem[0].c).toBe(0)
+
+    // Owner's OLD personal account (created by signup trigger) was disowned
+    const disowned = await run<{ owner_user_id: string | null }>(
+      `SELECT owner_user_id FROM accounts WHERE name = 'owner@x'`,
+    )
+    expect(disowned.length).toBe(1)
+    expect(disowned[0].owner_user_id).toBeNull()
+
+    // Owner's profile has account_role='owner' + account_id pointing to new workspace
+    const profData = await run<{ account_id: string; full_name: string; email: string; account_role: string }>(
+      `SELECT account_id, full_name, email, account_role FROM profiles WHERE user_id = $1`,
+      [U.owner],
+    )
+    expect(profData[0].account_id).toBe(newId)
+    expect(profData[0].account_role).toBe('owner')
+    // full_name/email were set by the signup trigger (empty in the test schema)
+    // and are preserved by the RPC's ON CONFLICT DO UPDATE
+    expect(typeof profData[0].full_name).toBe('string')
+    expect(typeof profData[0].email).toBe('string')
+
+    // Audit row includes owner info
+    const log = await run<{ actor_user_id: string; metadata: Record<string, unknown> }>(
+      `SELECT actor_user_id, metadata FROM platform_audit_log
+       WHERE action = 'create_workspace' AND target_account_id = $1
+       ORDER BY created_at DESC LIMIT 1`,
+      [newId],
+    )
+    expect(log[0].actor_user_id).toBe(U.admin)
+    expect(log[0].metadata.owner_user_id).toBe(U.owner)
+    expect(log[0].metadata.owner_email).toBe(OWNER_EMAIL)
+  })
+
+  it('rejects a non-existent owner email - no workspace or profile change', async () => {
+    const beforeAccs = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    const beforeProf = await run<{ c: number }>(`SELECT count(*)::int AS c FROM profiles WHERE account_id IS NOT NULL`)
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['No Email', null, 'nonexistent@x']),
+      ).rejects.toThrow(/No user found/i)
+    })
+    // No workspace was created
+    const afterAccs = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    expect(afterAccs[0].c).toBe(beforeAccs[0].c)
+    // No profile was moved
+    const afterProf = await run<{ c: number }>(`SELECT count(*)::int AS c FROM profiles WHERE account_id IS NOT NULL`)
+    expect(afterProf[0].c).toBe(beforeProf[0].c)
+  })
+
+  it('platform operator cannot create workspace with owner (rejected by auth)', async () => {
+    await asUser(U.operator, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Nope Inc', null, OWNER_EMAIL]),
+      ).rejects.toThrow(/admin/i)
+    })
+  })
+
+  it('owner user is NOT a platform operator after becoming workspace owner', async () => {
+    const op = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM platform_operators WHERE user_id = $1`,
+      [U.owner],
+    )
+    expect(op[0].c).toBe(0)
+  })
+
+  it('RPC rejects NULL owner email (orphan workspace prevented)', async () => {
+    const before = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2)`, ['No Owner', null]),
+      ).rejects.toThrow(/owner is required/i)
+    })
+    const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
+    // No workspace was created — the orphan is prevented
+    expect(after[0].c).toBe(before[0].c)
+  })
+
+  it('RPC rejects empty string owner email', async () => {
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Empty Email', null, '']),
+      ).rejects.toThrow(/owner is required/i)
+    })
+  })
+
+  it('RPC rejects whitespace-only owner email', async () => {
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Whitespace Email', null, '   ']),
+      ).rejects.toThrow(/owner is required/i)
+    })
+  })
+
+  it('Superadmin executor is NOT the Owner', async () => {
+    let newId = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Actor Not Owner', null, OWNER_EMAIL],
+      )
+      newId = r[0].create_platform_workspace
+    })
+    const acc = await run<{ owner_user_id: string }>(
+      `SELECT owner_user_id FROM accounts WHERE id = $1`,
+      [newId],
+    )
+    expect(acc[0].owner_user_id).not.toBe(U.admin)
+    expect(acc[0].owner_user_id).toBe(U.owner)
+  })
+
+  it('platform_operator_accounts and profiles are independent mechanisms', async () => {
+    // Owner@x has no platform_operator_accounts
+    const ownersOps = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM platform_operator_accounts
+       WHERE operator_user_id = $1`,
+      [U.owner],
+    )
+    expect(ownersOps[0].c).toBe(0)
+
+    // Superadmin has no profile in the workspace (only platform_operator_accounts)
+    let newId = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Independence', null, OWNER_EMAIL],
+      )
+      newId = r[0].create_platform_workspace
+    })
+    const adminProfile = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM profiles WHERE user_id = $1 AND account_id = $2`,
+      [U.admin, newId],
+    )
+    expect(adminProfile[0].c).toBe(0)
   })
 })
 

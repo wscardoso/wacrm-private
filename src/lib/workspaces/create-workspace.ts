@@ -1,18 +1,20 @@
 // ============================================================
-// Server-side Workspace provisioning flow (P2.2 / Lote 2).
+// Server-side Workspace provisioning flow (P2.2 / P2.3-B).
 //
 // This is the application layer that sits between the UI and the
-// privileged `create_platform_workspace(p_name, p_cnpj)` RPC
-// (migration 042). It:
+// privileged `create_platform_workspace(p_name, p_cnpj, p_owner_email)`
+// RPC (migration 043). It:
 //
-//   * validates application-level input (name + CNPJ) deterministically;
+//   * validates application-level input (name + CNPJ + owner email)
+//     deterministically;
 //   * requires an authenticated session;
-//   * NEVER accepts user_id / actor_user_id / owner_user_id or any
-//     identity from the caller — the RPC stamps the actor from
-//     auth.uid() itself;
-//   * calls ONLY the existing RPC (no direct DML, no service-role
-//     client, no duplicated authorization logic — the RPC's
-//     SECURITY DEFINER + active-admin check remains THE gate);
+//   * NEVER accepts user_id / actor_user_id from the caller — the RPC
+//     stamps the actor from auth.uid() itself; owner_email is the ONLY
+//     identity-adjacent field and it is resolved server-side inside
+//     the SECURITY DEFINER RPC;
+//   * calls ONLY the RPC (no direct DML, no service-role client, no
+//     duplicated authorization logic — the RPC's SECURITY DEFINER +
+//     active-admin check remains THE gate);
 //   * translates RPC / Postgres errors into a typed, UI-safe result
 //     that never leaks SQL text or stack traces.
 //
@@ -40,7 +42,7 @@ export interface CreateWorkspaceError {
   code: CreateWorkspaceErrorCode;
   message: string;
   /** Which input field caused a validation/conflict error, when applicable. */
-  field?: "name" | "cnpj";
+  field?: "name" | "cnpj" | "ownerEmail";
 }
 
 export type CreateWorkspaceResult =
@@ -51,6 +53,15 @@ export interface CreateWorkspaceInput {
   name: string;
   /** Optional. Accepts masked or unmasked; validated + normalized here. */
   cnpj?: string | null;
+  /**
+   * Owner's email. REQUIRED — the product model mandates that a client
+   * workspace is born WITH a human Owner. The RPC looks up the user in
+   * auth.users and sets them as the Workspace Owner; this layer never
+   * sees or forwards a raw user_id. The RPC itself rejects NULL/empty
+   * p_owner_email with an explicit error — no orphan workspace is ever
+   * created through this code path.
+   */
+  ownerEmail: string;
 }
 
 // ------------------------------------------------------------
@@ -107,7 +118,14 @@ interface NormalizedInput {
   name: string;
   /** null when the caller omitted the CNPJ (it is optional at the DB level). */
   cnpj: string | null;
+  /** Always a non-empty validated email — the product model requires an Owner. */
+  ownerEmail: string;
 }
+
+/** Bare-minimum email shape check — the RPC does the authoritative
+ * existence check against auth.users. This prevents obviously-wrong
+ * strings from round-tripping. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validateInput(
   input: CreateWorkspaceInput,
@@ -127,23 +145,46 @@ function validateInput(
   // CNPJ is optional (accounts.cnpj is nullable). Only validate when the
   // caller actually supplied a non-empty value.
   const rawCnpj = input.cnpj == null ? "" : String(input.cnpj).trim();
-  if (rawCnpj === "") {
-    return { ok: true, value: { name, cnpj: null } };
+  let cnpj: string | null = null;
+  if (rawCnpj !== "") {
+    const digits = normalizeCnpj(rawCnpj);
+    if (!isValidCnpjDigits(digits)) {
+      return {
+        ok: false,
+        error: {
+          code: "validation",
+          field: "cnpj",
+          message: "Invalid CNPJ.",
+        },
+      };
+    }
+    cnpj = digits;
   }
 
-  const digits = normalizeCnpj(rawCnpj);
-  if (!isValidCnpjDigits(digits)) {
+  // Owner email is REQUIRED — a client workspace cannot be born orphan.
+  const ownerEmail = String(input.ownerEmail ?? "").trim();
+  if (ownerEmail === "") {
     return {
       ok: false,
       error: {
         code: "validation",
-        field: "cnpj",
-        message: "Invalid CNPJ.",
+        field: "ownerEmail",
+        message: "Owner email is required.",
+      },
+    };
+  }
+  if (!EMAIL_RE.test(ownerEmail)) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        field: "ownerEmail",
+        message: "Invalid owner email format.",
       },
     };
   }
 
-  return { ok: true, value: { name, cnpj: digits } };
+  return { ok: true, value: { name, cnpj, ownerEmail } };
 }
 
 // ------------------------------------------------------------
@@ -168,9 +209,17 @@ function translateRpcError(error: PostgrestError): CreateWorkspaceError {
         message: "A workspace with this CNPJ already exists.",
       };
     case "22023":
-      // Defensive: structural check inside the RPC. We pre-validate, so
-      // this is not expected, but map it to a stable validation error
-      // rather than a 500-style surprise.
+      // The RPC raises 22023 for both "No user found with email %" (owner
+      // lookup) and "Invalid CNPJ format" (structural check). CNPJ is
+      // pre-validated at this layer, so a 22023 at runtime is almost
+      // certainly a missing user — surface that specifically.
+      if (error.message?.startsWith("No user found")) {
+        return {
+          code: "validation",
+          field: "ownerEmail",
+          message: "No user found with this email.",
+        };
+      }
       return {
         code: "validation",
         message: "Invalid workspace data.",
@@ -194,10 +243,14 @@ function translateRpcError(error: PostgrestError): CreateWorkspaceError {
  * Authorization is delegated entirely to the RPC (active platform admin
  * check + SECURITY DEFINER). This layer only fails fast on missing
  * authentication, normalizes/validates input, and returns a typed
- * result. The Workspace is born without a human Owner (owner_user_id
- * = NULL); Owner association is a later lote and is NOT handled here.
+ * result.
  *
- * @param input          Workspace name and optional CNPJ (masked or not).
+ * The RPC looks up the owner email in auth.users and sets the user as the
+ * Workspace Owner — the workspace is born WITH a human Owner (the product
+ * model forbids orphan client workspaces).
+ *
+ * @param input          Workspace name, optional CNPJ (masked or not),
+ *                       and required owner email.
  * @param callerSupabase Optional injected client (tests / advanced callers);
  *                       defaults to the request-scoped server client.
  */
@@ -231,6 +284,7 @@ export async function createPlatformWorkspace(
   const { data, error } = await supabase.rpc("create_platform_workspace", {
     p_name: validated.value.name,
     p_cnpj: validated.value.cnpj,
+    p_owner_email: validated.value.ownerEmail,
   });
 
   if (error) {

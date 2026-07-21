@@ -7,11 +7,11 @@ import type { CreateWorkspaceResult } from "@/lib/workspaces/create-workspace";
 // Supabase client, which must never load in a node test) and lets us assert
 // exactly what the transport adapter forwards.
 const createPlatformWorkspace = vi.fn<
-  (input: { name: string; cnpj?: string | null }) => Promise<CreateWorkspaceResult>
+  (input: { name: string; cnpj?: string | null; ownerEmail: string }) => Promise<CreateWorkspaceResult>
 >();
 
 vi.mock("@/lib/workspaces/create-workspace", () => ({
-  createPlatformWorkspace: (input: { name: string; cnpj?: string | null }) =>
+  createPlatformWorkspace: (input: { name: string; cnpj?: string | null; ownerEmail: string }) =>
     createPlatformWorkspace(input),
 }));
 
@@ -21,38 +21,56 @@ beforeEach(() => {
   createPlatformWorkspace.mockReset();
 });
 
+const OWNER_EMAIL = "izabela@oralunic.com.br";
+
 describe("createWorkspaceAction", () => {
-  it("forwards { name, cnpj } exactly to the Lote 2 layer", async () => {
+  it("forwards { name, cnpj, ownerEmail } exactly to the Lote 2 layer", async () => {
     createPlatformWorkspace.mockResolvedValue({ success: true, accountId: "acc-1" });
 
-    await createWorkspaceAction({ name: "Acme", cnpj: "11.222.333/0001-81" });
+    await createWorkspaceAction({
+      name: "Acme",
+      cnpj: "11.222.333/0001-81",
+      ownerEmail: OWNER_EMAIL,
+    });
 
     expect(createPlatformWorkspace).toHaveBeenCalledExactlyOnceWith({
       name: "Acme",
       cnpj: "11.222.333/0001-81",
+      ownerEmail: OWNER_EMAIL,
     });
   });
 
   it("normalizes an omitted CNPJ to null", async () => {
     createPlatformWorkspace.mockResolvedValue({ success: true, accountId: "acc-1" });
 
-    await createWorkspaceAction({ name: "Acme" });
+    await createWorkspaceAction({ name: "Acme", ownerEmail: OWNER_EMAIL });
 
     expect(createPlatformWorkspace).toHaveBeenCalledWith({
       name: "Acme",
       cnpj: null,
+      ownerEmail: OWNER_EMAIL,
     });
   });
 
   it("normalizes a null CNPJ to null (passes through)", async () => {
     createPlatformWorkspace.mockResolvedValue({ success: true, accountId: "acc-1" });
 
-    await createWorkspaceAction({ name: "Acme", cnpj: null });
+    await createWorkspaceAction({ name: "Acme", cnpj: null, ownerEmail: OWNER_EMAIL });
 
     expect(createPlatformWorkspace).toHaveBeenCalledWith({
       name: "Acme",
       cnpj: null,
+      ownerEmail: OWNER_EMAIL,
     });
+  });
+
+  it("forwards ownerEmail as a string (required field)", async () => {
+    createPlatformWorkspace.mockResolvedValue({ success: true, accountId: "acc-1" });
+
+    await createWorkspaceAction({ name: "Acme", ownerEmail: OWNER_EMAIL });
+
+    const [arg] = createPlatformWorkspace.mock.calls[0];
+    expect(arg.ownerEmail).toBe(OWNER_EMAIL);
   });
 
   it("preserves a success result verbatim", async () => {
@@ -60,7 +78,7 @@ describe("createWorkspaceAction", () => {
     createPlatformWorkspace.mockResolvedValue(result);
 
     await expect(
-      createWorkspaceAction({ name: "Acme", cnpj: "11222333000181" }),
+      createWorkspaceAction({ name: "Acme", cnpj: "11222333000181", ownerEmail: OWNER_EMAIL }),
     ).resolves.toEqual(result);
   });
 
@@ -74,21 +92,23 @@ describe("createWorkspaceAction", () => {
     createPlatformWorkspace.mockResolvedValue(result);
 
     await expect(
-      createWorkspaceAction({ name: "Acme" }),
+      createWorkspaceAction({ name: "Acme", ownerEmail: OWNER_EMAIL }),
     ).resolves.toEqual(result);
   });
 
-  it("never forwards caller-supplied identity fields", async () => {
+  it("drops attacker-supplied user_id / actor fields; forwards only name, cnpj, ownerEmail", async () => {
     createPlatformWorkspace.mockResolvedValue({ success: true, accountId: "acc-1" });
 
     await createWorkspaceAction({
       name: "Acme",
       cnpj: "11222333000181",
+      ownerEmail: OWNER_EMAIL,
       // Attacker-controlled extras must be dropped by the adapter.
       ...({ owner_user_id: "attacker", actor_user_id: "attacker", user_id: "x" } as object),
     });
 
     const [arg] = createPlatformWorkspace.mock.calls[0];
-    expect(Object.keys(arg).sort()).toEqual(["cnpj", "name"]);
+    // Only the three recognised fields reach the lib layer.
+    expect(Object.keys(arg).sort()).toEqual(["cnpj", "name", "ownerEmail"]);
   });
 });

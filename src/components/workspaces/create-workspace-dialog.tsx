@@ -1,20 +1,19 @@
 "use client";
 
 // ============================================================
-// P2.2 / Lote 3 — Workspace provisioning dialog (Client Component).
+// P2.2 / P2.3-B — Workspace provisioning dialog (Client Component).
 //
 // Rendered on /act for authenticated platform operators. Collects a
-// Workspace name (required) and an optional CNPJ, then provisions via
-// the `createWorkspaceAction` Server Action (which forwards to the
-// Lote 2 layer / SECURITY DEFINER RPC). The UI performs NO
-// authorization: whether the caller may create a Workspace is decided
-// entirely server-side by the RPC. Currency is fixed to BRL in this
-// phase and is shown read-only — it is never sent from the client.
+// Workspace name (required), optional CNPJ, and required owner email,
+// then provisions via the `createWorkspaceAction` Server Action. The
+// UI performs NO authorization — whether the caller may create a
+// Workspace and whether the owner email resolves to a valid user is
+// decided entirely server-side by the SECURITY DEFINER RPC. Currency
+// is fixed to BRL and shown read-only.
 //
 // On success we navigate using ONLY the server-returned accountId.
-// On failure we surface the typed, already-sanitized error message
-// (no SQL / stack detail leaks from the Lote 2 layer) and preserve the
-// values the operator typed.
+// On failure we surface the typed, already-sanitized error message and
+// preserve the values the operator typed.
 // ============================================================
 
 import * as React from "react";
@@ -41,6 +40,7 @@ export function CreateWorkspaceDialog() {
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [cnpj, setCnpj] = React.useState("");
+  const [ownerEmail, setOwnerEmail] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
 
@@ -51,6 +51,7 @@ export function CreateWorkspaceDialog() {
     if (!next) {
       setName("");
       setCnpj("");
+      setOwnerEmail("");
       setError(null);
     }
   }
@@ -59,10 +60,14 @@ export function CreateWorkspaceDialog() {
     event.preventDefault();
     if (pending) return; // guard against concurrent submissions
 
-    // UX-only guard; the authoritative validation lives in the Lote 2
-    // layer. We still show a friendly message without a round trip.
+    // UX-only guards; the authoritative validation lives server-side.
+    // We still show a friendly message without a round trip.
     if (name.trim() === "") {
       setError("Workspace name is required.");
+      return;
+    }
+    if (ownerEmail.trim() === "") {
+      setError("Owner email is required.");
       return;
     }
 
@@ -71,8 +76,9 @@ export function CreateWorkspaceDialog() {
       const result = await createWorkspaceAction({
         name,
         // Optional: empty string means "no CNPJ" → let the server
-        // normalize to null. Non-empty is validated/normalized by Lote 2.
+        // normalize to null. Non-empty is validated/normalized server-side.
         cnpj: cnpj.trim() === "" ? null : cnpj,
+        ownerEmail: ownerEmail.trim(),
       });
 
       if (result.success) {
@@ -104,8 +110,7 @@ export function CreateWorkspaceDialog() {
           <DialogHeader>
             <DialogTitle>New Workspace</DialogTitle>
             <DialogDescription>
-              Provision a new tenant workspace. You can associate an owner
-              later.
+              Provision a new tenant workspace with its Owner.
             </DialogDescription>
           </DialogHeader>
 
@@ -148,6 +153,22 @@ export function CreateWorkspaceDialog() {
                 onChange={(e) => setCnpj(e.target.value)}
                 inputMode="numeric"
                 placeholder="00.000.000/0000-00"
+                disabled={pending}
+                aria-describedby={error ? errorId : undefined}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="workspace-email">
+                Owner e-mail <span aria-hidden="true">*</span>
+              </Label>
+              <Input
+                id="workspace-email"
+                name="ownerEmail"
+                type="email"
+                value={ownerEmail}
+                onChange={(e) => setOwnerEmail(e.target.value)}
+                placeholder="izabela@oralunic.com.br"
                 disabled={pending}
                 aria-describedby={error ? errorId : undefined}
               />
