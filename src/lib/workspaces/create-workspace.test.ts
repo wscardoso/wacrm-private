@@ -387,6 +387,27 @@ describe("createPlatformWorkspace", () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it("translates a 'User already has data' RPC error to a conflict error on ownerEmail", async () => {
+    const { client } = fakeClient({
+      rpc: {
+        data: null,
+        error: pgError("22023", "User already has data in their current workspace; provision a new account"),
+      },
+    });
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", ownerEmail: "existing@test.com" },
+      client,
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe("conflict");
+      expect(result.error.field).toBe("ownerEmail");
+      expect(result.error.message).toBe("This user already owns a workspace with data. Use another email or check the existing workspace.");
+    }
+  });
+
   it("rejects an empty owner email without calling the RPC", async () => {
     const { client, rpc } = fakeClient({});
 

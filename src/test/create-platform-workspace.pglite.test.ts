@@ -804,6 +804,54 @@ describe('P2.3-B — owner integrity: no profile theft from existing workspaces'
     expect(prof[0].account_role).toBe('owner')
   })
 
+  it.each([
+    ['conversations',     `INSERT INTO conversations (account_id) VALUES ($1)`,                                                                  'conv@x',   '60000000-0000-0000-0000-000000000001'],
+    ['pipelines',         `INSERT INTO pipelines (account_id, name) VALUES ($1, 'P')`,                                                           'pipe@x',   '60000000-0000-0000-0000-000000000002'],
+    ['broadcasts',        `INSERT INTO broadcasts (account_id, name) VALUES ($1, 'B')`,                                                          'bcast@x',  '60000000-0000-0000-0000-000000000003'],
+    ['automations',       `INSERT INTO automations (account_id, name) VALUES ($1, 'A')`,                                                         'auto@x',   '60000000-0000-0000-0000-000000000004'],
+    ['flows',             `INSERT INTO flows (account_id, name) VALUES ($1, 'F')`,                                                               'flow@x',   '60000000-0000-0000-0000-000000000005'],
+    ['flow_runs',         `INSERT INTO flow_runs (account_id) VALUES ($1)`,                                                                      'fruns@x',  '60000000-0000-0000-0000-000000000006'],
+    ['message_templates', `INSERT INTO message_templates (account_id, name) VALUES ($1, 'T')`,                                                   'mtpl@x',   '60000000-0000-0000-0000-000000000007'],
+    ['tags',              `INSERT INTO tags (account_id, name) VALUES ($1, 'Tag')`,                                                              'tags@x',   '60000000-0000-0000-0000-000000000008'],
+    ['custom_fields',     `INSERT INTO custom_fields (account_id, name) VALUES ($1, 'CF')`,                                                      'cfield@x', '60000000-0000-0000-0000-000000000009'],
+    ['contact_notes',     `INSERT INTO contact_notes (account_id, content) VALUES ($1, 'Note')`,                                                'cnote@x',  '60000000-0000-0000-0000-000000000010'],
+    ['whatsapp_config',   `INSERT INTO whatsapp_config (account_id) VALUES ($1)`,                                                                 'waconf@x', '60000000-0000-0000-0000-000000000011'],
+  ])('blocks provisioning when personal account has data in %s', async (table, insertSql, email, userId) => {
+    await run(`INSERT INTO auth.users (id, email) VALUES ($1,$2)`, [userId, email])
+
+    const personal = await run<{ id: string }>(
+      `SELECT id FROM accounts WHERE owner_user_id = $1`,
+      [userId],
+    )
+    expect(personal.length).toBe(1)
+    const personalId = personal[0].id
+
+    await run(insertSql, [personalId])
+
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Data Guard Test', null, email]),
+      ).rejects.toThrow(/data/i)
+    })
+
+    const ws = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE name = 'Data Guard Test'`,
+    )
+    expect(ws[0].c).toBe(0)
+
+    const stillOwned = await run<{ owner_user_id: string | null }>(
+      `SELECT owner_user_id FROM accounts WHERE id = $1`,
+      [personalId],
+    )
+    expect(stillOwned[0].owner_user_id).toBe(userId)
+
+    const dataRow = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM ${table} WHERE account_id = $1`,
+      [personalId],
+    )
+    expect(dataRow[0].c).toBe(1)
+  })
+
   it('blocks provisioning when user already owns a real workspace with data', async () => {
     // Create a fresh user for this test.
     const wsOwnerId = '50000000-0000-0000-0000-000000000001'

@@ -220,6 +220,13 @@ function translateRpcError(error: PostgrestError): CreateWorkspaceError {
           message: "No user found with this email.",
         };
       }
+      if (error.message?.startsWith("User already has data")) {
+        return {
+          code: "conflict",
+          field: "ownerEmail",
+          message: "This user already owns a workspace with data. Use another email or check the existing workspace.",
+        };
+      }
       return {
         code: "validation",
         message: "Invalid workspace data.",
