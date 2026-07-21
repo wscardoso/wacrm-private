@@ -1,19 +1,19 @@
-import {
-  sendInteractiveButtons,
-  sendInteractiveList,
-  sendMediaMessage,
-  sendTextMessage,
-  type InteractiveButton,
-  type InteractiveListSection,
-  type MediaKind,
-} from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
   isValidE164,
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
+import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
+import { settleMessage } from '@/lib/whatsapp/delivery/settlement'
 import { supabaseAdmin } from './admin-client'
+
+// Type aliases for the flow engine interfaces. Mirrors the
+// meta-api definitions so this file carries no direct import
+// from the concrete provider module (ADR-MSG-001/D6).
+interface InteractiveButton { id: string; title: string }
+interface InteractiveListSection { title?: string; rows: Array<{ id: string; title: string; description?: string }> }
+type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -87,47 +87,67 @@ export async function engineSendText(
 
   const accessToken = decrypt(config.access_token)
 
-  const attempt = async (phone: string): Promise<string> => {
-    const r = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
-      text: args.text,
-    })
-    return r.messageId
+  // ── Provider dispatch (ADR-MSG-001/D3.b) ──
+  let clientToken: string | undefined
+  if (config.provider === 'zapi' && config.waba_id) {
+    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
   }
-
-  const { result: waMessageId } = await sendWithPhoneVariantRetry(
-    sanitized,
-    contact.id,
-    attempt,
-    db,
+  const provider = getProvider(
+    config.provider === 'zapi'
+      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+      : config.provider === 'uazapi'
+        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
   )
 
-  // Insert before Meta send so a DB failure doesn't orphan the message (issue #11).
-  const { data: msgRow, error: msgErr } = await db
+  // ── ODI-001 §4: create intent before provider call ──
+  const messageId = crypto.randomUUID()
+  const { error: intentErr } = await db
     .from('messages')
     .insert({
+      id: messageId,
       conversation_id: args.conversationId,
       sender_type: 'bot',
       content_type: 'text',
       content_text: args.text,
       status: 'sending',
+      idempotency_key: messageId,
     })
-    .select('id')
-    .single()
 
-  if (msgErr) {
-    throw new Error(`failed to create message row: ${msgErr.message}`)
+  if (intentErr) {
+    throw new Error(`failed to create message row: ${intentErr.message}`)
   }
 
-  const { error: updateErr } = await db
-    .from('messages')
-    .update({ status: 'sent', message_id: waMessageId })
-    .eq('id', msgRow.id)
+  // ── ODI-001 §5: send then settle ──
+  let identities: ExternalIdentity[] = []
 
-  if (updateErr) {
-    console.error('[flows] Meta sent but status update failed:', updateErr.message)
+  const attempt = async (phone: string): Promise<string> => {
+    const r = await provider.sendText({
+      to: phone,
+      text: args.text,
+    })
+    identities = r.externalIdentities
+    return r.messageId
+  }
+
+  let waMessageId = ''
+  try {
+    const { result } = await sendWithPhoneVariantRetry(
+      sanitized,
+      contact.id,
+      attempt,
+      db,
+    )
+    waMessageId = result
+
+    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+  } catch (err) {
+    try {
+      await settleMessage(db, messageId, 'failed', config.id, [])
+    } catch (settleErr) {
+      console.error('[flows] send + settlement both failed:', settleErr)
+    }
+    throw err
   }
 
   await db
@@ -195,56 +215,71 @@ export async function engineSendMedia(
 
   const accessToken = decrypt(config.access_token)
 
+  // ── Provider dispatch (ADR-MSG-001/D3.b) ──
+  let clientToken: string | undefined
+  if (config.provider === 'zapi' && config.waba_id) {
+    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+  }
+  const provider = getProvider(
+    config.provider === 'zapi'
+      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+      : config.provider === 'uazapi'
+        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
+  )
+
+  // ── ODI-001 §4: create intent before provider call ──
+  const messageId = crypto.randomUUID()
+  const preview = args.caption?.trim() || `[${args.kind}]`
+  const { error: intentErr } = await db
+    .from('messages')
+    .insert({
+      id: messageId,
+      conversation_id: args.conversationId,
+      sender_type: 'bot',
+      content_type: args.kind,
+      content_text: args.caption ?? null,
+      status: 'sending',
+      idempotency_key: messageId,
+    })
+
+  if (intentErr) {
+    throw new Error(`failed to create message row: ${intentErr.message}`)
+  }
+
+  // ── ODI-001 §5: send then settle ──
+  let identities: ExternalIdentity[] = []
+
   const attempt = async (phone: string): Promise<string> => {
-    const r = await sendMediaMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
+    const r = await provider.sendMedia({
       to: phone,
       kind: args.kind,
       link: args.link,
       caption: args.caption,
       filename: args.filename,
     })
+    identities = r.externalIdentities
     return r.messageId
   }
 
-  const { result: waMessageId } = await sendWithPhoneVariantRetry(
-    sanitized,
-    contact.id,
-    attempt,
-    db,
-  )
+  let waMessageId = ''
+  try {
+    const { result } = await sendWithPhoneVariantRetry(
+      sanitized,
+      contact.id,
+      attempt,
+      db,
+    )
+    waMessageId = result
 
-  // content_type='image'|'video'|'document' — these are already in the
-  // messages_content_type_check constraint (migration 001 + 010).
-  // content_text carries the caption (or empty) so the conversation
-  // list preview shows something meaningful when the user glances at it.
-  const preview = args.caption?.trim() || `[${args.kind}]`
-
-  // Insert before Meta send so a DB failure doesn't orphan the message (issue #11).
-  const { data: msgRow, error: msgErr } = await db
-    .from('messages')
-    .insert({
-      conversation_id: args.conversationId,
-      sender_type: 'bot',
-      content_type: args.kind,
-      content_text: args.caption ?? null,
-      status: 'sending',
-    })
-    .select('id')
-    .single()
-
-  if (msgErr) {
-    throw new Error(`failed to create message row: ${msgErr.message}`)
-  }
-
-  const { error: updateErr } = await db
-    .from('messages')
-    .update({ status: 'sent', message_id: waMessageId })
-    .eq('id', msgRow.id)
-
-  if (updateErr) {
-    console.error('[flows] Meta sent but status update failed:', updateErr.message)
+    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+  } catch (err) {
+    try {
+      await settleMessage(db, messageId, 'failed', config.id, [])
+    } catch (settleErr) {
+      console.error('[flows] send + settlement both failed:', settleErr)
+    }
+    throw err
   }
 
   await db
@@ -347,66 +382,82 @@ async function sendInteractiveViaMeta(
 
   const accessToken = decrypt(config.access_token)
 
+  // ── Provider dispatch (ADR-MSG-001/D3.b) ──
+  let clientToken: string | undefined
+  if (config.provider === 'zapi' && config.waba_id) {
+    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+  }
+  const provider = getProvider(
+    config.provider === 'zapi'
+      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+      : config.provider === 'uazapi'
+        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
+  )
+
+  // ── ODI-001 §4: create intent before provider call ──
+  const messageId = crypto.randomUUID()
+  const { error: intentErr } = await db
+    .from('messages')
+    .insert({
+      id: messageId,
+      conversation_id: input.conversationId,
+      sender_type: 'bot',
+      content_type: 'interactive',
+      content_text: input.bodyText,
+      status: 'sending',
+      idempotency_key: messageId,
+    })
+
+  if (intentErr) {
+    throw new Error(`failed to create message row: ${intentErr.message}`)
+  }
+
+  // ── ODI-001 §5: send then settle ──
+  let identities: ExternalIdentity[] = []
+
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'buttons') {
-      const r = await sendInteractiveButtons({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
+      const r = await provider.sendInteractiveButtons({
         to: phone,
         bodyText: input.bodyText,
         buttons: input.buttons,
         headerText: input.headerText,
         footerText: input.footerText,
       })
+      identities = r.externalIdentities
       return r.messageId
     }
-    const r = await sendInteractiveList({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
+    const r = await provider.sendInteractiveList({
       to: phone,
       bodyText: input.bodyText,
       buttonLabel: input.buttonLabel,
-      sections: input.sections,
+      sections: input.sections as Array<{ title: string; rows: Array<{ id: string; title: string; description?: string }> }>,
       headerText: input.headerText,
       footerText: input.footerText,
     })
+    identities = r.externalIdentities
     return r.messageId
   }
 
-  // Same phone-variant retry as automations/meta-send.ts. Numbers
-  // registered with/without a trunk 0 + Meta's sandbox quirks all
-  // need this to reliably land a message.
-  const { result: waMessageId } = await sendWithPhoneVariantRetry(
-    sanitized,
-    contact.id,
-    attempt,
-    db,
-  )
+  let waMessageId = ''
+  try {
+    const { result } = await sendWithPhoneVariantRetry(
+      sanitized,
+      contact.id,
+      attempt,
+      db,
+    )
+    waMessageId = result
 
-  // Persist the bot's prompt BEFORE sending to Meta (issue #11).
-  const { data: msgRow, error: msgErr } = await db
-    .from('messages')
-    .insert({
-      conversation_id: input.conversationId,
-      sender_type: 'bot',
-      content_type: 'interactive',
-      content_text: input.bodyText,
-      status: 'sending',
-    })
-    .select('id')
-    .single()
-
-  if (msgErr) {
-    throw new Error(`failed to create message row: ${msgErr.message}`)
-  }
-
-  const { error: updateErr } = await db
-    .from('messages')
-    .update({ status: 'sent', message_id: waMessageId })
-    .eq('id', msgRow.id)
-
-  if (updateErr) {
-    console.error('[flows] Meta sent but status update failed:', updateErr.message)
+    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+  } catch (err) {
+    try {
+      await settleMessage(db, messageId, 'failed', config.id, [])
+    } catch (settleErr) {
+      console.error('[flows] send + settlement both failed:', settleErr)
+    }
+    throw err
   }
 
   await db

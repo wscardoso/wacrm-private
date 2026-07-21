@@ -1,6 +1,19 @@
+/**
+ * D6 exemption: uses getProvider (provider abstraction) but does NOT use
+ * delivery-layer intent/settlement (ODI-001). Broadcast sends template
+ * messages to arbitrary phone numbers without a conversation scope per
+ * recipient, so there is no conversation_id/message_id to create an outbound
+ * intent against.
+ *
+ * Architecture note:
+ *   "Broadcast delivery integrity requires separate decision: campaign-level
+ *    delivery versus recipient-level outbound intents."
+ *
+ * @see ADR-MSG-001 D6 — provider import removed, delivery integrity pending.
+ */
+
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
@@ -15,6 +28,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import { getProvider, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
 
 interface BroadcastResult {
   phone: string
@@ -152,7 +166,28 @@ export async function POST(request: Request) {
 
     const accessToken = decrypt(config.access_token)
 
-    // Load the template row once so sendTemplateMessage can build
+    // ── Provider dispatch (ADR-MSG-001/D3.b) ──
+    let provider: ReturnType<typeof getProvider>
+    try {
+      let clientToken: string | undefined
+      if (config.provider === 'zapi' && config.waba_id) {
+        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+      }
+      provider = getProvider(
+        config.provider === 'zapi'
+          ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+          : config.provider === 'uazapi'
+            ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+            : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
+      )
+    } catch (err) {
+      if (err instanceof ProviderUnsupportedError) {
+        return NextResponse.json({ error: err.message }, { status: 400 })
+      }
+      throw err
+    }
+
+    // Load the template row once so provider.sendTemplate can build
     // header + button components on each iteration. Loading inside
     // the loop would N+1 against Supabase for every recipient.
     // Guard against a malformed local row crashing every send in
@@ -200,15 +235,15 @@ export async function POST(request: Request) {
 
       for (const variant of variants) {
         try {
-          const result = await sendTemplateMessage({
-            phoneNumberId: config.phone_number_id,
-            accessToken,
+          const result = await provider.sendTemplate({
             to: variant,
             templateName: template_name,
             language: template_language || 'en_US',
-            template: templateRow ?? undefined,
-            messageParams: recipient.messageParams,
-            params: recipient.params ?? [],
+            template: templateRow as Record<string, unknown> | undefined,
+            messageParams: recipient.messageParams as Record<string, string> | undefined,
+            params: recipient.params
+              ? Object.fromEntries(recipient.params.map((v, i) => [String(i), v]))
+              : undefined,
           })
           sentMessageId = result.messageId
           lastError = null

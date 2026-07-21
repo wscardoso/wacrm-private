@@ -1,10 +1,11 @@
-import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
   isValidE164,
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
+import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
+import { settleMessage } from '@/lib/whatsapp/delivery/settlement'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -93,71 +94,88 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   const accessToken = decrypt(config.access_token)
 
-  const attempt = async (phone: string): Promise<string> => {
-    if (input.kind === 'template') {
-      const r = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: phone,
-        templateName: input.templateName,
-        language: input.language,
-        params: input.params,
-      })
-      return r.messageId
-    }
-    const r = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
-      text: input.text,
-    })
-    return r.messageId
+  // ── Provider dispatch (ADR-MSG-001/D3.b) ──
+  let clientToken: string | undefined
+  if (config.provider === 'zapi' && config.waba_id) {
+    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
   }
-
-  const { result: waMessageId } = await sendWithPhoneVariantRetry(
-    sanitized,
-    contact.id,
-    attempt,
-    db,
+  const provider = getProvider(
+    config.provider === 'zapi'
+      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
+      : config.provider === 'uazapi'
+        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
+        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
   )
 
-  // Persist the message BEFORE sending to Meta so a DB failure doesn't
-  // orphan a delivered message (issue #11). Start with status 'sending'
-  // and no message_id; after Meta responds we flip to 'sent'.
+  // ── ODI-001 §4: create intent before provider call ──
+  const messageId = crypto.randomUUID()
   const content_type = input.kind === 'template' ? 'template' : 'text'
   const content_text = input.kind === 'text' ? input.text : null
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { data: msgRow, error: msgErr } = await db
+  const { error: intentErr } = await db
     .from('messages')
     .insert({
+      id: messageId,
       conversation_id: input.conversationId,
       sender_type: 'bot',
       content_type,
       content_text,
       template_name,
       status: 'sending',
+      idempotency_key: messageId,
     })
-    .select('id')
-    .single()
 
-  if (msgErr) {
-    // Meta hasn't been called yet — safe to throw without side effects.
-    throw new Error(`failed to create message row: ${msgErr.message}`)
+  if (intentErr) {
+    throw new Error(`failed to create message row: ${intentErr.message}`)
   }
 
-  // Meta send succeeded — finalise the message row.
-  const { error: updateErr } = await db
-    .from('messages')
-    .update({ status: 'sent', message_id: waMessageId })
-    .eq('id', msgRow.id)
+  // ── ODI-001 §5: send then settle ──
+  let identities: ExternalIdentity[] = []
 
-  if (updateErr) {
-    console.error('[automations] Meta sent but status update failed:', updateErr.message)
-    // Message stays 'sending' in the DB — the customer received it but it
-    // shows as pending in the inbox. Better than invisible.
+  const attempt = async (phone: string): Promise<string> => {
+    if (input.kind === 'template') {
+      const r = await provider.sendTemplate({
+        to: phone,
+        templateName: input.templateName,
+        language: input.language,
+        params: input.params
+          ? Object.fromEntries(input.params.map((v, i) => [String(i), v]))
+          : undefined,
+      })
+      identities = r.externalIdentities
+      return r.messageId
+    }
+    const r = await provider.sendText({
+      to: phone,
+      text: input.text,
+    })
+    identities = r.externalIdentities
+    return r.messageId
   }
 
+  let waMessageId = ''
+  try {
+    const { result } = await sendWithPhoneVariantRetry(
+      sanitized,
+      contact.id,
+      attempt,
+      db,
+    )
+    waMessageId = result
+
+    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+  } catch (err) {
+    try {
+      await settleMessage(db, messageId, 'failed', config.id, [])
+    } catch (settleErr) {
+      console.error('[automations] send + settlement both failed:', settleErr)
+    }
+    throw err
+  }
+
+  // ── ODI-001 §7: conversation update (not gated — automation always
+  //     updates last_message_text even on 'failed' to surface the state) ──
   await db
     .from('conversations')
     .update({
