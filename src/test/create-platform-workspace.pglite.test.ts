@@ -47,15 +47,69 @@ CREATE TABLE accounts (
 );
 CREATE UNIQUE INDEX idx_accounts_one_per_owner ON accounts(owner_user_id);
 
--- Minimal tenant tables for the redeem_invitation-style data check:
--- contacts and conversations let the RPC decide whether a personal
--- account has real data (disown) or is empty (delete).
+-- All tenant-domain tables for the redeem_invitation-style data check
+-- (migration 046 matches the exact list from redeem_invitation 019).
+-- The RPC blocks provisioning if ANY of these tables has a row for
+-- the target account — only a truly empty account may be replaced.
 CREATE TABLE contacts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  name TEXT NOT NULL
+  name TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE deals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE pipelines (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE broadcasts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE automations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE flows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE flow_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE message_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE tags (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE custom_fields (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE contact_notes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  content TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE whatsapp_config (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
 );
@@ -189,6 +243,7 @@ beforeAll(async () => {
   await db.exec(loadMigration('043_workspace_provision_with_owner.sql'))
   await db.exec(loadMigration('044_workspace_owner_required.sql'))
   await db.exec(loadMigration('045_workspace_owner_integrity.sql'))
+  await db.exec(loadMigration('046_workspace_owner_block_real_data.sql'))
 
   // Bootstrap platform roles out-of-band (as 037 documents): one active
   // admin (Superadmin) and one active non-admin operator.
@@ -668,51 +723,46 @@ describe('P2.3-B — owner integrity: no profile theft from existing workspaces'
     expect(ws[0].c).toBe(0)
   })
 
-  it('preserves personal account with data (disowns, does not delete)', async () => {
-    // U.fresh has a personal account from signup. Give it a contact.
+  it('blocks provisioning when personal account has data', async () => {
+    // U.fresh has a personal account from signup. Add a contact to it.
     const personal = await run<{ id: string }>(
       `SELECT id FROM accounts WHERE owner_user_id = $1`,
       [U.fresh],
     )
     expect(personal.length).toBe(1)
+    const personalId = personal[0].id
 
     await run(
       `INSERT INTO contacts (account_id, name) VALUES ($1, 'Test Contact')`,
-      [personal[0].id],
+      [personalId],
     )
 
-    // Provision a new workspace with U.fresh as owner.
-    let newId = ''
+    // Try to provision — should be blocked because the account has data.
     await asUser(U.admin, async () => {
-      const r = await run<{ create_platform_workspace: string }>(
-        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
-        ['Data Owner WS', null, 'fresh@x'],
-      )
-      newId = r[0].create_platform_workspace
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Blocked WS', null, 'fresh@x']),
+      ).rejects.toThrow(/data/i)
     })
-    expect(newId).toBeTruthy()
 
-    // The personal account still exists (was NOT deleted) but is disowned.
-    const disowned = await run<{ owner_user_id: string | null }>(
-      `SELECT owner_user_id FROM accounts WHERE id = $1`,
-      [personal[0].id],
+    // No workspace was created
+    const ws = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE name = 'Blocked WS'`,
     )
-    expect(disowned[0].owner_user_id).toBeNull()
+    expect(ws[0].c).toBe(0)
 
-    // The contact still exists in the disowned personal account.
+    // The personal account still exists unchanged (owner_user_id intact).
+    const stillOwned = await run<{ owner_user_id: string | null }>(
+      `SELECT owner_user_id FROM accounts WHERE id = $1`,
+      [personalId],
+    )
+    expect(stillOwned[0].owner_user_id).toBe(U.fresh)
+
+    // The contact still exists.
     const contact = await run<{ c: number }>(
       `SELECT count(*)::int AS c FROM contacts WHERE account_id = $1`,
-      [personal[0].id],
+      [personalId],
     )
     expect(contact[0].c).toBe(1)
-
-    // The profile now points to the new workspace with role 'owner'.
-    const prof = await run<{ account_id: string; account_role: string }>(
-      `SELECT account_id, account_role FROM profiles WHERE user_id = $1`,
-      [U.fresh],
-    )
-    expect(prof[0].account_id).toBe(newId)
-    expect(prof[0].account_role).toBe('owner')
   })
 
   it('deletes empty personal account (no data)', async () => {
@@ -752,6 +802,56 @@ describe('P2.3-B — owner integrity: no profile theft from existing workspaces'
     )
     expect(prof[0].account_id).toBe(newId)
     expect(prof[0].account_role).toBe('owner')
+  })
+
+  it('blocks provisioning when user already owns a real workspace with data', async () => {
+    // Create a fresh user for this test.
+    const wsOwnerId = '50000000-0000-0000-0000-000000000001'
+    await run(`INSERT INTO auth.users (id, email) VALUES ($1,'wsowner@x')`, [wsOwnerId])
+
+    // First provisioning: personal account is deleted, workspace is created.
+    let wsId1 = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['First Real WS', null, 'wsowner@x'],
+      )
+      wsId1 = r[0].create_platform_workspace
+    })
+    expect(wsId1).toBeTruthy()
+    expect(wsId1.length).toBeGreaterThan(0)
+
+    // Add real data to this provisioned workspace.
+    await run(
+      `INSERT INTO deals (account_id, name) VALUES ($1, 'Real Deal')`,
+      [wsId1],
+    )
+
+    // Try to provision another workspace for the same user.
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Second WS', null, 'wsowner@x']),
+      ).rejects.toThrow(/data/i)
+    })
+
+    // The first workspace still exists with its data.
+    const ws1 = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE id = $1`,
+      [wsId1],
+    )
+    expect(ws1[0].c).toBe(1)
+
+    const deal = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM deals WHERE account_id = $1`,
+      [wsId1],
+    )
+    expect(deal[0].c).toBe(1)
+
+    // The second workspace was NOT created.
+    const ws2 = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE name = 'Second WS'`,
+    )
+    expect(ws2[0].c).toBe(0)
   })
 })
 
