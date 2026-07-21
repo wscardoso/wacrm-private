@@ -47,6 +47,19 @@ CREATE TABLE accounts (
 );
 CREATE UNIQUE INDEX idx_accounts_one_per_owner ON accounts(owner_user_id);
 
+-- Minimal tenant tables for the redeem_invitation-style data check:
+-- contacts and conversations let the RPC decide whether a personal
+-- account has real data (disown) or is empty (delete).
+CREATE TABLE contacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL
+);
+CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+);
+
 CREATE TABLE profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -143,6 +156,13 @@ const U = {
   signup: '10000000-0000-0000-0000-000000000004', // used for signup regression
   owner: '20000000-0000-0000-0000-000000000001', // Owner for P2.3-B — Oral Unic Contagem
   digital: '20000000-0000-0000-0000-000000000002', // Owner for P2.2 — Digitall Force
+  member:  '30000000-0000-0000-0000-000000000001', // Simulates a user already in another workspace
+  fresh:   '30000000-0000-0000-0000-000000000002', // Fresh user for data-check tests
+  fresh2:  '30000000-0000-0000-0000-000000000003', // CNPJ-less test
+  fresh3:  '30000000-0000-0000-0000-000000000004', // Distinct Owners test 1
+  fresh4:  '30000000-0000-0000-0000-000000000005', // Distinct Owners test 2
+  dupO:    '30000000-0000-0000-0000-000000000006', // Duplicate CNPJ test
+  rollO:   '30000000-0000-0000-0000-000000000007', // Rollback test
 }
 
 const CNPJ_A = '44252012000189'
@@ -158,8 +178,8 @@ beforeAll(async () => {
   // insert — so these get personal accounts too. That's fine; the
   // provisioning tests disown and reassign them.
   await run(
-    `INSERT INTO auth.users (id, email) VALUES ($1,'admin@x'),($2,'op@x'),($3,'stranger@x'),($4,'owner@x'),($5,'digital@x')`,
-    [U.admin, U.operator, U.stranger, U.owner, U.digital],
+    `INSERT INTO auth.users (id, email) VALUES ($1,'admin@x'),($2,'op@x'),($3,'stranger@x'),($4,'owner@x'),($5,'digital@x'),($6,'member@x'),($7,'fresh@x'),($8,'fresh2@x'),($9,'fresh3@x'),($10,'fresh4@x'),($11,'dup@x'),($12,'roll@x')`,
+    [U.admin, U.operator, U.stranger, U.owner, U.digital, U.member, U.fresh, U.fresh2, U.fresh3, U.fresh4, U.dupO, U.rollO],
   )
 
   // Apply migrations under test, in order.
@@ -168,6 +188,7 @@ beforeAll(async () => {
   await db.exec(loadMigration('042_create_platform_workspace_rpc.sql'))
   await db.exec(loadMigration('043_workspace_provision_with_owner.sql'))
   await db.exec(loadMigration('044_workspace_owner_required.sql'))
+  await db.exec(loadMigration('045_workspace_owner_integrity.sql'))
 
   // Bootstrap platform roles out-of-band (as 037 documents): one active
   // admin (Superadmin) and one active non-admin operator.
@@ -317,7 +338,7 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
     await asUser(U.admin, async () => {
       const r = await run<{ create_platform_workspace: string }>(
         `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
-        ['No CNPJ Workspace', null, DIGITAL_EMAIL],
+        ['No CNPJ Workspace', null, 'fresh2@x'],
       )
       newId = r[0].create_platform_workspace
     })
@@ -326,14 +347,14 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
       [newId],
     )
     // Owner is set even when CNPJ is omitted
-    expect(acc[0].owner_user_id).toBe(U.digital)
+    expect(acc[0].owner_user_id).toBe(U.fresh2)
     expect(acc[0].cnpj).toBeNull()
   })
 
   it('multiple Workspaces with distinct Owners coexist (idx_accounts_one_per_owner preserved)', async () => {
     await asUser(U.admin, async () => {
-      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct One', null, DIGITAL_EMAIL])
-      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct Two', null, OWNER_EMAIL])
+      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct One', null, 'fresh3@x'])
+      await run(`SELECT create_platform_workspace($1, $2, $3)`, ['Distinct Two', null, 'fresh4@x'])
     })
     // Both workspaces have non-NULL owner_user_id
     const r = await run<{ c: number }>(
@@ -341,7 +362,6 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
     )
     expect(r[0].c).toBeGreaterThanOrEqual(2)
     // No two workspaces share the same non-NULL owner_user_id
-    // (the second provisioning with DIGITAL_EMAIL disowns the first)
     const dupes = await run<{ c: number }>(
       `SELECT count(*)::int AS c FROM (
         SELECT owner_user_id FROM accounts WHERE owner_user_id IS NOT NULL
@@ -354,7 +374,7 @@ describe('P2.2 Lote 1 — create_platform_workspace provisioning', () => {
   it('rejects duplicate CNPJ (partial unique index)', async () => {
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Dup CNPJ', CNPJ_A, DIGITAL_EMAIL]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Dup CNPJ', CNPJ_A, 'dup@x']),
       ).rejects.toThrow(/idx_accounts_cnpj_unique|duplicate key/i)
     })
   })
@@ -384,7 +404,7 @@ describe('P2.2 Lote 1 — atomicity / rollback', () => {
     )
     await asUser(U.admin, async () => {
       await expect(
-        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Rollback Co', CNPJ_A, DIGITAL_EMAIL]),
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Rollback Co', CNPJ_A, 'roll@x']),
       ).rejects.toThrow()
     })
     const after = await run<{ c: number }>(`SELECT count(*)::int AS c FROM accounts`)
@@ -478,12 +498,12 @@ describe('P2.3-B — create_platform_workspace with owner', () => {
     )
     expect(mem[0].c).toBe(0)
 
-    // Owner's OLD personal account (created by signup trigger) was disowned
-    const disowned = await run<{ owner_user_id: string | null }>(
-      `SELECT owner_user_id FROM accounts WHERE name = 'owner@x'`,
+    // Owner's OLD personal account (created by signup trigger) was deleted
+    // because it had no data — consistent with redeem_invitation pattern.
+    const personalGone = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE name = 'owner@x'`,
     )
-    expect(disowned.length).toBe(1)
-    expect(disowned[0].owner_user_id).toBeNull()
+    expect(personalGone[0].c).toBe(0)
 
     // Owner's profile has account_role='owner' + account_id pointing to new workspace
     const profData = await run<{ account_id: string; full_name: string; email: string; account_role: string }>(
@@ -609,6 +629,129 @@ describe('P2.3-B — create_platform_workspace with owner', () => {
       [U.admin, newId],
     )
     expect(adminProfile[0].c).toBe(0)
+  })
+})
+
+describe('P2.3-B — owner integrity: no profile theft from existing workspaces', () => {
+  it('refuses provisioning when the user already belongs to another workspace', async () => {
+    // User U.member has a personal account (created by signup trigger).
+    // Simulate being invited to an existing workspace by updating their
+    // profile to point to a workspace they do NOT own.
+    let wsId1 = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Workspace For Member Test', null, DIGITAL_EMAIL],
+      )
+      wsId1 = r[0].create_platform_workspace
+    })
+
+    // Move U.member's profile to the existing workspace (simulating
+    // a redeem_invitation-style transfer).
+    await run(
+      `UPDATE profiles SET account_id = $1 WHERE user_id = $2`,
+      [wsId1, U.member],
+    )
+
+    // U.member's personal account was deleted (empty, v045 cleanup).
+    // Their profile now points to wsId1 instead of their personal account.
+    await asUser(U.admin, async () => {
+      await expect(
+        run(`SELECT create_platform_workspace($1, $2, $3)`, ['Stolen Workspace', null, 'member@x']),
+      ).rejects.toThrow(/already a member/i)
+    })
+
+    // No workspace was created
+    const ws = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE name = 'Stolen Workspace'`,
+    )
+    expect(ws[0].c).toBe(0)
+  })
+
+  it('preserves personal account with data (disowns, does not delete)', async () => {
+    // U.fresh has a personal account from signup. Give it a contact.
+    const personal = await run<{ id: string }>(
+      `SELECT id FROM accounts WHERE owner_user_id = $1`,
+      [U.fresh],
+    )
+    expect(personal.length).toBe(1)
+
+    await run(
+      `INSERT INTO contacts (account_id, name) VALUES ($1, 'Test Contact')`,
+      [personal[0].id],
+    )
+
+    // Provision a new workspace with U.fresh as owner.
+    let newId = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Data Owner WS', null, 'fresh@x'],
+      )
+      newId = r[0].create_platform_workspace
+    })
+    expect(newId).toBeTruthy()
+
+    // The personal account still exists (was NOT deleted) but is disowned.
+    const disowned = await run<{ owner_user_id: string | null }>(
+      `SELECT owner_user_id FROM accounts WHERE id = $1`,
+      [personal[0].id],
+    )
+    expect(disowned[0].owner_user_id).toBeNull()
+
+    // The contact still exists in the disowned personal account.
+    const contact = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM contacts WHERE account_id = $1`,
+      [personal[0].id],
+    )
+    expect(contact[0].c).toBe(1)
+
+    // The profile now points to the new workspace with role 'owner'.
+    const prof = await run<{ account_id: string; account_role: string }>(
+      `SELECT account_id, account_role FROM profiles WHERE user_id = $1`,
+      [U.fresh],
+    )
+    expect(prof[0].account_id).toBe(newId)
+    expect(prof[0].account_role).toBe('owner')
+  })
+
+  it('deletes empty personal account (no data)', async () => {
+    // Create a fresh user who has a personal account with no data.
+    const cleanId = '40000000-0000-0000-0000-000000000001'
+    await run(`INSERT INTO auth.users (id, email) VALUES ($1,'clean@x')`, [cleanId])
+
+    const personalBefore = await run<{ id: string }>(
+      `SELECT id FROM accounts WHERE owner_user_id = $1`,
+      [cleanId],
+    )
+    expect(personalBefore.length).toBe(1)
+    const personalAccountId = personalBefore[0].id
+
+    // Provision — the personal account has no data, so it should be deleted.
+    let newId = ''
+    await asUser(U.admin, async () => {
+      const r = await run<{ create_platform_workspace: string }>(
+        `SELECT create_platform_workspace($1, $2, $3) AS create_platform_workspace`,
+        ['Clean Owner WS', null, 'clean@x'],
+      )
+      newId = r[0].create_platform_workspace
+    })
+    expect(newId).toBeTruthy()
+
+    // Personal account was deleted entirely.
+    const personalAfter = await run<{ c: number }>(
+      `SELECT count(*)::int AS c FROM accounts WHERE id = $1`,
+      [personalAccountId],
+    )
+    expect(personalAfter[0].c).toBe(0)
+
+    // Profile now points to the new workspace.
+    const prof = await run<{ account_id: string; account_role: string }>(
+      `SELECT account_id, account_role FROM profiles WHERE user_id = $1`,
+      [cleanId],
+    )
+    expect(prof[0].account_id).toBe(newId)
+    expect(prof[0].account_role).toBe('owner')
   })
 })
 
