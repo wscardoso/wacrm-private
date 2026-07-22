@@ -130,3 +130,38 @@ export async function settleMessage(
   if (error) throw error
   return JSON.parse(data as string) as SettlementResult
 }
+
+/**
+ * Settle via `settle_outbound_message_system` (service-role facade).
+ *
+ * Same contract as `settleMessage` but calls the system facade
+ * (ADR-SYS-001) that skips the auth‑check — intended for background
+ * workers (scheduler, orphan sweeper) that run as service_role.
+ */
+export async function settleMessageSystem(
+  supabase: SupabaseClient,
+  messageId: string,
+  status: 'sent' | 'failed',
+  connectionRef: string,
+  externalIdentities: ExternalIdentity[],
+  providerMessageId?: string,
+): Promise<SettlementResult> {
+  const identities = externalIdentities ?? []
+  const rows = identities.map(ei => ({
+    message_id: messageId,
+    connection_ref: connectionRef,
+    kind: ei.kind,
+    value: ei.value,
+  }))
+
+  const { data, error } = await supabase.rpc('settle_outbound_message_system', {
+    p_message_id: messageId,
+    p_status: status,
+    p_connection_ref: connectionRef,
+    p_provider_message_id: providerMessageId ?? null,
+    p_identities: rows,
+  })
+
+  if (error) throw error
+  return JSON.parse(data as string) as SettlementResult
+}

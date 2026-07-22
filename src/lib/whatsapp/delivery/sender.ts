@@ -8,6 +8,7 @@ import type {
 } from '../providers/types'
 import { createIntent, settleMessage, type SettlementResult } from './settlement'
 import { classifyFailure } from './failure-classifier'
+import { computeBackoff, DEFAULT_BACKOFF_CONFIG } from './retry-policy'
 
 // ── Low-level pass-through (broadcast/flow consumers) ──
 
@@ -78,18 +79,11 @@ export interface DeliveryMeta {
  * - `permanent` → the one case that settles `failed`, preserving the
  *   pre-E4b behavior for a genuinely terminal outcome.
  * - `retryable` and every `ambiguous-*` decision → does **not** settle
- *   `failed`. The intent stays exactly as `createIntent` left it:
- *   `sending`. No RPC call happens here — `settle_outbound_message`
- *   (048) is not invoked, so no transition occurs at all, which is why
- *   `outcome: 'noop'` (ODI-001 §5.1: no transition took place) is the
- *   honest description below, not a new state and not an invented
- *   queue mechanism.
- *
- * Enqueueing into the retry ledger, capability-gated reconciliation
- * (ADR-E4B-002 §5), and the blocked-until-TTL path for
- * `ambiguous-without-recovery-capability` are ARO-001 §11/§12/§16 —
- * a later commit, not this one. This function only reaches the
- * decision and stops; it is the "prepared point" the plan calls for.
+ *   `failed`. Instead, enqueues the intent into the retry ledger
+ *   (ARO-001 §7/§8.2) via `enqueue_outbound_retry`, computing the
+ *   initial backoff from `retry-policy` and honouring the blocked-
+ *   until-TTL path for providers without recovery capability
+ *   (ADR-E4B-002 §5 item 2 / ADR-E4B-003 §3.1–§3.3).
  */
 async function handleSendFailure(
   supabase: SupabaseClient,
@@ -105,8 +99,24 @@ async function handleSendFailure(
     return settleMessage(supabase, intentId, 'failed', connectionRef, [])
   }
 
-  // retryable | ambiguous-with-native-idempotency |
-  // ambiguous-with-reconciliation | ambiguous-without-recovery-capability
+  const ledgerClassification = outcome === 'deterministic-transient'
+    ? 'deterministic_transient'
+    : 'ambiguous'
+
+  const lastError = error instanceof Error ? error.message : String(error)
+
+  const nextAttemptAt: string | null =
+    decision === 'ambiguous-without-recovery-capability'
+      ? null
+      : new Date(Date.now() + computeBackoff(0, DEFAULT_BACKOFF_CONFIG)).toISOString()
+
+  await supabase.rpc('enqueue_outbound_retry', {
+    p_message_id: intentId,
+    p_classification: ledgerClassification,
+    p_next_attempt_at: nextAttemptAt,
+    p_last_error: lastError,
+  })
+
   return { messageId: intentId, outcome: 'noop' }
 }
 

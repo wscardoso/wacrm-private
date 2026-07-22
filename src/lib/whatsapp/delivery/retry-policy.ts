@@ -4,6 +4,12 @@
  * Duas políticas deliberadamente separadas, cada uma sem conhecimento
  * da outra, mais a regra de composição que §13 fixa entre elas:
  *
+ * Valores operacionais (ARO-001 §11 — ajustáveis sem reabrir contrato):
+ *   DEFAULT_TTL_MS        72 horas (3 dias)
+ *   MAX_ATTEMPT_COUNT      10 tentativas
+ *   ORPHAN_THRESHOLD_MS     5 minutos (idade mínima de uma sending órfã)
+ * 
+ *
  * - `computeBackoff` — apenas a curva (§13). Não sabe de TTL nem de
  *   teto de tentativas.
  * - `isExpired` — apenas a idade da intenção (§14). Não sabe de
@@ -93,3 +99,12 @@ export function nextAttemptOrExpire(
 
   return { kind: 'scheduled', nextAttemptAt }
 }
+
+/** ARO-001 §14 — valor operacional default (72 h). */
+export const DEFAULT_TTL_MS = 72 * 60 * 60 * 1000
+
+/** ARO-001 §11 — teto de tentativas. */
+export const MAX_ATTEMPT_COUNT = 10
+
+/** ARO-001 §16 — limiar de idade para considerar uma sending órfã (5 min). */
+export const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000
