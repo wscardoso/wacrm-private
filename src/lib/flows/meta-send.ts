@@ -5,7 +5,8 @@ import {
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
 import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { settleMessage } from '@/lib/whatsapp/delivery/settlement'
+import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
 // Type aliases for the flow engine interfaces. Mirrors the
@@ -140,12 +141,16 @@ export async function engineSendText(
     )
     waMessageId = result
 
-    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
+    // fachada de sistema (ADR-SYS-001).
+    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
+    // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
+    // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
     try {
-      await settleMessage(db, messageId, 'failed', config.id, [])
-    } catch (settleErr) {
-      console.error('[flows] send + settlement both failed:', settleErr)
+      await handleSendFailure(db, provider, err, messageId, config.id, 'system')
+    } catch (handleErr) {
+      console.error('[flows] send + failure-handling both failed:', handleErr)
     }
     throw err
   }
@@ -272,12 +277,16 @@ export async function engineSendMedia(
     )
     waMessageId = result
 
-    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
+    // fachada de sistema (ADR-SYS-001).
+    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
+    // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
+    // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
     try {
-      await settleMessage(db, messageId, 'failed', config.id, [])
-    } catch (settleErr) {
-      console.error('[flows] send + settlement both failed:', settleErr)
+      await handleSendFailure(db, provider, err, messageId, config.id, 'system')
+    } catch (handleErr) {
+      console.error('[flows] send + failure-handling both failed:', handleErr)
     }
     throw err
   }
@@ -450,12 +459,16 @@ async function sendInteractiveViaMeta(
     )
     waMessageId = result
 
-    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
+    // fachada de sistema (ADR-SYS-001).
+    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
+    // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
+    // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
     try {
-      await settleMessage(db, messageId, 'failed', config.id, [])
-    } catch (settleErr) {
-      console.error('[flows] send + settlement both failed:', settleErr)
+      await handleSendFailure(db, provider, err, messageId, config.id, 'system')
+    } catch (handleErr) {
+      console.error('[flows] send + failure-handling both failed:', handleErr)
     }
     throw err
   }

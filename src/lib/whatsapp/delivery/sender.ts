@@ -6,9 +6,22 @@ import type {
   SendTextArgs, SendMediaArgs, SendTemplateArgs,
   SendReactionArgs, SendInteractiveButtonsArgs, SendInteractiveListArgs,
 } from '../providers/types'
-import { createIntent, settleMessage, type SettlementResult } from './settlement'
+import { createIntent, settleMessage, settleMessageSystem, type SettlementResult } from './settlement'
 import { classifyFailure } from './failure-classifier'
 import { computeBackoff, DEFAULT_BACKOFF_CONFIG } from './retry-policy'
+
+/**
+ * Commit 6.1 correção #1/#5/#6 — quem chama `handleSendFailure` importa:
+ * a rota autenticada (`send/route.ts`, sessão de usuário real, `auth.uid()`
+ * populado) usa as fachadas `authenticated` (settle_outbound_message /
+ * enqueue_outbound_retry); os consumidores de automations/flows rodam sob
+ * `supabaseAdmin()` (service_role, sem sessão) e precisam das fachadas
+ * `system` (ADR-SYS-001) — a mesma classe de bloqueio que motivou
+ * ADR-SYS-001 para o settlement se aplica identicamente ao enqueue.
+ * Default 'authenticated' preserva o comportamento das três chamadas
+ * já existentes (deliverText/deliverMedia/deliverTemplate) sem alteração.
+ */
+export type SendFailureActor = 'authenticated' | 'system'
 
 // ── Low-level pass-through (broadcast/flow consumers) ──
 
@@ -85,18 +98,22 @@ export interface DeliveryMeta {
  *   until-TTL path for providers without recovery capability
  *   (ADR-E4B-002 §5 item 2 / ADR-E4B-003 §3.1–§3.3).
  */
-async function handleSendFailure(
+export async function handleSendFailure(
   supabase: SupabaseClient,
   provider: WhatsAppProvider,
   error: unknown,
   intentId: string,
   connectionRef: string,
+  actor: SendFailureActor = 'authenticated',
 ): Promise<SettlementResult> {
   const outcome = provider.classifySendFailure(error)
   const decision = classifyFailure(outcome, provider.capabilities)
 
+  const settle = actor === 'system' ? settleMessageSystem : settleMessage
+  const enqueueRpc = actor === 'system' ? 'enqueue_outbound_retry_system' : 'enqueue_outbound_retry'
+
   if (decision === 'permanent') {
-    return settleMessage(supabase, intentId, 'failed', connectionRef, [])
+    return settle(supabase, intentId, 'failed', connectionRef, [])
   }
 
   const ledgerClassification = outcome === 'deterministic-transient'
@@ -110,7 +127,7 @@ async function handleSendFailure(
       ? null
       : new Date(Date.now() + computeBackoff(0, DEFAULT_BACKOFF_CONFIG)).toISOString()
 
-  await supabase.rpc('enqueue_outbound_retry', {
+  await supabase.rpc(enqueueRpc, {
     p_message_id: intentId,
     p_classification: ledgerClassification,
     p_next_attempt_at: nextAttemptAt,

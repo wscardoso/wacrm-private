@@ -25,6 +25,8 @@
  * tentativas e não conhece o retry ledger — são funções puras.
  */
 
+import type { RetryDecision } from './failure-classifier'
+
 /** ARO-001 §13 — parâmetros da curva. Valores concretos são operação, não contrato. */
 export interface BackoffConfig {
   /** Intervalo base, em ms, antes do primeiro backoff exponencial. */
@@ -108,3 +110,73 @@ export const MAX_ATTEMPT_COUNT = 10
 
 /** ARO-001 §16 — limiar de idade para considerar uma sending órfã (5 min). */
 export const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000
+
+/**
+ * ARO-001 §12 self-heal — limiar de idade (medido por `updated_at`) para
+ * considerar uma linha de ledger em `retrying` como abandonada por um
+ * drenador que morreu no meio do processamento (Commit 6.1 correção #4).
+ * Maior que o tempo esperado de uma execução normal de drenagem.
+ */
+export const STUCK_RETRYING_THRESHOLD_MS = 10 * 60 * 1000
+
+// ------------------------------------------------------------
+// decideRetryOutcome — Commit 6.1 correção #3.
+//
+// Extrai, como função pura testável, a decisão completa que o
+// scheduler (cron/route.ts) deve tomar diante de uma falha de reenvio.
+// Reusa `RetryDecision` (failure-classifier.ts) e a composição
+// backoff/TTL já definida acima — não duplica nenhuma das duas.
+//
+// A correção do gate de capability: o caminho `ambiguous-without-
+// recovery-capability` (ADR-E4B-002 §5, caminho D) nunca deve ser
+// reagendado às cegas — fica bloqueado (next_attempt_at = NULL) até o
+// TTL, exatamente a mesma regra que sender.ts já aplica no primeiro
+// enqueue (handleSendFailure) e que o orphan sweeper aplica ao
+// enfileirar uma órfã. Antes desta correção, o scheduler só tratava
+// `permanent` como caso especial e reagendava tudo o mais — inclusive
+// esse caminho — cegamente.
+// ------------------------------------------------------------
+
+export type RetryOutcomeAction =
+  | { kind: 'settle-failed' }
+  | { kind: 'blocked'; attemptCount: number }
+  | { kind: 'reschedule'; attemptCount: number; nextAttemptAt: Date }
+
+/**
+ * @param decision Resultado já calculado por `classifyFailure` (nunca recalculado aqui).
+ * @param attemptCountBefore `attempt_count` do ledger antes desta tentativa.
+ * @param createdAt `messages.created_at` da intenção (horizonte de TTL).
+ */
+export function decideRetryOutcome(
+  decision: RetryDecision,
+  attemptCountBefore: number,
+  createdAt: Date,
+  ttlMs: number = DEFAULT_TTL_MS,
+  maxAttempts: number = MAX_ATTEMPT_COUNT,
+  config: BackoffConfig = DEFAULT_BACKOFF_CONFIG,
+  now: Date = new Date(),
+): RetryOutcomeAction {
+  if (decision === 'permanent') {
+    return { kind: 'settle-failed' }
+  }
+
+  const attemptCount = attemptCountBefore + 1
+
+  // ADR-E4B-002 §5 caminho D: sem nenhuma capability de recuperação,
+  // nunca reenviar às cegas. Fica bloqueado (não morto, não reagendado)
+  // até o TTL resolver — mesma regra do primeiro enqueue.
+  if (decision === 'ambiguous-without-recovery-capability') {
+    return { kind: 'blocked', attemptCount }
+  }
+
+  if (attemptCount >= maxAttempts) {
+    return { kind: 'settle-failed' }
+  }
+
+  const next = nextAttemptOrExpire(attemptCount, createdAt, ttlMs, config, now)
+  if (next.kind === 'expired') {
+    return { kind: 'settle-failed' }
+  }
+
+  return { kind: 'reschedule', attemptCount, nextAttemptAt: next.nextAttemptAt }
+}

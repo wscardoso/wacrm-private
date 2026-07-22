@@ -67,6 +67,22 @@ export interface SettlementResult {
   outcome: SettlementOutcome
 }
 
+/**
+ * Commit 6.1 correção #2 — settle_outbound_message* (migration 050)
+ * retorna `jsonb`, não `TEXT`. supabase-js/PostgREST desserializa jsonb
+ * automaticamente em objeto JS antes de chegar aqui; `JSON.parse` sobre
+ * um objeto já desserializado lança `TypeError`. Este helper aceita
+ * ambos os formatos — string (contrato antigo/alguns drivers) ou
+ * objeto já desserializado (contrato atual) — para que a camada de
+ * aplicação não fique acoplada a um comportamento de driver específico.
+ */
+function parseSettlementResult(data: unknown): SettlementResult {
+  if (typeof data === 'string') {
+    return JSON.parse(data) as SettlementResult
+  }
+  return data as SettlementResult
+}
+
 export interface CreateIntentArgs {
   messageId: string
   conversationId: string
@@ -128,7 +144,7 @@ export async function settleMessage(
   })
 
   if (error) throw error
-  return JSON.parse(data as string) as SettlementResult
+  return parseSettlementResult(data)
 }
 
 /**
@@ -163,5 +179,5 @@ export async function settleMessageSystem(
   })
 
   if (error) throw error
-  return JSON.parse(data as string) as SettlementResult
+  return parseSettlementResult(data)
 }

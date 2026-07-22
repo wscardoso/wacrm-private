@@ -4,14 +4,14 @@ import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getProvider } from '@/lib/whatsapp/providers'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
-import { ORPHAN_THRESHOLD_MS, DEFAULT_TTL_MS } from '@/lib/whatsapp/delivery/retry-policy'
+import { ORPHAN_THRESHOLD_MS, DEFAULT_TTL_MS, STUCK_RETRYING_THRESHOLD_MS } from '@/lib/whatsapp/delivery/retry-policy'
 
 const BATCH_LIMIT = 50
 
 /**
  * ARO-001 §16 — Orphan sweeper + TTL sweep.
  *
- * Two responsibilities in one pass:
+ * Three responsibilities in one pass:
  *
  *   1. **Orphan sweep** — messages stuck in `sending` past the threshold
  *      that have no ledger entry yet. Creates one, capability-gated:
@@ -20,6 +20,16 @@ const BATCH_LIMIT = 50
  *      so the TTL will eventually resolve them (ADR-E4B-002 §5 item 2).
  *   2. **TTL sweep** — pending ledger entries whose message `created_at`
  *      is beyond the TTL horizon. Settles them `failed` + ledger → dead.
+ *   3. **Reclaim stuck `retrying`** (Commit 6.1 correção #4) — a row
+ *      claimed by the scheduler (pending → retrying) whose drainer
+ *      crashed mid-flight before reaching a terminal ledger update
+ *      would otherwise stay `retrying` forever, invisible to both the
+ *      scheduler's due-selection (which only looks at `pending`) and
+ *      to a human until someone notices. Returns it to `pending` with
+ *      `next_attempt_at = now()` so the next scheduler pass picks it
+ *      back up. Does **not** create a new status (§ restriction) and
+ *      does **not** increment `attempt_count` — the crash means the
+ *      outcome of that attempt is unknown, not a declared retry.
  *
  * Auth: same `AUTOMATION_CRON_SECRET` + `x-cron-secret` pattern.
  */
@@ -40,10 +50,46 @@ export async function GET(request: Request) {
 
   const admin = supabaseAdmin()
 
+  const reclaimed = await reclaimStuckRetrying(admin)
   const orphans = await sweepOrphans(admin)
   const expired = await sweepExpired(admin)
 
-  return NextResponse.json({ orphans_enqueued: orphans, ttl_swept: expired })
+  return NextResponse.json({ reclaimed, orphans_enqueued: orphans, ttl_swept: expired })
+}
+
+// ── Reclaim stuck `retrying` ──────────────────────────────
+
+/**
+ * Returns ledger rows abandoned mid-drain (`retrying` past the stuck
+ * threshold, measured by `updated_at`) back to `pending`.
+ *
+ * Race safety: this is a single conditional `UPDATE ... WHERE status =
+ * 'retrying' AND updated_at < cutoff`. Postgres executes it atomically
+ * per row — if two concurrent sweeper runs race on the same row, only
+ * the one that commits first actually changes `status` away from
+ * `retrying`; the second run's `WHERE status = 'retrying'` no longer
+ * matches that row and affects zero rows for it. No new status, no
+ * separate lock table needed.
+ */
+async function reclaimStuckRetrying(admin: ReturnType<typeof supabaseAdmin>): Promise<number> {
+  const cutoff = new Date(Date.now() - STUCK_RETRYING_THRESHOLD_MS).toISOString()
+
+  const { data, error } = await admin
+    .from('outbound_retry_ledger')
+    .update({
+      status: 'pending',
+      next_attempt_at: new Date().toISOString(),
+      last_error: 'reclaimed — stuck in retrying past threshold (drainer likely crashed)',
+    })
+    .eq('status', 'retrying')
+    .lt('updated_at', cutoff)
+    .select('id')
+
+  if (error) {
+    console.error('[orphan-sweep] reclaim stuck retrying failed:', error.message)
+    return 0
+  }
+  return data?.length ?? 0
 }
 
 // ── Orphan sweep ───────────────────────────────────────────

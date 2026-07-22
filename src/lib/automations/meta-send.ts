@@ -5,7 +5,8 @@ import {
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
 import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { settleMessage } from '@/lib/whatsapp/delivery/settlement'
+import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -164,12 +165,19 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     )
     waMessageId = result
 
-    await settleMessage(db, messageId, 'sent', config.id, identities, waMessageId)
+    // Commit 6.1 correção #6 — este módulo roda sob supabaseAdmin()
+    // (service_role, sem auth.uid()). A fachada authenticated
+    // (settle_outbound_message) rejeitaria com "not authorized" —
+    // usar a fachada de sistema (ADR-SYS-001).
+    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
+    // Commit 6.1 correção #1/#6 — handleSendFailure com actor='system':
+    // falha reenlviável fica `sending` + enqueue_outbound_retry_system;
+    // só `permanent` liquida `failed` via settle_outbound_message_system.
     try {
-      await settleMessage(db, messageId, 'failed', config.id, [])
-    } catch (settleErr) {
-      console.error('[automations] send + settlement both failed:', settleErr)
+      await handleSendFailure(db, provider, err, messageId, config.id, 'system')
+    } catch (handleErr) {
+      console.error('[automations] send + failure-handling both failed:', handleErr)
     }
     throw err
   }

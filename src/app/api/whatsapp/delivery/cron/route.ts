@@ -7,7 +7,7 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { settleMessageSystem, type SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import { classifyFailure } from '@/lib/whatsapp/delivery/failure-classifier'
-import { nextAttemptOrExpire, DEFAULT_BACKOFF_CONFIG, DEFAULT_TTL_MS, MAX_ATTEMPT_COUNT } from '@/lib/whatsapp/delivery/retry-policy'
+import { decideRetryOutcome, DEFAULT_BACKOFF_CONFIG, DEFAULT_TTL_MS, MAX_ATTEMPT_COUNT } from '@/lib/whatsapp/delivery/retry-policy'
 
 const BATCH_LIMIT = 50
 
@@ -230,7 +230,22 @@ async function handleRetryFailure(
   const decision = classifyFailure(outcome, provider.capabilities)
   const lastError = error instanceof Error ? error.message : String(error)
 
-  if (decision === 'permanent') {
+  // Commit 6.1 correção #3 — a decisão completa (permanent → settle-
+  // failed; ambiguous sem nenhuma capability de recuperação → bloqueado,
+  // nunca reagendado às cegas; TTL/teto de tentativas → settle-failed;
+  // caso contrário → reagendar) vem de `decideRetryOutcome`, a mesma
+  // política reusada do caminho síncrono (sender.ts) e do orphan
+  // sweeper — nenhuma regra nova, nenhuma duplicação.
+  const action = decideRetryOutcome(
+    decision,
+    row.attempt_count,
+    new Date(row.created_at),
+    DEFAULT_TTL_MS,
+    MAX_ATTEMPT_COUNT,
+    DEFAULT_BACKOFF_CONFIG,
+  )
+
+  if (action.kind === 'settle-failed') {
     await settleMessageSystem(admin, msgId, 'failed', connectionRef, [])
     await admin
       .from('outbound_retry_ledger')
@@ -239,38 +254,31 @@ async function handleRetryFailure(
     return 'dead'
   }
 
-  const nextAttempt = nextAttemptOrExpire(
-    row.attempt_count + 1,
-    new Date(row.created_at),
-    DEFAULT_TTL_MS,
-    DEFAULT_BACKOFF_CONFIG,
-  )
-
-  if (nextAttempt.kind === 'expired') {
-    await settleMessageSystem(admin, msgId, 'failed', connectionRef, [])
+  if (action.kind === 'blocked') {
+    // ADR-E4B-002 §5 caminho D: ambiguous + nativeIdempotency=false +
+    // deliveryReconciliation=false nunca é reenviado às cegas. A
+    // mensagem permanece `sending`, o ledger permanece `pending` mas
+    // sem próxima tentativa agendada — só o TTL sweep (orphan-sweep
+    // route) a resolve.
     await admin
       .from('outbound_retry_ledger')
-      .update({ status: 'dead', last_error: `${lastError} (TTL expired)` })
+      .update({
+        status: 'pending',
+        attempt_count: action.attemptCount,
+        next_attempt_at: null,
+        last_error: `${lastError} (blocked — no recovery capability)`,
+      })
       .eq('id', row.id)
-    return 'dead'
+    return 'processed'
   }
 
-  const attemptCount = row.attempt_count + 1
-  if (attemptCount >= MAX_ATTEMPT_COUNT) {
-    await settleMessageSystem(admin, msgId, 'failed', connectionRef, [])
-    await admin
-      .from('outbound_retry_ledger')
-      .update({ status: 'dead', last_error: `${lastError} (max attempts ${MAX_ATTEMPT_COUNT})` })
-      .eq('id', row.id)
-    return 'dead'
-  }
-
+  // action.kind === 'reschedule'
   await admin
     .from('outbound_retry_ledger')
     .update({
       status: 'pending',
-      attempt_count: attemptCount,
-      next_attempt_at: nextAttempt.nextAttemptAt.toISOString(),
+      attempt_count: action.attemptCount,
+      next_attempt_at: action.nextAttemptAt.toISOString(),
       last_error: lastError,
     })
     .eq('id', row.id)

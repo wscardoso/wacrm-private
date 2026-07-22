@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { sendText, sendMedia, sendTemplate } from '@/lib/whatsapp/delivery/sender'
+import { sendText, sendMedia, sendTemplate, handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { createIntent, settleMessage } from '@/lib/whatsapp/delivery/settlement'
 import type { SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
@@ -321,10 +321,15 @@ export async function POST(request: Request) {
       }
 
       if (sendError) {
+        // Commit 6.1 correção #1 — ADR-E4B-001: falhas reenviáveis
+        // (transient/ambiguous) permanecem `sending` e vão para o retry
+        // ledger; somente uma falha `permanent` é liquidada `failed`
+        // aqui. handleSendFailure decide isso — este caminho não
+        // classifica erro manualmente.
         try {
-          settlement = await settleMessage(supabase, messageId, 'failed', config.id, [])
+          settlement = await handleSendFailure(supabase, provider, sendError, messageId, config.id)
         } catch (settleErr) {
-          console.error('[whatsapp/send] Provider send + settlement both failed:', settleErr)
+          console.error('[whatsapp/send] Provider send + failure-handling both failed:', settleErr)
         }
         const msg = sendError instanceof Error ? sendError.message : 'Unknown WhatsApp API error'
         console.error('[whatsapp/send] provider send failed:', msg)
@@ -473,10 +478,13 @@ export async function POST(request: Request) {
 
       if (lastError) throw lastError
     } catch (err) {
+      // Commit 6.1 correção #1 — mesmo tratamento via handleSendFailure
+      // (ADR-E4B-001/002/003): reenviável fica `sending` + ledger;
+      // apenas `permanent` liquida `failed`.
       try {
-        metaSettlement = await settleMessage(supabase, messageId, 'failed', config.id, [])
+        metaSettlement = await handleSendFailure(supabase, provider, err, messageId, config.id)
       } catch (settleErr) {
-        console.error('[whatsapp/send] Meta send + settlement both failed:', settleErr)
+        console.error('[whatsapp/send] Meta send + failure-handling both failed:', settleErr)
       }
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('Meta API send failed for all variants:', message)
