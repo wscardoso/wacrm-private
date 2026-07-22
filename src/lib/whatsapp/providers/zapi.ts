@@ -19,10 +19,52 @@ import type {
   SendInteractiveListArgs,
   InboundMessage,
   ExternalIdentity,
+  ProviderCapabilities,
+  SendOutcomeClass,
 } from './types'
+
+/**
+ * ADR-E4B-003 §3.4 — Z-API-specific interpretation, confined to this file.
+ *
+ * `post()` below throws `Error('Z-API <path> failed (<status>): <text>')`
+ * when a response was received but not ok, so the status is always
+ * recoverable there. A `fetch()` failure that never produced a
+ * `Response` (connection refused, DNS failure) throws a different
+ * shape with no such status — and, when the runtime exposes it, a
+ * `cause.code` identifying a connection that never departed.
+ */
+function classifyZApiSendFailure(error: unknown): SendOutcomeClass {
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /failed \((\d{3})\):/.exec(message)
+  if (match) {
+    const status = Number(match[1])
+    // Certain, definitive rejection by the API layer before any dispatch.
+    if ([400, 401, 403, 404, 422].includes(status)) {
+      return 'deterministic-permanent'
+    }
+    // 429 and 5xx: Z-API may have accepted or processed the attempt
+    // before responding (ADR-E4B-002 §2) — ambiguous, not permanent.
+    return 'ambiguous'
+  }
+
+  // No HTTP response was ever obtained. Only a connection that
+  // certainly never departed (ADR-E4B-002 §2 example) counts as
+  // deterministic; anything else under doubt is ambiguous.
+  const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code
+  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'deterministic-transient'
+  }
+  return 'ambiguous'
+}
 
 export class ZApiProvider implements WhatsAppProvider {
   readonly kind = 'zapi'
+
+  /** ADR-E4B-003 §3.3 — undeclared capability defaults to `false`. */
+  readonly capabilities: ProviderCapabilities = {
+    nativeIdempotency: false,
+    deliveryReconciliation: false,
+  }
 
   private readonly base: string
   private readonly clientToken?: string
@@ -75,6 +117,11 @@ export class ZApiProvider implements WhatsAppProvider {
       data.smartphoneConnected === true ||
       data.error === false
     return { connected }
+  }
+
+  /** ADR-E4B-003 §3.4 — see classifyZApiSendFailure above. */
+  classifySendFailure(error: unknown): SendOutcomeClass {
+    return classifyZApiSendFailure(error)
   }
 
   private sendResultFrom(data: {

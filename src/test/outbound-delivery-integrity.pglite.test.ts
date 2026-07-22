@@ -84,6 +84,20 @@ function loadMigration(name: string): string {
   return readFileSync(join(dir, name), 'utf8')
 }
 
+type SettleResult = { messageId: string; outcome: string }
+
+/**
+ * settle_outbound_message* now RETURNS jsonb (contrato vivo do banco —
+ * ADR-SYS-001 §diagnóstico de deploy), não mais TEXT. Drivers Postgres
+ * costumam desserializar jsonb automaticamente em objeto JS; alguns
+ * (dependendo de versão/config do PGlite) podem entregá-lo ainda como
+ * string. Este helper aceita ambos, para o teste não ficar acoplado a
+ * um comportamento de driver específico.
+ */
+function parseResult(r: unknown): SettleResult {
+  return typeof r === 'string' ? (JSON.parse(r) as SettleResult) : (r as SettleResult)
+}
+
 function setAuth(userId: string | null) {
   if (userId) {
     return db.exec(
@@ -99,6 +113,12 @@ beforeAll(async () => {
   db = new PGlite()
   await db.exec(SCHEMA)
   await db.exec(loadMigration('048_outbound_delivery_integrity.sql'))
+  // ADR-SYS-001: 050 refactors settle_outbound_message into a facade over
+  // settle_outbound_message_core and adds settle_outbound_message_system.
+  // Loaded here so the suite below exercises the *refactored* function,
+  // not the pre-050 body — this is the regression check for the facade
+  // split (same signature, same auth model, same error strings expected).
+  await db.exec(loadMigration('050_background_system_authorization.sql'))
 })
 
 describe('settle_outbound_message (real Postgres)', () => {
@@ -129,11 +149,11 @@ describe('settle_outbound_message (real Postgres)', () => {
   })
 
   it('transitions sending → sent', async () => {
-    const { rows } = await db.query<{ r: string }>(
+    const { rows } = await db.query<{ r: unknown }>(
       `SELECT settle_outbound_message($1, $2, $3, $4, $5) AS r`,
       [msgId, 'sent', '00000000-0000-0000-0000-0000000000c1', 'wamid.sent-1', '[]'],
     )
-    const result = JSON.parse(rows[0].r) as { messageId: string; outcome: string }
+    const result = parseResult(rows[0].r)
     expect(result.messageId).toBe(msgId)
     expect(result.outcome).toBe('sent')
 
@@ -146,11 +166,11 @@ describe('settle_outbound_message (real Postgres)', () => {
   })
 
   it('second settle returns noop when already sent', async () => {
-    const { rows } = await db.query<{ r: string }>(
+    const { rows } = await db.query<{ r: unknown }>(
       `SELECT settle_outbound_message($1, $2, $3, $4, $5) AS r`,
       [msgId, 'sent', '00000000-0000-0000-0000-0000000000c1', 'wamid.noop', '[]'],
     )
-    const result = JSON.parse(rows[0].r) as { messageId: string; outcome: string }
+    const result = parseResult(rows[0].r)
     expect(result.outcome).toBe('noop')
 
     const { rows: statusRows } = await db.query<{ status: string }>(
@@ -226,11 +246,11 @@ describe('settle_outbound_message (real Postgres)', () => {
       [c],
     )
     const m = mr[0].id
-    const { rows: resultRows } = await db.query<{ r: string }>(
+    const { rows: resultRows } = await db.query<{ r: unknown }>(
       `SELECT settle_outbound_message($1, $2, $3, $4, $5) AS r`,
       [m, 'failed', null, null, '[]'],
     )
-    const result = JSON.parse(resultRows[0].r) as { messageId: string; outcome: string }
+    const result = parseResult(resultRows[0].r)
     expect(result.outcome).toBe('failed')
 
     const { rows: statusRows } = await db.query<{ status: string }>(
@@ -252,11 +272,11 @@ describe('settle_outbound_message (real Postgres)', () => {
       [c],
     )
     const m = mr[0].id
-    const { rows: resultRows } = await db.query<{ r: string }>(
+    const { rows: resultRows } = await db.query<{ r: unknown }>(
       `SELECT settle_outbound_message($1, $2, $3, $4, $5) AS r`,
       [m, 'failed', null, null, '[]'],
     )
-    const result = JSON.parse(resultRows[0].r) as { messageId: string; outcome: string }
+    const result = parseResult(resultRows[0].r)
     expect(result.outcome).toBe('noop')
   })
 
@@ -285,5 +305,109 @@ describe('settle_outbound_message (real Postgres)', () => {
       db.query(`SELECT settle_outbound_message($1, $2, $3, $4, $5)`,
         ['ffffffff-ffff-ffff-ffff-ffffffffffff', 'failed', null, null, '[]']),
     ).rejects.toThrow(/message not found/i)
+  })
+})
+
+// ADR-SYS-001 — settle_outbound_message_system: the service-role-only
+// system facade added by migration 050. Same transition behavior as
+// settle_outbound_message, but deliberately WITHOUT any auth.uid()-based
+// check — trust is delegated to possession of the service_role grant,
+// mirroring insert_inbound_message (035). PGlite doesn't enforce GRANT/
+// REVOKE role separation the way Postgres does under a real non-superuser
+// connection, so these tests validate the behavioral contract (no auth
+// check, same CAS/hardening semantics as the core), not the GRANT itself
+// — the GRANT is verified by reading migration 050 (service_role only,
+// REVOKE'd from PUBLIC/anon/authenticated).
+describe('settle_outbound_message_system (real Postgres)', () => {
+  const ACCOUNT_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+
+  async function makeMessage(status: string, text: string): Promise<string> {
+    const { rows } = await db.query<{ id: string }>(
+      `INSERT INTO conversations (id, account_id) VALUES (gen_random_uuid(), $1) RETURNING id`,
+      [ACCOUNT_ID],
+    )
+    const c = rows[0].id
+    const { rows: mr } = await db.query<{ id: string }>(
+      `INSERT INTO messages (id, conversation_id, sender_type, content_type, content_text, status, idempotency_key)
+       VALUES (gen_random_uuid(), $1, 'agent', 'text', $2, $3, gen_random_uuid()) RETURNING id`,
+      [c, text, status],
+    )
+    return mr[0].id
+  }
+
+  it('transitions sending → sent with no auth.uid() set at all', async () => {
+    await setAuth(null)
+    const m = await makeMessage('sending', 'system-sent')
+    const { rows } = await db.query<{ r: unknown }>(
+      `SELECT settle_outbound_message_system($1, $2, $3, $4, $5) AS r`,
+      [m, 'sent', '00000000-0000-0000-0000-0000000000c1', 'wamid.system-1', '[]'],
+    )
+    const result = parseResult(rows[0].r)
+    expect(result.outcome).toBe('sent')
+
+    const { rows: statusRows } = await db.query<{ status: string; message_id: string }>(
+      `SELECT status, message_id FROM messages WHERE id = $1`,
+      [m],
+    )
+    expect(statusRows[0].status).toBe('sent')
+    expect(statusRows[0].message_id).toBe('wamid.system-1')
+  })
+
+  it('transitions sending → failed with no auth.uid() set at all', async () => {
+    const m = await makeMessage('sending', 'system-failed')
+    const { rows } = await db.query<{ r: unknown }>(
+      `SELECT settle_outbound_message_system($1, $2, $3, $4, $5) AS r`,
+      [m, 'failed', null, null, '[]'],
+    )
+    const result = parseResult(rows[0].r)
+    expect(result.outcome).toBe('failed')
+  })
+
+  it('noop when already settled (same CAS as the authenticated facade)', async () => {
+    const m = await makeMessage('sent', 'system-noop')
+    const { rows } = await db.query<{ r: unknown }>(
+      `SELECT settle_outbound_message_system($1, $2, $3, $4, $5) AS r`,
+      [m, 'failed', null, null, '[]'],
+    )
+    const result = parseResult(rows[0].r)
+    expect(result.outcome).toBe('noop')
+  })
+
+  it('rejects invalid status (same hardening as the core)', async () => {
+    const m = await makeMessage('sending', 'system-bad-status')
+    await expect(
+      db.query(`SELECT settle_outbound_message_system($1, $2, $3, $4, $5)`,
+        [m, 'delivered', null, null, '[]']),
+    ).rejects.toThrow(/invalid status/i)
+  })
+
+  it('rejects sent without provider_message_id (same hardening as the core)', async () => {
+    const m = await makeMessage('sending', 'system-null-pm')
+    await expect(
+      db.query(`SELECT settle_outbound_message_system($1, $2, $3, $4, $5)`,
+        [m, 'sent', null, null, '[]']),
+    ).rejects.toThrow(/provider_message_id is required/i)
+  })
+
+  it('rejects when message does not exist', async () => {
+    await expect(
+      db.query(`SELECT settle_outbound_message_system($1, $2, $3, $4, $5)`,
+        ['ffffffff-ffff-ffff-ffff-ffffffffffff', 'failed', null, null, '[]']),
+    ).rejects.toThrow(/message not found/i)
+  })
+
+  it('does not enforce tenant membership (trust delegated to service_role grant, not auth.uid())', async () => {
+    // Deliberately no profiles row ties anyone to ACCOUNT_ID in this
+    // block, and auth.uid() is unset — this is the point: the system
+    // facade must still succeed, because ADR-SYS-001 places the
+    // authorization boundary at the service_role grant, not at
+    // is_account_member/can_access_account.
+    const m = await makeMessage('sending', 'system-no-tenant-check')
+    const { rows } = await db.query<{ r: unknown }>(
+      `SELECT settle_outbound_message_system($1, $2, $3, $4, $5) AS r`,
+      [m, 'failed', null, null, '[]'],
+    )
+    const result = parseResult(rows[0].r)
+    expect(result.outcome).toBe('failed')
   })
 })

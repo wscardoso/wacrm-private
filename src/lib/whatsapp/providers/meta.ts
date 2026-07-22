@@ -28,7 +28,38 @@ import type {
   SendInteractiveListArgs,
   InboundMessage,
   ExternalIdentity,
+  ProviderCapabilities,
+  SendOutcomeClass,
 } from './types'
+
+/**
+ * ADR-E4B-003 §3.4 — Meta-specific interpretation, confined to this file.
+ *
+ * meta-api.ts throws a plain `Error` whose message is either Meta's own
+ * JSON error text, or the fallback `Meta API error: ${status}` when the
+ * error body wasn't parseable JSON. The fallback is the only place an
+ * HTTP status survives to this boundary today; extracted here, never
+ * exposed past this function.
+ */
+function classifyMetaSendFailure(error: unknown): SendOutcomeClass {
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /Meta API error: (\d{3})/.exec(message)
+  if (!match) {
+    // No status recoverable — Meta's own error text, a local invariant
+    // message (e.g. "returned no message id"), or a network-level
+    // failure. None of these give certainty of non-delivery here.
+    return 'ambiguous'
+  }
+  const status = Number(match[1])
+  // Certain, definitive rejection by the API layer before any dispatch:
+  // bad request / auth / not found / unprocessable.
+  if ([400, 401, 403, 404, 422].includes(status)) {
+    return 'deterministic-permanent'
+  }
+  // 429 and 5xx: the provider may have accepted or processed the
+  // attempt before responding (ADR-E4B-002 §2) — ambiguous, not permanent.
+  return 'ambiguous'
+}
 
 interface MetaProviderConfig {
   phoneNumberId: string
@@ -40,6 +71,18 @@ interface MetaProviderConfig {
 
 export class MetaProvider implements WhatsAppProvider {
   readonly kind = 'meta' as const
+
+  /**
+   * ADR-E4B-003 §3.3 / DLB-001 §10.1 — undeclared/unverified capability
+   * defaults to `false`. Neither axis has been verified against Meta's
+   * actual behavior yet; declaring `true` without verification would
+   * itself be a contract violation. Flipping this is a dedicated,
+   * isolated follow-up commit once verification exists — not this one.
+   */
+  readonly capabilities: ProviderCapabilities = {
+    nativeIdempotency: false,
+    deliveryReconciliation: false,
+  }
 
   private readonly phoneNumberId: string
   private readonly accessToken: string
@@ -54,6 +97,11 @@ export class MetaProvider implements WhatsAppProvider {
   private withIdentities(result: { messageId: string }): SendResult {
     const identities: ExternalIdentity[] = [{ kind: 'wamid', value: result.messageId }]
     return { messageId: result.messageId, externalIdentities: identities }
+  }
+
+  /** ADR-E4B-003 §3.4 — see classifyMetaSendFailure above. */
+  classifySendFailure(error: unknown): SendOutcomeClass {
+    return classifyMetaSendFailure(error)
   }
 
   async sendText(args: SendTextArgs): Promise<SendResult> {

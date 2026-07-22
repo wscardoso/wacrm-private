@@ -26,6 +26,8 @@ export type {
   SendInteractiveListArgs,
   InboundMessage,
   ExternalIdentity,
+  ProviderCapabilities,
+  SendOutcomeClass,
 } from './types'
 
 export type ProviderConfig =

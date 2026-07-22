@@ -7,6 +7,7 @@ import type {
   SendReactionArgs, SendInteractiveButtonsArgs, SendInteractiveListArgs,
 } from '../providers/types'
 import { createIntent, settleMessage, type SettlementResult } from './settlement'
+import { classifyFailure } from './failure-classifier'
 
 // ── Low-level pass-through (broadcast/flow consumers) ──
 
@@ -61,6 +62,54 @@ export interface DeliveryMeta {
   messageId: string
 }
 
+/**
+ * ADR-E4B-001 Opção A + ADR-E4B-002 (via the Failure Classifier) —
+ * shared failure handling for the three orchestration functions below.
+ *
+ * Replaces the old "any exception settles `failed`" behavior: the
+ * adapter first translates the raw error into a `SendOutcomeClass`
+ * (ADR-E4B-003 §3.4), which — together with the provider's declared
+ * `capabilities` (§3.1–§3.3) — the domain Failure Classifier (ARO-001
+ * §7, ADR-E4B-002 §5 item 3) turns into an abstract decision. Only
+ * `provider.classifySendFailure` and `provider.capabilities` are
+ * consulted — never provider identity, never the raw error past this
+ * point.
+ *
+ * - `permanent` → the one case that settles `failed`, preserving the
+ *   pre-E4b behavior for a genuinely terminal outcome.
+ * - `retryable` and every `ambiguous-*` decision → does **not** settle
+ *   `failed`. The intent stays exactly as `createIntent` left it:
+ *   `sending`. No RPC call happens here — `settle_outbound_message`
+ *   (048) is not invoked, so no transition occurs at all, which is why
+ *   `outcome: 'noop'` (ODI-001 §5.1: no transition took place) is the
+ *   honest description below, not a new state and not an invented
+ *   queue mechanism.
+ *
+ * Enqueueing into the retry ledger, capability-gated reconciliation
+ * (ADR-E4B-002 §5), and the blocked-until-TTL path for
+ * `ambiguous-without-recovery-capability` are ARO-001 §11/§12/§16 —
+ * a later commit, not this one. This function only reaches the
+ * decision and stops; it is the "prepared point" the plan calls for.
+ */
+async function handleSendFailure(
+  supabase: SupabaseClient,
+  provider: WhatsAppProvider,
+  error: unknown,
+  intentId: string,
+  connectionRef: string,
+): Promise<SettlementResult> {
+  const outcome = provider.classifySendFailure(error)
+  const decision = classifyFailure(outcome, provider.capabilities)
+
+  if (decision === 'permanent') {
+    return settleMessage(supabase, intentId, 'failed', connectionRef, [])
+  }
+
+  // retryable | ambiguous-with-native-idempotency |
+  // ambiguous-with-reconciliation | ambiguous-without-recovery-capability
+  return { messageId: intentId, outcome: 'noop' }
+}
+
 export async function deliverText(
   supabase: SupabaseClient,
   provider: WhatsAppProvider,
@@ -80,8 +129,8 @@ export async function deliverText(
   try {
     const result = await provider.sendText(sendArgs)
     return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
-  } catch {
-    return settleMessage(supabase, intent.id, 'failed', meta.connectionRef, [])
+  } catch (error) {
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
   }
 }
 
@@ -105,8 +154,8 @@ export async function deliverMedia(
   try {
     const result = await provider.sendMedia(sendArgs)
     return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
-  } catch {
-    return settleMessage(supabase, intent.id, 'failed', meta.connectionRef, [])
+  } catch (error) {
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
   }
 }
 
@@ -129,7 +178,7 @@ export async function deliverTemplate(
   try {
     const result = await provider.sendTemplate(sendArgs)
     return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
-  } catch {
-    return settleMessage(supabase, intent.id, 'failed', meta.connectionRef, [])
+  } catch (error) {
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
   }
 }

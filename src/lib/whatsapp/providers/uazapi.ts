@@ -20,10 +20,50 @@ import type {
   SendInteractiveListArgs,
   InboundMessage,
   ExternalIdentity,
+  ProviderCapabilities,
+  SendOutcomeClass,
 } from './types'
+
+/**
+ * ADR-E4B-003 §3.4 — uazapi-specific interpretation, confined to this file.
+ *
+ * Same shape as Z-API: `post()` throws `Error('uazapi <path> failed
+ * (<status>): <text>')` whenever a response was received but not ok,
+ * so the status is always recoverable there. A `fetch()` failure that
+ * never produced a `Response` throws a different shape with no status.
+ */
+function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /failed \((\d{3})\):/.exec(message)
+  if (match) {
+    const status = Number(match[1])
+    // Certain, definitive rejection by the API layer before any dispatch.
+    if ([400, 401, 403, 404, 422].includes(status)) {
+      return 'deterministic-permanent'
+    }
+    // 429 and 5xx: uazapi may have accepted or processed the attempt
+    // before responding (ADR-E4B-002 §2) — ambiguous, not permanent.
+    return 'ambiguous'
+  }
+
+  // No HTTP response was ever obtained. Only a connection that
+  // certainly never departed (ADR-E4B-002 §2 example) counts as
+  // deterministic; anything else under doubt is ambiguous.
+  const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code
+  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'deterministic-transient'
+  }
+  return 'ambiguous'
+}
 
 export class UazapiProvider implements WhatsAppProvider {
   readonly kind = 'uazapi'
+
+  /** ADR-E4B-003 §3.3 — undeclared capability defaults to `false`. */
+  readonly capabilities: ProviderCapabilities = {
+    nativeIdempotency: false,
+    deliveryReconciliation: false,
+  }
 
   private readonly baseUrl: string
   private readonly instanceId: string
@@ -76,6 +116,11 @@ export class UazapiProvider implements WhatsAppProvider {
     if (!res.ok) return { connected: false }
     const data = (await res.json()) as { instance?: { state?: string } }
     return { connected: data.instance?.state === 'open' }
+  }
+
+  /** ADR-E4B-003 §3.4 — see classifyUazapiSendFailure above. */
+  classifySendFailure(error: unknown): SendOutcomeClass {
+    return classifyUazapiSendFailure(error)
   }
 
   private extractMessageId(data: unknown): string {
