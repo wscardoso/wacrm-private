@@ -156,6 +156,8 @@ beforeEach(() => {
     rpc: (name: string, args?: Record<string, unknown>) => db.rpc(name, args),
   })
 
+  const mockClassifySendFailure = vi.fn().mockReturnValue('deterministic-permanent')
+
   mockGetProvider.mockReturnValue({
     sendText: mockSendTextMessage,
     sendMedia: mockSendMediaMessage,
@@ -165,6 +167,8 @@ beforeEach(() => {
     sendInteractiveList: vi.fn().mockResolvedValue({ messageId: 'list-id' }),
     parseInboundMessage: vi.fn(),
     verifyWebhookRequest: vi.fn(),
+    classifySendFailure: mockClassifySendFailure,
+    capabilities: { nativeIdempotency: false, deliveryReconciliation: false },
   })
 })
 
