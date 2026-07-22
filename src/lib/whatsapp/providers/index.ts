@@ -1,3 +1,14 @@
+/**
+ * D3.b — Ponto de despacho único e nomeado.
+ *
+ * `getProvider` é a única autoridade do sistema para a correspondência entre
+ * conexão e adaptador de provider. Nenhum módulo instancia adaptador
+ * diretamente. Adicionar um provider significa registrá-lo aqui — e nada mais.
+ *
+ * @see ADR-MSG-001 D3.b
+ * @see DLB-001 §7
+ */
+
 import { MetaProvider } from './meta'
 import { ZApiProvider } from './zapi'
 import { UazapiProvider } from './uazapi'
@@ -14,6 +25,7 @@ export type {
   SendInteractiveButtonsArgs,
   SendInteractiveListArgs,
   InboundMessage,
+  ExternalIdentity,
 } from './types'
 
 export type ProviderConfig =

@@ -27,6 +27,7 @@ import type {
   SendInteractiveButtonsArgs,
   SendInteractiveListArgs,
   InboundMessage,
+  ExternalIdentity,
 } from './types'
 
 interface MetaProviderConfig {
@@ -50,78 +51,95 @@ export class MetaProvider implements WhatsAppProvider {
     this.verifyToken = cfg.verifyToken
   }
 
+  private withIdentities(result: { messageId: string }): SendResult {
+    const identities: ExternalIdentity[] = [{ kind: 'wamid', value: result.messageId }]
+    return { messageId: result.messageId, externalIdentities: identities }
+  }
+
   async sendText(args: SendTextArgs): Promise<SendResult> {
-    return sendTextMessage({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      text: args.text,
-      contextMessageId: args.contextMessageId,
-    })
+    return this.withIdentities(
+      await sendTextMessage({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        text: args.text,
+        contextMessageId: args.contextMessageId,
+      }),
+    )
   }
 
   async sendMedia(args: SendMediaArgs): Promise<SendResult> {
-    return sendMediaMessage({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      kind: args.kind,
-      link: args.link,
-      caption: args.caption,
-      filename: args.filename,
-      contextMessageId: args.contextMessageId,
-    })
+    return this.withIdentities(
+      await sendMediaMessage({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        kind: args.kind,
+        link: args.link,
+        caption: args.caption,
+        filename: args.filename,
+        contextMessageId: args.contextMessageId,
+      }),
+    )
   }
 
   async sendTemplate(args: SendTemplateArgs): Promise<SendResult> {
-    return sendTemplateMessage({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      templateName: args.templateName,
-      language: args.language,
-      params: args.params ? Object.values(args.params) : undefined,
-      template: args.template as MessageTemplate | undefined,
-      messageParams: args.messageParams,
-      contextMessageId: args.contextMessageId,
-    })
+    return this.withIdentities(
+      await sendTemplateMessage({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        templateName: args.templateName,
+        language: args.language,
+        params: args.params ? Object.values(args.params) : undefined,
+        template: args.template as MessageTemplate | undefined,
+        messageParams: args.messageParams,
+        contextMessageId: args.contextMessageId,
+      }),
+    )
   }
 
   async sendReaction(args: SendReactionArgs): Promise<SendResult> {
-    return sendReactionMessage({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      targetMessageId: args.targetMessageId,
-      emoji: args.emoji,
-    })
+    return this.withIdentities(
+      await sendReactionMessage({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        targetMessageId: args.targetMessageId,
+        emoji: args.emoji,
+      }),
+    )
   }
 
   async sendInteractiveButtons(args: SendInteractiveButtonsArgs): Promise<SendResult> {
-    return metaSendInteractiveButtons({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      bodyText: args.bodyText,
-      buttons: args.buttons,
-      headerText: args.headerText,
-      footerText: args.footerText,
-      contextMessageId: args.contextMessageId,
-    })
+    return this.withIdentities(
+      await metaSendInteractiveButtons({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        bodyText: args.bodyText,
+        buttons: args.buttons,
+        headerText: args.headerText,
+        footerText: args.footerText,
+        contextMessageId: args.contextMessageId,
+      }),
+    )
   }
 
   async sendInteractiveList(args: SendInteractiveListArgs): Promise<SendResult> {
-    return metaSendInteractiveList({
-      phoneNumberId: this.phoneNumberId,
-      accessToken: this.accessToken,
-      to: args.to,
-      bodyText: args.bodyText,
-      buttonLabel: args.buttonLabel,
-      sections: args.sections,
-      headerText: args.headerText,
-      footerText: args.footerText,
-      contextMessageId: args.contextMessageId,
-    })
+    return this.withIdentities(
+      await metaSendInteractiveList({
+        phoneNumberId: this.phoneNumberId,
+        accessToken: this.accessToken,
+        to: args.to,
+        bodyText: args.bodyText,
+        buttonLabel: args.buttonLabel,
+        sections: args.sections,
+        headerText: args.headerText,
+        footerText: args.footerText,
+        contextMessageId: args.contextMessageId,
+      }),
+    )
   }
 
   // ------------------------------------------------------------------

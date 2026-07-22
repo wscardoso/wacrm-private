@@ -19,6 +19,7 @@ import type {
   SendInteractiveButtonsArgs,
   SendInteractiveListArgs,
   InboundMessage,
+  ExternalIdentity,
 } from './types'
 
 export class UazapiProvider implements WhatsAppProvider {
@@ -83,6 +84,11 @@ export class UazapiProvider implements WhatsAppProvider {
     return (key?.id as string) ?? ''
   }
 
+  private withIdentities(messageId: string): SendResult {
+    const identities: ExternalIdentity[] = [{ kind: 'provider_message_id', value: messageId }]
+    return { messageId, externalIdentities: identities }
+  }
+
   async sendText({ to, text, contextMessageId }: SendTextArgs): Promise<SendResult> {
     const body: Record<string, unknown> = {
       number: this.toJid(to),
@@ -92,7 +98,7 @@ export class UazapiProvider implements WhatsAppProvider {
       body.quoted = { key: { id: contextMessageId } }
     }
     const data = await this.post(`/message/sendText/${this.instanceId}`, body)
-    return { messageId: this.extractMessageId(data) }
+    return this.withIdentities(this.extractMessageId(data))
   }
 
   async sendMedia({ to, kind, link, caption, filename, contextMessageId }: SendMediaArgs): Promise<SendResult> {
@@ -119,11 +125,10 @@ export class UazapiProvider implements WhatsAppProvider {
       body.quoted = { key: { id: contextMessageId } }
     }
     const data = await this.post(`/message/${pathMap[kind] ?? 'sendMedia'}/${this.instanceId}`, body)
-    return { messageId: this.extractMessageId(data) }
+    return this.withIdentities(this.extractMessageId(data))
   }
 
   async sendTemplate({ to, templateName, params }: SendTemplateArgs): Promise<SendResult> {
-    // uazapi doesn't support Meta message templates — fall back to text
     const text = params
       ? Object.entries(params).reduce((t, [k, v]) => t.replace(`{{${k}}}`, v), templateName)
       : templateName
@@ -135,7 +140,7 @@ export class UazapiProvider implements WhatsAppProvider {
       key: { remoteJid: this.toJid(to), id: targetMessageId },
       reaction: emoji,
     })
-    return { messageId: this.extractMessageId(data) }
+    return this.withIdentities(this.extractMessageId(data))
   }
 
   async sendInteractiveButtons({
@@ -155,7 +160,7 @@ export class UazapiProvider implements WhatsAppProvider {
         reply: { id: b.id, title: b.title },
       })),
     })
-    return { messageId: this.extractMessageId(data) }
+    return this.withIdentities(this.extractMessageId(data))
   }
 
   async sendInteractiveList({
@@ -177,7 +182,7 @@ export class UazapiProvider implements WhatsAppProvider {
         rows: s.rows.map((r) => ({ id: r.id, title: r.title, description: r.description })),
       })),
     })
-    return { messageId: this.extractMessageId(data) }
+    return this.withIdentities(this.extractMessageId(data))
   }
 
   parseInboundMessage(payload: unknown): InboundMessage | null {

@@ -1,5 +1,11 @@
+export interface ExternalIdentity {
+  kind: string
+  value: string
+}
+
 export interface SendResult {
   messageId: string
+  externalIdentities: ExternalIdentity[]
 }
 
 export interface SendTextArgs {

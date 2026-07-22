@@ -18,6 +18,7 @@ import type {
   SendInteractiveButtonsArgs,
   SendInteractiveListArgs,
   InboundMessage,
+  ExternalIdentity,
 } from './types'
 
 export class ZApiProvider implements WhatsAppProvider {
@@ -76,6 +77,17 @@ export class ZApiProvider implements WhatsAppProvider {
     return { connected }
   }
 
+  private sendResultFrom(data: {
+    zaapId?: string
+    messageId?: string
+  }): SendResult {
+    const primary = data.messageId ?? data.zaapId ?? ''
+    const identities: ExternalIdentity[] = []
+    if (data.messageId) identities.push({ kind: 'wamid', value: data.messageId })
+    if (data.zaapId) identities.push({ kind: 'provider_message_id', value: data.zaapId })
+    return { messageId: primary, externalIdentities: identities }
+  }
+
   async sendText({ to, text, contextMessageId }: SendTextArgs): Promise<SendResult> {
     const body: Record<string, unknown> = { phone: to, message: text }
     if (contextMessageId) body.messageId = contextMessageId
@@ -83,7 +95,7 @@ export class ZApiProvider implements WhatsAppProvider {
       zaapId?: string
       messageId?: string
     }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   async sendMedia({ to, kind, link, caption, filename, contextMessageId }: SendMediaArgs): Promise<SendResult> {
@@ -101,11 +113,10 @@ export class ZApiProvider implements WhatsAppProvider {
       zaapId?: string
       messageId?: string
     }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   async sendTemplate({ to, templateName, params }: SendTemplateArgs): Promise<SendResult> {
-    // Z-API uses HSM / template messages differently — send as text fallback
     const body: Record<string, unknown> = {
       phone: to,
       message: params
@@ -113,7 +124,7 @@ export class ZApiProvider implements WhatsAppProvider {
         : templateName,
     }
     const data = (await this.post('/send-text', body)) as { zaapId?: string; messageId?: string }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   async sendReaction({ to, targetMessageId, emoji }: SendReactionArgs): Promise<SendResult> {
@@ -122,7 +133,7 @@ export class ZApiProvider implements WhatsAppProvider {
       reactionMessageId: targetMessageId,
       reaction: emoji,
     })) as { zaapId?: string; messageId?: string }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   async sendInteractiveButtons({
@@ -141,7 +152,7 @@ export class ZApiProvider implements WhatsAppProvider {
       title: headerText,
       footer: footerText,
     })) as { zaapId?: string; messageId?: string }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   async sendInteractiveList({
@@ -163,7 +174,7 @@ export class ZApiProvider implements WhatsAppProvider {
         rows: s.rows.map((r) => ({ id: r.id, title: r.title, description: r.description })),
       })),
     })) as { zaapId?: string; messageId?: string }
-    return { messageId: data.zaapId ?? data.messageId ?? '' }
+    return this.sendResultFrom(data)
   }
 
   parseInboundMessage(payload: unknown): InboundMessage | null {
