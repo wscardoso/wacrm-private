@@ -13,6 +13,8 @@ import {
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
+import { persistAttribution } from '@/lib/whatsapp/attribution'
+import type { Referral } from '@/types'
 
 interface WhatsAppMessage {
   id: string
@@ -40,6 +42,13 @@ interface WhatsAppMessage {
   }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
+  /**
+   * Set by Meta on the message that opened a Click-to-WhatsApp (CTWA)
+   * conversation — i.e. the customer tapped a WhatsApp CTA on an ad or
+   * post. Absent on ordinary replies. Drives lead attribution
+   * (ADR-ATTR-001) — see `@/lib/whatsapp/attribution`.
+   */
+  referral?: Referral
 }
 
 interface WhatsAppWebhookEntry {
@@ -695,6 +704,25 @@ async function processMessage(
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(accountId, contactRecord.id)
+
+  // Lead attribution (ADR-ATTR-001, P0). Only messages that opened a
+  // Click-to-WhatsApp conversation carry `referral` — every ordinary
+  // reply is a no-op inside captureReferral(). Best-effort: a failure
+  // here must never break the inbound message flow, which has already
+  // been persisted above.
+  if (message.referral) {
+    try {
+      await persistAttribution(supabaseAdmin(), {
+        accountId,
+        contactId: contactRecord.id,
+        conversationId: conversation.id,
+        messageId: message.id,
+        referral: message.referral,
+      })
+    } catch (err) {
+      console.error('[webhook] persistAttribution failed:', err)
+    }
+  }
 
   // ============================================================
   // Flow runner dispatch.
