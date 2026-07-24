@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/flows/admin-client'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import type { CredentialData } from './types'
 
 export interface ResolvedCredential {
@@ -57,9 +57,14 @@ export async function resolveCredential(
     )
   }
 
+  // Binding Context per IMP-CRYPTO-001 RC1.3 §3.4/§3.5: ad_account:{accountId}.
+  // ad_account_credentials is keyed 1:1 by account_id (PRIMARY KEY, migration
+  // 055), so accountId is both the row's identity and the domain's BC value —
+  // no INSERT-timing concern here (this path is decrypt-only, per the RPC's
+  // own contract: "the enrichment job decrypts app-tier, never persists").
   let token: string
   try {
-    token = decrypt(row.ciphertext)
+    token = decryptWithBindingContext(row.ciphertext, `ad_account:${accountId}`)
   } catch {
     throw new CredentialResolutionError(
       'Failed to decrypt credential',

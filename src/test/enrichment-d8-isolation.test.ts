@@ -9,11 +9,11 @@ vi.mock('@/lib/flows/admin-client', () => ({
 }))
 
 vi.mock('@/lib/whatsapp/encryption', () => ({
-  decrypt: vi.fn(),
+  decryptWithBindingContext: vi.fn(),
 }))
 
 import { runEnrichmentCycle } from '@/lib/enrichment/orchestration'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 
 const ACCOUNT_A = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
 const ACCOUNT_B = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
@@ -62,11 +62,13 @@ describe('D-8: tenant isolation in enrichment cycle', () => {
       }
     })
 
-    ;(decrypt as unknown as ReturnType<typeof vi.fn>).mockImplementation((ciphertext: string) => {
-      if (ciphertext === CIPHER_A) return TOKEN_A
-      if (ciphertext === CIPHER_B) return TOKEN_B
-      throw new Error('decrypt failed')
-    })
+    ;(decryptWithBindingContext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (ciphertext: string) => {
+        if (ciphertext === CIPHER_A) return TOKEN_A
+        if (ciphertext === CIPHER_B) return TOKEN_B
+        throw new Error('decrypt failed')
+      },
+    )
   }
 
   beforeEach(() => {
@@ -117,10 +119,12 @@ describe('D-8: tenant isolation in enrichment cycle', () => {
 
   it('decrypt failure in one tenant does not leak credential to the other', async () => {
     buildCycleMocks()
-    ;(decrypt as unknown as ReturnType<typeof vi.fn>).mockImplementation((ciphertext: string) => {
-      if (ciphertext === CIPHER_A) return TOKEN_A
-      throw new Error('decrypt failed')
-    })
+    ;(decryptWithBindingContext as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (ciphertext: string) => {
+        if (ciphertext === CIPHER_A) return TOKEN_A
+        throw new Error('decrypt failed')
+      },
+    )
 
     const result = await runEnrichmentCycle()
 
