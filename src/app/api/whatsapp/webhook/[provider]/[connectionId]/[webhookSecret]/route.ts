@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin-client';
-import { decrypt } from '@/lib/whatsapp/encryption';
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption';
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding';
 import { getProvider, type ProviderConfig } from '@/lib/whatsapp/providers';
 import type { InboundMessage } from '@/lib/whatsapp/providers/types';
 import { processInboundMessage } from '@/lib/whatsapp/inbound-processor';
@@ -60,9 +61,10 @@ async function resolveConfig(connectionId: string): Promise<ResolvedConfig | nul
     .eq('connection_id', connectionId)
     .maybeSingle();
   if (error || !data) return null;
+  const bc = whatsappConfigBindingContext(data.account_id);
   return {
     ...(data as object),
-    access_token: data.access_token ? decrypt(data.access_token) : data.access_token,
+    access_token: data.access_token ? decryptWithBindingContext(data.access_token, bc) : data.access_token,
   } as ResolvedConfig;
 }
 

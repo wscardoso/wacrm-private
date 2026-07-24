@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getProvider, type WhatsAppProvider } from '@/lib/whatsapp/providers'
 import type { SendResult } from '@/lib/whatsapp/providers/types'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { settleMessageSystem, type SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import { classifyFailure } from '@/lib/whatsapp/delivery/failure-classifier'
@@ -139,10 +140,11 @@ async function processDueEntry(
     return 'dead'
   }
 
-  const accessToken = decrypt(wc.access_token)
+  const bc = whatsappConfigBindingContext(wc.account_id)
+  const accessToken = decryptWithBindingContext(wc.access_token, bc)
   let clientToken: string | undefined
   if (wc.provider === 'zapi' && wc.waba_id) {
-    try { clientToken = decrypt(wc.waba_id) } catch { /* ignore */ }
+    try { clientToken = decryptWithBindingContext(wc.waba_id, bc) } catch { /* ignore */ }
   }
 
   const provider: WhatsAppProvider = getProvider(

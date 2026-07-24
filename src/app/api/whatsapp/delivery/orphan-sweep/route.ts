@@ -2,7 +2,8 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getProvider } from '@/lib/whatsapp/providers'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
 import { ORPHAN_THRESHOLD_MS, DEFAULT_TTL_MS, STUCK_RETRYING_THRESHOLD_MS } from '@/lib/whatsapp/delivery/retry-policy'
 
@@ -137,7 +138,7 @@ async function enqueueOrphan(
   // Check provider capability via the connection's provider config
   const { data: wc } = await admin
     .from('whatsapp_config')
-    .select('provider, access_token, instance_id, phone_number_id, base_url, waba_id')
+    .select('account_id, provider, access_token, instance_id, phone_number_id, base_url, waba_id')
     .eq('id', msg.connection_ref)
     .maybeSingle()
 
@@ -146,10 +147,11 @@ async function enqueueOrphan(
     return false
   }
 
-  const accessToken = decrypt(wc.access_token)
+  const bc = whatsappConfigBindingContext(wc.account_id)
+  const accessToken = decryptWithBindingContext(wc.access_token, bc)
   let clientToken: string | undefined
   if (wc.provider === 'zapi' && wc.waba_id) {
-    try { clientToken = decrypt(wc.waba_id) } catch { /* ignore */ }
+    try { clientToken = decryptWithBindingContext(wc.waba_id, bc) } catch { /* ignore */ }
   }
 
   const provider = getProvider(

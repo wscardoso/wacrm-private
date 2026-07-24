@@ -1,4 +1,5 @@
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -86,12 +87,12 @@ export async function engineSendText(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
   let clientToken: string | undefined
   if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
   }
   const provider = getProvider(
     config.provider === 'zapi'
@@ -218,12 +219,12 @@ export async function engineSendMedia(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
   let clientToken: string | undefined
   if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
   }
   const provider = getProvider(
     config.provider === 'zapi'
@@ -389,12 +390,12 @@ async function sendInteractiveViaMeta(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
   let clientToken: string | undefined
   if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
   }
   const provider = getProvider(
     config.provider === 'zapi'

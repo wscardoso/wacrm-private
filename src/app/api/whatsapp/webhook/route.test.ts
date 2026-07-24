@@ -30,8 +30,9 @@ const mockDecrypt = vi.fn()
 const mockEncrypt = vi.fn()
 const mockIsLegacyFormat = vi.fn()
 vi.mock('@/lib/whatsapp/encryption', () => ({
-  decrypt: mockDecrypt,
+  decryptWithBindingContext: mockDecrypt,
   encrypt: mockEncrypt,
+  encryptWithBindingContext: mockEncrypt,
   isLegacyFormat: mockIsLegacyFormat,
 }))
 

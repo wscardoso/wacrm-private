@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import type { Contact } from '@/types'
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import {
+  encrypt,
+  isLegacyFormat,
+  decryptWithBindingContext,
+  encryptWithBindingContext,
+} from '@/lib/whatsapp/encryption'
+import {
+  whatsappConfigBindingContext,
+  isWhatsappConfigCanonicalWriteEnabled,
+} from '@/lib/whatsapp/config-binding'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
@@ -98,7 +107,7 @@ export async function GET(request: Request) {
     // Fetch all whatsapp configs to check verify tokens
     const { data: configs, error: configError } = await supabaseAdmin()
       .from('whatsapp_config')
-      .select('id, verify_token')
+      .select('id, account_id, verify_token')
 
     if (configError || !configs) {
       console.error('Error fetching configs for verification:', configError)
@@ -116,7 +125,8 @@ export async function GET(request: Request) {
     for (const config of configs) {
       if (!config.verify_token) continue
       try {
-        if (decrypt(config.verify_token) === verifyToken) {
+        const bc = whatsappConfigBindingContext(config.account_id)
+        if (decryptWithBindingContext(config.verify_token, bc) === verifyToken) {
           matchedConfig = config
           break
         }
@@ -126,12 +136,18 @@ export async function GET(request: Request) {
     }
 
     if (matchedConfig) {
-      // Fire-and-forget GCM upgrade. Safe to run on every subscribe
-      // since it's a no-op once the column is already GCM.
+      // Fire-and-forget upgrade. Safe to run on every subscribe since
+      // it's a no-op once the column is already in the target format.
+      // Canonical (BC-aware) once the domain's write-enablement flag is
+      // on; GCM upgrade otherwise — preserves legacy compatibility
+      // until the atomic cutover for this domain is fully live.
       if (isLegacyFormat(matchedConfig.verify_token)) {
+        const upgraded = isWhatsappConfigCanonicalWriteEnabled()
+          ? encryptWithBindingContext(verifyToken, whatsappConfigBindingContext(matchedConfig.account_id))
+          : encrypt(verifyToken)
         void supabaseAdmin()
           .from('whatsapp_config')
-          .update({ verify_token: encrypt(verifyToken) })
+          .update({ verify_token: upgraded })
           .eq('id', matchedConfig.id)
           .then(({ error }: { error: unknown }) => {
             if (error) {
@@ -293,7 +309,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const config = configRows[0]
 
-      const decryptedAccessToken = decrypt(config.access_token)
+      const decryptedAccessToken = decryptWithBindingContext(
+        config.access_token,
+        whatsappConfigBindingContext(config.account_id),
+      )
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]

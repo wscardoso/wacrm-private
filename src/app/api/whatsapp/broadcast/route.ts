@@ -14,7 +14,8 @@
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
 import {
@@ -164,14 +165,14 @@ export async function POST(request: Request) {
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
 
     // ── Provider dispatch (ADR-MSG-001/D3.b) ──
     let provider: ReturnType<typeof getProvider>
     try {
       let clientToken: string | undefined
       if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+        try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
       }
       provider = getProvider(
         config.provider === 'zapi'

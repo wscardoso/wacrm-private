@@ -201,8 +201,9 @@ vi.mock('@/lib/whatsapp/webhook-signature', () => ({
 }))
 
 vi.mock('@/lib/whatsapp/encryption', () => ({
-  decrypt: vi.fn(() => 'decrypted-value'),
+  decryptWithBindingContext: vi.fn(() => 'decrypted-value'),
   encrypt: vi.fn(() => 'encrypted-value'),
+  encryptWithBindingContext: vi.fn(() => 'encrypted-value'),
   isLegacyFormat: vi.fn(() => false),
 }))
 

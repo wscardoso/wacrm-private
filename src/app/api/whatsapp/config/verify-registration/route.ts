@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import {
   getSubscribedApps,
   verifyPhoneNumber,
@@ -71,7 +72,7 @@ export async function GET() {
 
   let accessToken: string
   try {
-    accessToken = decrypt(config.access_token)
+    accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
   } catch {
     return NextResponse.json({
       live: false,

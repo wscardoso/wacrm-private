@@ -3,7 +3,16 @@ import { createClient } from '@/lib/supabase/server'
 import { sendText, sendMedia, sendTemplate, handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { createIntent, settleMessage } from '@/lib/whatsapp/delivery/settlement'
 import type { SettlementResult } from '@/lib/whatsapp/delivery/settlement'
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import {
+  encrypt,
+  isLegacyFormat,
+  decryptWithBindingContext,
+  encryptWithBindingContext,
+} from '@/lib/whatsapp/encryption'
+import {
+  whatsappConfigBindingContext,
+  isWhatsappConfigCanonicalWriteEnabled,
+} from '@/lib/whatsapp/config-binding'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
   sanitizePhoneForMeta,
@@ -191,17 +200,23 @@ export async function POST(request: Request) {
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
 
     // Self-heal legacy CBC-encrypted tokens. Fire-and-forget: we
     // return from the send without waiting, so a failed upgrade just
     // means the next send tries again. The upgrade is idempotent —
-    // concurrent sends both produce valid GCM ciphertexts of the same
-    // plaintext, last write wins.
+    // concurrent sends both produce valid ciphertexts of the same
+    // plaintext, last write wins. Canonical (BC-aware) once the
+    // domain's write-enablement flag is on; GCM upgrade otherwise —
+    // preserves legacy compatibility until the atomic cutover for
+    // this domain is fully live (IMP-CRYPTO-001 RC1.3 §6).
     if (isLegacyFormat(config.access_token)) {
+      const upgradedToken = isWhatsappConfigCanonicalWriteEnabled()
+        ? encryptWithBindingContext(accessToken, whatsappConfigBindingContext(accountId))
+        : encrypt(accessToken)
       void supabase
         .from('whatsapp_config')
-        .update({ access_token: encrypt(accessToken) })
+        .update({ access_token: upgradedToken })
         .eq('id', config.id)
         .then(({ error }) => {
           if (error) {
@@ -250,7 +265,7 @@ export async function POST(request: Request) {
     try {
       let clientToken: string | undefined
       if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decrypt(config.waba_id) } catch { /* ignore */ }
+        try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
       }
       provider = getProvider(
         config.provider === 'zapi'

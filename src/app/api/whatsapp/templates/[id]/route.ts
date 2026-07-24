@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
+import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import {
   deleteMessageTemplate,
   editMessageTemplate,
@@ -149,7 +150,7 @@ export async function PATCH(
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
 
       // Image headers need a fresh Resumable-Upload handle on every edit
       // (Meta replaces components wholesale). Derive from header_media_url.
@@ -289,7 +290,7 @@ export async function DELETE(
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
       try {
         await deleteMessageTemplate({
           wabaId: config.waba_id,

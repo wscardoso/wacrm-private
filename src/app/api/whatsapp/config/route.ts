@@ -7,10 +7,30 @@ import {
   subscribeWabaToApp,
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
-import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import {
+  encrypt,
+  encryptWithBindingContext,
+  decryptWithBindingContext,
+} from '@/lib/whatsapp/encryption'
+import {
+  whatsappConfigBindingContext,
+  isWhatsappConfigCanonicalWriteEnabled,
+} from '@/lib/whatsapp/config-binding'
 import { ZApiProvider } from '@/lib/whatsapp/providers/zapi'
 import { UazapiProvider } from '@/lib/whatsapp/providers/uazapi'
 import type { WhatsAppProviderKind } from '@/types'
+
+/**
+ * Encrypts for `whatsapp_config` per the domain's atomic cutover
+ * (IMP-CRYPTO-001 RC1.3 §3.4/§3.5, §6): canonical + Binding Context once
+ * `WHATSAPP_CONFIG_CANONICAL_WRITE=true`, legacy GCM otherwise — decrypt
+ * call sites in this file already read both formats unconditionally.
+ */
+function encryptForConfig(plaintext: string, accountId: string): string {
+  return isWhatsappConfigCanonicalWriteEnabled()
+    ? encryptWithBindingContext(plaintext, whatsappConfigBindingContext(accountId))
+    : encrypt(plaintext)
+}
 
 /**
  * Resolve the caller's account_id from their profile.
@@ -86,7 +106,7 @@ export async function GET() {
 
     let accessToken: string
     try {
-      accessToken = decrypt(config.access_token)
+      accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
     } catch (err) {
       console.error('[whatsapp/config GET] Token decryption failed:', err)
       return NextResponse.json(
@@ -114,7 +134,7 @@ export async function GET() {
       try {
         let clientToken: string | undefined
         if (config.waba_id) {
-          try { clientToken = decrypt(config.waba_id) } catch { /* ignore corrupted client token */ }
+          try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore corrupted client token */ }
         }
         const zapi = new ZApiProvider({ instanceId: config.instance_id, token: accessToken, clientToken })
         const status = await zapi.checkStatus()
@@ -294,7 +314,7 @@ export async function POST(request: Request) {
 
       let encryptedToken: string
       try {
-        encryptedToken = encrypt(access_token)
+        encryptedToken = encryptForConfig(access_token, accountId)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown encryption error'
         console.error('Encryption failed:', message)
@@ -314,7 +334,7 @@ export async function POST(request: Request) {
           .eq('account_id', accountId)
           .maybeSingle()
         if (existingRow?.waba_id) {
-          try { resolvedClientToken = decrypt(existingRow.waba_id) } catch { /* ignore */ }
+          try { resolvedClientToken = decryptWithBindingContext(existingRow.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
         }
       }
 
@@ -371,13 +391,13 @@ export async function POST(request: Request) {
       // Only update it if the frontend explicitly sent the field; omitting keeps the existing value.
       let encryptedClientToken: string | null | undefined
       if (clientTokenChanged) {
-        encryptedClientToken = client_token ? encrypt(client_token) : null
+        encryptedClientToken = client_token ? encryptForConfig(client_token, accountId) : null
       }
 
       // Preserve existing verify_token if the field was left blank on update
       let encryptedVerifyToken: string | null | undefined
       if (verify_token) {
-        encryptedVerifyToken = encrypt(verify_token)
+        encryptedVerifyToken = encryptForConfig(verify_token, accountId)
       } else if (existing) {
         // Blank field on update → keep whatever is already stored
         encryptedVerifyToken = undefined // omit from row so Supabase doesn't overwrite
@@ -477,8 +497,8 @@ export async function POST(request: Request) {
     let encryptedAccessToken: string
     let encryptedVerifyToken: string | null
     try {
-      encryptedAccessToken = encrypt(access_token)
-      encryptedVerifyToken = verify_token ? encrypt(verify_token) : null
+      encryptedAccessToken = encryptForConfig(access_token, accountId)
+      encryptedVerifyToken = verify_token ? encryptForConfig(verify_token, accountId) : null
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown encryption error'
       console.error('Encryption failed:', message)

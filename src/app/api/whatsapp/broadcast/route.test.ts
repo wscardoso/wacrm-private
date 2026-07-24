@@ -27,7 +27,7 @@ vi.mock('@/lib/whatsapp/meta-api', () => ({
 
 const mockDecrypt = vi.fn()
 vi.mock('@/lib/whatsapp/encryption', () => ({
-  decrypt: mockDecrypt,
+  decryptWithBindingContext: mockDecrypt,
 }))
 
 const mockIsMessageTemplate = vi.fn()

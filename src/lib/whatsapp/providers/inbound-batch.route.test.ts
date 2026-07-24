@@ -84,6 +84,8 @@ vi.mock('@/lib/supabase/admin-client', () => ({
 vi.mock('@/lib/whatsapp/encryption', () => ({
   encrypt: (v: string) => v,
   decrypt: (v: string) => v,
+  encryptWithBindingContext: (v: string) => v,
+  decryptWithBindingContext: (v: string) => v,
   isLegacyFormat: () => false,
 }))
 
