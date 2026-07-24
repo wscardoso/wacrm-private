@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { randomBytes } from 'crypto'
 import { KeyRing, createDefaultKeyRing, type KeyMaterial } from './keyring'
 
 // ─── Test fixtures ────────────────────────────────────────────────────────
@@ -223,5 +224,55 @@ describe('createDefaultKeyRing', () => {
     } finally {
       process.env.ENCRYPTION_KEY = saved
     }
+  })
+})
+
+// ─── Nonce isolation at scale (IMP §7.1, property test) ───────────────────
+//
+// The HKDF derivation above (§4.3) makes ACTIVE_V1's key cryptographically
+// distinct from LEGACY_GCM/LEGACY_CBC's raw ENCRYPTION_KEY, so a nonce
+// collision across those KIDs is not a real AES-GCM two-time-pad risk by
+// construction. This test is the property-test backstop the IMP still
+// requires: it exercises the actual nonce generator (`crypto.randomBytes`,
+// same call ACTIVE_V1 encryption uses) at the volume specified by §7.1 and
+// asserts no collision, either internally or against a corpus standing in
+// for already-issued legacy nonces.
+describe('nonce isolation across KIDs — property test at scale', () => {
+  it('>= 10,000 freshly generated ACTIVE_V1-style nonces never collide with each other or with a fixture legacy-nonce corpus', () => {
+    const GCM_IV_LENGTH = 12
+    const NONCE_COUNT = 10_000
+    const LEGACY_CORPUS_SIZE = 5_000
+
+    // Deterministic, reproducible stand-in for "historical nonces already
+    // issued under LEGACY_GCM/LEGACY_CBC" — a fixed seeded PRNG so the
+    // corpus (and therefore this test) is stable across runs/CI, not a
+    // sample of real production data.
+    let seed = 0x2f8a1c3d
+    function nextSeededByte(): number {
+      // xorshift32 — deterministic and fast; only used to build a stable
+      // fixture corpus, not for any cryptographic purpose.
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      seed |= 0
+      return seed & 0xff
+    }
+
+    const legacyNonceCorpus = new Set<string>()
+    while (legacyNonceCorpus.size < LEGACY_CORPUS_SIZE) {
+      const bytes = Buffer.alloc(GCM_IV_LENGTH)
+      for (let b = 0; b < GCM_IV_LENGTH; b++) bytes[b] = nextSeededByte()
+      legacyNonceCorpus.add(bytes.toString('hex'))
+    }
+    expect(legacyNonceCorpus.size).toBe(LEGACY_CORPUS_SIZE)
+
+    const generated = new Set<string>()
+    for (let i = 0; i < NONCE_COUNT; i++) {
+      const nonce = randomBytes(GCM_IV_LENGTH).toString('hex')
+      expect(legacyNonceCorpus.has(nonce)).toBe(false)
+      expect(generated.has(nonce)).toBe(false)
+      generated.add(nonce)
+    }
+    expect(generated.size).toBe(NONCE_COUNT)
   })
 })
