@@ -40,6 +40,23 @@
       "error_password_mismatch": "Passwords do not match",
       "error_password_length": "Password must be at least 6 characters"
     },
+    "reset_password": {
+      "title": "Set a new password",
+      "description": "Choose a new password for your account",
+      "password_label": "New password",
+      "password_placeholder": "At least 6 characters",
+      "confirm_password_label": "Confirm new password",
+      "confirm_password_placeholder": "Repeat the new password",
+      "save": "Save new password",
+      "saving": "Saving...",
+      "error_password_mismatch": "Passwords don't match",
+      "error_password_length": "Password must be at least 6 characters",
+      "error_no_session": "This link has expired or was already used. Request a new reset link.",
+      "success_title": "Password updated",
+      "success_description": "Your password has been changed successfully.",
+      "back_to_sign_in": "Go to login",
+      "request_new_link": "Request a new link"
+    },
     "forgot_password": {
       "title": "Reset password",
       "description": "Enter your email and we'll send you a reset link",

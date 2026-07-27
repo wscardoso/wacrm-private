@@ -1,10 +1,11 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
+import { resolvePostAuthDestination } from "@/lib/auth/post-login-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,6 +47,44 @@ function LoginPageInner() {
   const router = useRouter();
   const supabase = createClient();
 
+  // Redirect away from /login the moment a session exists — whether
+  // because the visitor is already authenticated (getSession, on
+  // mount) or because a magic-link email was just clicked and the
+  // Supabase client's own PKCE auto-detection (detectSessionInUrl,
+  // src/lib/supabase/client.ts) silently consumed the `?code=` param
+  // and fired SIGNED_IN (onAuthStateChange). Before this effect
+  // existed, both cases left the visitor staring at an empty
+  // email/password form with a session already active in the
+  // background — nothing in this component ever reacted to it.
+  useEffect(() => {
+    let cancelled = false;
+
+    const redirectFor = async () => {
+      if (cancelled) return;
+      if (inviteToken) {
+        router.push(`/join/${encodeURIComponent(inviteToken)}`);
+        return;
+      }
+      const destination = await resolvePostAuthDestination(supabase);
+      if (!cancelled) router.push(destination);
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) redirectFor();
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) redirectFor();
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [inviteToken, router, supabase]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -65,14 +104,8 @@ function LoginPageInner() {
     if (inviteToken) {
       router.push(`/join/${encodeURIComponent(inviteToken)}`);
     } else {
-      // Active platform operators land on the supervisor console
-      // (/act) instead of their own tenant dashboard — mirrors the
-      // gate in src/app/act/page.tsx so the redirect target and the
-      // route's own access check never disagree. A failed/errored RPC
-      // (e.g. transient network issue) falls back to /dashboard rather
-      // than blocking sign-in.
-      const { data: isOperator } = await supabase.rpc("is_platform_operator");
-      router.push(isOperator ? "/act" : "/dashboard");
+      const destination = await resolvePostAuthDestination(supabase);
+      router.push(destination);
     }
   };
 

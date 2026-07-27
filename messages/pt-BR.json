@@ -51,6 +51,23 @@
       "success_description": "Enviamos um link de redefinição de senha para {email}. Verifique sua caixa de entrada.",
       "back_to_sign_in": "Voltar ao login"
     },
+    "reset_password": {
+      "title": "Defina uma nova senha",
+      "description": "Escolha uma nova senha para sua conta",
+      "password_label": "Nova senha",
+      "password_placeholder": "No mínimo 6 caracteres",
+      "confirm_password_label": "Confirmar nova senha",
+      "confirm_password_placeholder": "Repita a nova senha",
+      "save": "Salvar nova senha",
+      "saving": "Salvando...",
+      "error_password_mismatch": "As senhas não conferem",
+      "error_password_length": "A senha deve ter pelo menos 6 caracteres",
+      "error_no_session": "Este link expirou ou já foi usado. Solicite um novo link de redefinição.",
+      "success_title": "Senha atualizada",
+      "success_description": "Sua senha foi alterada com sucesso.",
+      "back_to_sign_in": "Ir para o login",
+      "request_new_link": "Solicitar novo link"
+    },
     "join": {
       "title": "Você foi convidado",
       "subtitle": "Você foi convidado a participar",
