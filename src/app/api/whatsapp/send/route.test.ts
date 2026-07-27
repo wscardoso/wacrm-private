@@ -38,6 +38,21 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
   isLegacyFormat: mockIsLegacyFormat,
 }))
 
+// IMP-E7-001 Phase 4 — KID convergence. Both default to the "nothing to
+// converge" state so every pre-existing test (which never touches these)
+// keeps its exact prior behavior; only the new tests below override them.
+const mockIsWhatsappConfigCanonicalWriteEnabled = vi.fn()
+vi.mock('@/lib/whatsapp/config-binding', () => ({
+  whatsappConfigBindingContext: (accountId: string) => `whatsapp_config:${accountId}`,
+  isWhatsappConfigCanonicalWriteEnabled: mockIsWhatsappConfigCanonicalWriteEnabled,
+}))
+const mockNeedsKidConvergence = vi.fn()
+const mockGetCurrentWriteKid = vi.fn()
+vi.mock('@/lib/crypto/kidConvergence', () => ({
+  needsKidConvergence: mockNeedsKidConvergence,
+  getCurrentWriteKid: mockGetCurrentWriteKid,
+}))
+
 const mockPhoneVariants = vi.fn()
 const mockIsRecipientNotAllowedError = vi.fn()
 vi.mock('@/lib/whatsapp/phone-utils', () => ({
@@ -133,6 +148,9 @@ beforeEach(() => {
 
   mockDecrypt.mockReturnValue('decrypted-token')
   mockIsLegacyFormat.mockReturnValue(false)
+  mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(false)
+  mockNeedsKidConvergence.mockReturnValue(false)
+  mockGetCurrentWriteKid.mockReturnValue('ACTIVE_V1')
   mockPhoneVariants.mockImplementation((p: string) => [p])
   mockIsRecipientNotAllowedError.mockReturnValue(false)
   db = createDefaultSupabase()
@@ -270,6 +288,54 @@ describe('POST /api/whatsapp/send', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.whatsapp_message_id).toBe('wamid.abc123')
+  })
+
+  // ─── IMP-E7-001 Phase 4 — KID convergence self-heal ──────────────────
+
+  it('self-heals a canonical access_token under a stale KID when canonical write is enabled', async () => {
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.converge1' })
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(true)
+    mockNeedsKidConvergence.mockReturnValue(true)
+
+    const { POST } = await import('./route')
+    const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'Hello!' }))
+    expect(res.status).toBe(200)
+
+    const wcChain = db.from('whatsapp_config') as unknown as { update: ReturnType<typeof vi.fn> }
+    expect(wcChain.update).toHaveBeenCalled()
+  })
+
+  it('does not self-heal a stale-KID access_token while canonical write is disabled', async () => {
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.converge2' })
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(false)
+    // Even if it were consulted, this would say "converge" — the point of
+    // this test is that it must NOT be consulted (short-circuited) when
+    // the domain hasn't cut over to canonical writes yet.
+    mockNeedsKidConvergence.mockReturnValue(true)
+
+    const { POST } = await import('./route')
+    const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'Hello!' }))
+    expect(res.status).toBe(200)
+
+    const wcChain = db.from('whatsapp_config') as unknown as { update: ReturnType<typeof vi.fn> }
+    expect(wcChain.update).not.toHaveBeenCalled()
+    expect(mockNeedsKidConvergence).not.toHaveBeenCalled()
+  })
+
+  it('does not self-heal when the KID is already current (nothing to converge)', async () => {
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.converge3' })
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(true)
+    mockNeedsKidConvergence.mockReturnValue(false)
+
+    const { POST } = await import('./route')
+    const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'Hello!' }))
+    expect(res.status).toBe(200)
+
+    const wcChain = db.from('whatsapp_config') as unknown as { update: ReturnType<typeof vi.fn> }
+    expect(wcChain.update).not.toHaveBeenCalled()
   })
 
   it('sends a template message successfully', async () => {

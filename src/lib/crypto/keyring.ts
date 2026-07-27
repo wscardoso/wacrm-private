@@ -55,6 +55,69 @@ export class KeyRing {
 
 // ─── Default factory (reads ENCRYPTION_KEY from env) ─────────────────────
 
+/**
+ * Parses the optional `KEYRING_CONFIG` environment variable — additional
+ * KID entries appended to the fixed baseline below (IMP-E7-001 Phase 1;
+ * name reserved for this purpose since IMP-CRYPTO-001 §4.3).
+ *
+ * Absent or empty → no additional entries, identical behavior to before
+ * this function existed. Malformed input fails closed at module load,
+ * matching the existing ENCRYPTION_KEY validation below.
+ *
+ * Deliberately does not special-case `capacity: 'Active'` entries: with
+ * ACTIVE_V1 still hardcoded Active, the KeyRing constructor's own
+ * MULTIPLE_ACTIVE_KEYS check already rejects that case correctly. Actual
+ * write-key promotion is IMP-E7-001 Phase 2, not this function.
+ */
+function parseAdditionalKeyRingEntries(): KeyMaterial[] {
+  const raw = process.env.KEYRING_CONFIG
+  if (!raw || raw.trim() === '') {
+    return []
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('KEYRING_CONFIG must be valid JSON (an array of key entries).')
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('KEYRING_CONFIG must be a JSON array of key entries.')
+  }
+
+  return parsed.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`KEYRING_CONFIG[${index}] must be an object.`)
+    }
+    const { kid, algorithm, key, capacity } = entry as Record<string, unknown>
+
+    if (typeof kid !== 'string' || kid.length === 0) {
+      throw new Error(`KEYRING_CONFIG[${index}].kid must be a non-empty string.`)
+    }
+    if (typeof algorithm !== 'string' || algorithm.length === 0) {
+      throw new Error(`KEYRING_CONFIG[${index}].algorithm must be a non-empty string.`)
+    }
+    if (typeof key !== 'string' || !/^[0-9a-fA-F]{64}$/.test(key)) {
+      throw new Error(
+        `KEYRING_CONFIG[${index}].key must be a 64-character hex string (256-bit key).`,
+      )
+    }
+    if (capacity !== 'Active' && capacity !== 'DecryptOnly') {
+      throw new Error(
+        `KEYRING_CONFIG[${index}].capacity must be 'Active' or 'DecryptOnly'.`,
+      )
+    }
+
+    return {
+      kid,
+      algorithm,
+      key: Buffer.from(key, 'hex'),
+      capacity,
+    }
+  })
+}
+
 export function createDefaultKeyRing(): KeyRing {
   const keyHex = process.env.ENCRYPTION_KEY
   if (!keyHex) {
@@ -100,5 +163,5 @@ export function createDefaultKeyRing(): KeyRing {
     capacity: 'Active',
   }
 
-  return new KeyRing([legacyGCM, legacyCBC, activeV1])
+  return new KeyRing([legacyGCM, legacyCBC, activeV1, ...parseAdditionalKeyRingEntries()])
 }

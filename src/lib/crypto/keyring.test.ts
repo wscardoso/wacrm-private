@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { randomBytes } from 'crypto'
 import { KeyRing, createDefaultKeyRing, type KeyMaterial } from './keyring'
 
@@ -224,6 +224,187 @@ describe('createDefaultKeyRing', () => {
     } finally {
       process.env.ENCRYPTION_KEY = saved
     }
+  })
+})
+
+// ─── createDefaultKeyRing + KEYRING_CONFIG (IMP-E7-001 Phase 1) ───────────
+//
+// KEYRING_CONFIG is optional. Absent, it must not change createDefaultKeyRing()
+// in any observable way — this is the backward-compatibility guarantee this
+// phase exists to prove. Present, it appends additional KIDs on top of the
+// fixed LEGACY_GCM/LEGACY_CBC/ACTIVE_V1 baseline (ADR-E7-001 T1).
+describe('createDefaultKeyRing + KEYRING_CONFIG', () => {
+  const savedConfig = process.env.KEYRING_CONFIG
+
+  afterEach(() => {
+    if (savedConfig === undefined) delete process.env.KEYRING_CONFIG
+    else process.env.KEYRING_CONFIG = savedConfig
+  })
+
+  it('absent KEYRING_CONFIG preserves the exact 3-KID baseline (no behavior change)', () => {
+    delete process.env.KEYRING_CONFIG
+    const kr = createDefaultKeyRing()
+    expect(kr.hasKID('LEGACY_GCM')).toBe(true)
+    expect(kr.hasKID('LEGACY_CBC')).toBe(true)
+    expect(kr.hasKID('ACTIVE_V1')).toBe(true)
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V1')
+    expect(kr.hasKID('ANYTHING_ELSE')).toBe(false)
+  })
+
+  it('accepts an additional DecryptOnly KID via KEYRING_CONFIG', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      {
+        kid: 'ACTIVE_V2_TEST',
+        algorithm: 'aes-256-gcm',
+        key: TEST_KEY_HEX,
+        capacity: 'DecryptOnly',
+      },
+    ])
+    const kr = createDefaultKeyRing()
+    expect(kr.hasKID('ACTIVE_V2_TEST')).toBe(true)
+    expect(kr.resolve('ACTIVE_V2_TEST').capacity).toBe('DecryptOnly')
+    // Baseline untouched.
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V1')
+    expect(kr.hasKID('LEGACY_GCM')).toBe(true)
+    expect(kr.hasKID('LEGACY_CBC')).toBe(true)
+  })
+
+  it('a KEYRING_CONFIG entry with capacity Active is rejected by the existing MULTIPLE_ACTIVE_KEYS guard (ACTIVE_V1 is still hardcoded Active in this phase)', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      {
+        kid: 'ACTIVE_V2_TEST',
+        algorithm: 'aes-256-gcm',
+        key: TEST_KEY_HEX,
+        capacity: 'Active',
+      },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('MULTIPLE_ACTIVE_KEYS')
+  })
+
+  it('rejects malformed JSON', () => {
+    process.env.KEYRING_CONFIG = 'not json'
+    expect(() => createDefaultKeyRing()).toThrow('KEYRING_CONFIG')
+  })
+
+  it('rejects a non-array value', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify({ kid: 'X' })
+    expect(() => createDefaultKeyRing()).toThrow('KEYRING_CONFIG')
+  })
+
+  it('rejects an entry with an invalid hex key', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'BAD', algorithm: 'aes-256-gcm', key: 'not-hex', capacity: 'DecryptOnly' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('key')
+  })
+
+  it('rejects an entry with an invalid capacity value', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'BAD', algorithm: 'aes-256-gcm', key: TEST_KEY_HEX, capacity: 'Retired' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('capacity')
+  })
+
+  it('duplicate KID between KEYRING_CONFIG and the fixed baseline still fails DUPLICATE_KID', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'ACTIVE_V1', algorithm: 'aes-256-gcm', key: TEST_KEY_HEX, capacity: 'DecryptOnly' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('DUPLICATE_KID')
+  })
+
+  it('an empty-string KEYRING_CONFIG behaves identically to an absent one', () => {
+    process.env.KEYRING_CONFIG = ''
+    const kr = createDefaultKeyRing()
+    expect(kr.hasKID('LEGACY_GCM')).toBe(true)
+    expect(kr.hasKID('LEGACY_CBC')).toBe(true)
+    expect(kr.hasKID('ACTIVE_V1')).toBe(true)
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V1')
+    expect(kr.hasKID('ANYTHING_ELSE')).toBe(false)
+  })
+
+  it('an explicit empty-array KEYRING_CONFIG ("[]") behaves identically to an absent one', () => {
+    process.env.KEYRING_CONFIG = '[]'
+    const kr = createDefaultKeyRing()
+    expect(kr.hasKID('LEGACY_GCM')).toBe(true)
+    expect(kr.hasKID('LEGACY_CBC')).toBe(true)
+    expect(kr.hasKID('ACTIVE_V1')).toBe(true)
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V1')
+    expect(kr.hasKID('ANYTHING_ELSE')).toBe(false)
+  })
+
+  it('accepts multiple additional KIDs in a single KEYRING_CONFIG, all resolvable, baseline write key unchanged', () => {
+    const keyAHex = TEST_KEY_HEX.slice(0, -1) + '1'
+    const keyBHex = TEST_KEY_HEX.slice(0, -1) + '2'
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'KEY_A', algorithm: 'aes-256-gcm', key: keyAHex, capacity: 'DecryptOnly' },
+      { kid: 'KEY_B', algorithm: 'aes-256-gcm', key: keyBHex, capacity: 'DecryptOnly' },
+    ])
+    const kr = createDefaultKeyRing()
+    expect(kr.hasKID('KEY_A')).toBe(true)
+    expect(kr.hasKID('KEY_B')).toBe(true)
+    expect(kr.resolve('KEY_A').capacity).toBe('DecryptOnly')
+    expect(kr.resolve('KEY_B').capacity).toBe('DecryptOnly')
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V1')
+  })
+
+  it('resolved key bytes exactly match the configured hex (no mutation during parsing)', () => {
+    const customHex = TEST_KEY_HEX.slice(0, -4) + 'abcd'
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'FIDELITY_TEST', algorithm: 'aes-256-gcm', key: customHex, capacity: 'DecryptOnly' },
+    ])
+    const kr = createDefaultKeyRing()
+    expect(kr.resolve('FIDELITY_TEST').key).toEqual(Buffer.from(customHex, 'hex'))
+  })
+
+  it('rejects an entry missing the kid field', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { algorithm: 'aes-256-gcm', key: TEST_KEY_HEX, capacity: 'DecryptOnly' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('kid')
+  })
+
+  it('rejects an entry missing the algorithm field', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'NO_ALGO', key: TEST_KEY_HEX, capacity: 'DecryptOnly' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('algorithm')
+  })
+
+  it('rejects an entry missing the key field', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify([
+      { kid: 'NO_KEY', algorithm: 'aes-256-gcm', capacity: 'DecryptOnly' },
+    ])
+    expect(() => createDefaultKeyRing()).toThrow('key')
+  })
+
+  it('rejects a non-object array element', () => {
+    process.env.KEYRING_CONFIG = JSON.stringify(['invalid'])
+    expect(() => createDefaultKeyRing()).toThrow('object')
+  })
+})
+
+// ─── Direct KeyRing promotion scenario (no createDefaultKeyRing involved) ─
+//
+// IMP-E7-001 Phase 1 acceptance criterion: "construção com um 4º KID de
+// teste promovido a Active (e ACTIVE_V1 rebaixada) resolve corretamente."
+// This requires zero change to the KeyRing class — already true before
+// this phase — exercised directly against arbitrary entries, exactly as
+// ADR-E7-001 §4.1/§9 describes rotation being realized in practice (a
+// fresh KeyRing instance with capacities already swapped).
+describe('KeyRing — 4th KID promoted to Active, previous Active demoted (T3/T4 shape)', () => {
+  it('resolves correctly with the promoted/demoted pair', () => {
+    const kr = new KeyRing([
+      decryptOnlyEntry({ kid: 'LEGACY_GCM' }),
+      decryptOnlyEntry({ kid: 'LEGACY_CBC' }),
+      decryptOnlyEntry({ kid: 'ACTIVE_V1' }), // demoted
+      activeEntry({ kid: 'ACTIVE_V2' }), // promoted
+    ])
+    expect(kr.getWriteKey().kid).toBe('ACTIVE_V2')
+    expect(kr.resolve('ACTIVE_V1').capacity).toBe('DecryptOnly')
+    expect(kr.resolve('ACTIVE_V2').capacity).toBe('Active')
+    // Reads for all 4 KIDs still work — no loss of read capability (RF-8).
+    expect(kr.hasKID('LEGACY_GCM')).toBe(true)
+    expect(kr.hasKID('LEGACY_CBC')).toBe(true)
   })
 })
 

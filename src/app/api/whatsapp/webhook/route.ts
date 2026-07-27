@@ -11,6 +11,7 @@ import {
   whatsappConfigBindingContext,
   isWhatsappConfigCanonicalWriteEnabled,
 } from '@/lib/whatsapp/config-binding'
+import { needsKidConvergence, getCurrentWriteKid } from '@/lib/crypto/kidConvergence'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
@@ -141,8 +142,20 @@ export async function GET(request: Request) {
       // Canonical (BC-aware) once the domain's write-enablement flag is
       // on; GCM upgrade otherwise — preserves legacy compatibility
       // until the atomic cutover for this domain is fully live.
-      if (isLegacyFormat(matchedConfig.verify_token)) {
-        const upgraded = isWhatsappConfigCanonicalWriteEnabled()
+      //
+      // Also converges a canonical envelope still under a prior write
+      // KID (IMP-E7-001 Phase 4, ADR-E7-001 §13.2 — lazy convergence):
+      // re-running encryptWithBindingContext with the already-decrypted
+      // plaintext and the SAME Binding Context always targets the
+      // Key Ring's current write KID, so no separate re-encryption path
+      // is needed for this case.
+      const canonicalWriteEnabled = isWhatsappConfigCanonicalWriteEnabled()
+      const staleKid =
+        !isLegacyFormat(matchedConfig.verify_token) &&
+        canonicalWriteEnabled &&
+        needsKidConvergence(matchedConfig.verify_token, getCurrentWriteKid())
+      if (isLegacyFormat(matchedConfig.verify_token) || staleKid) {
+        const upgraded = canonicalWriteEnabled
           ? encryptWithBindingContext(verifyToken, whatsappConfigBindingContext(matchedConfig.account_id))
           : encrypt(verifyToken)
         void supabaseAdmin()

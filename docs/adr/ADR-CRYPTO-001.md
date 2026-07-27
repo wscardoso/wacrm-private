@@ -184,7 +184,7 @@ Características:
 - nunca reutilizado;
 - globalmente único.
 
-Cada KID é globalmente único. Não existem dois KIDs distintos que referenciem o mesmo material criptográfico, nem o mesmo KID em dois contextos diferentes.
+Cada KID é globalmente único. Como regra geral, não existem dois KIDs distintos que referenciem o mesmo material criptográfico. A única exceção permitida por este ADR é o perfil Legacy definido na Seção 8: LEGACY_GCM e LEGACY_CBC compartilham o mesmo material criptográfico subjacente, cada um mantendo identidade lógica independente, permitindo que evoluam de forma independente em futuras rotações. Não existe o mesmo KID em dois contextos diferentes.
 
 A resolução KID → Material Criptográfico é direta: dado o KID, o Key Ring produz o material criptográfico correspondente. Não existe etapa intermediária de resolução por escopo (Key Ring, tenant, ou outro).
 

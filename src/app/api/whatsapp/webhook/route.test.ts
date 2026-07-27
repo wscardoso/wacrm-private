@@ -36,6 +36,21 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
   isLegacyFormat: mockIsLegacyFormat,
 }))
 
+// IMP-E7-001 Phase 4 — KID convergence. Both default to the "nothing to
+// converge" state so every pre-existing test (which never touches these)
+// keeps its exact prior behavior; only the new tests below override them.
+const mockIsWhatsappConfigCanonicalWriteEnabled = vi.fn()
+vi.mock('@/lib/whatsapp/config-binding', () => ({
+  whatsappConfigBindingContext: (accountId: string) => `whatsapp_config:${accountId}`,
+  isWhatsappConfigCanonicalWriteEnabled: mockIsWhatsappConfigCanonicalWriteEnabled,
+}))
+const mockNeedsKidConvergence = vi.fn()
+const mockGetCurrentWriteKid = vi.fn()
+vi.mock('@/lib/crypto/kidConvergence', () => ({
+  needsKidConvergence: mockNeedsKidConvergence,
+  getCurrentWriteKid: mockGetCurrentWriteKid,
+}))
+
 // Stub the remaining imports so the module loads without error.
 vi.mock('@/lib/whatsapp/meta-api', () => ({
   getMediaUrl: vi.fn(),
@@ -145,6 +160,9 @@ beforeEach(() => {
   mockDecrypt.mockReturnValue('decrypted-value')
   mockEncrypt.mockReturnValue('encrypted-value')
   mockIsLegacyFormat.mockReturnValue(false)
+  mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(false)
+  mockNeedsKidConvergence.mockReturnValue(false)
+  mockGetCurrentWriteKid.mockReturnValue('ACTIVE_V1')
   mockSupabaseAdmin.mockReturnValue({
     from: vi.fn((t: string) => makeRecorderChain(t)),
     rpc: makeRpc,
@@ -206,6 +224,72 @@ describe('GET /api/whatsapp/webhook', () => {
     const { GET } = await import('./route')
     const res = await GET(getRequest(verifyUrl('mytoken')))
     expect(res.status).toBe(403)
+  })
+
+  // ─── IMP-E7-001 Phase 4 — KID convergence self-heal ──────────────────
+
+  it('self-heals a canonical envelope under a stale KID when canonical write is enabled', async () => {
+    const configs = [{ id: 'c1', account_id: 'acct-1', verify_token: 'canonical-old-kid' }]
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn((t: string) => {
+        tableTerminal[t] = { data: configs, error: null }
+        return makeRecorderChain(t)
+      }),
+    })
+    mockDecrypt.mockReturnValueOnce('mytoken')
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(true)
+    mockNeedsKidConvergence.mockReturnValue(true)
+
+    const { GET } = await import('./route')
+    const res = await GET(getRequest(verifyUrl('mytoken')))
+    expect(res.status).toBe(200)
+
+    expect(builderCalls).toContainEqual({ table: 'whatsapp_config', method: 'update' })
+  })
+
+  it('does not self-heal a stale-KID envelope while canonical write is disabled', async () => {
+    const configs = [{ id: 'c1', account_id: 'acct-1', verify_token: 'canonical-old-kid' }]
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn((t: string) => {
+        tableTerminal[t] = { data: configs, error: null }
+        return makeRecorderChain(t)
+      }),
+    })
+    mockDecrypt.mockReturnValueOnce('mytoken')
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(false)
+    // Even if it were consulted, this would say "converge" — the point of
+    // this test is that it must NOT be consulted (short-circuited) when
+    // the domain hasn't cut over to canonical writes yet.
+    mockNeedsKidConvergence.mockReturnValue(true)
+
+    const { GET } = await import('./route')
+    const res = await GET(getRequest(verifyUrl('mytoken')))
+    expect(res.status).toBe(200)
+
+    expect(builderCalls).not.toContainEqual({ table: 'whatsapp_config', method: 'update' })
+    expect(mockNeedsKidConvergence).not.toHaveBeenCalled()
+  })
+
+  it('does not self-heal when the KID is already current (nothing to converge)', async () => {
+    const configs = [{ id: 'c1', account_id: 'acct-1', verify_token: 'canonical-current-kid' }]
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn((t: string) => {
+        tableTerminal[t] = { data: configs, error: null }
+        return makeRecorderChain(t)
+      }),
+    })
+    mockDecrypt.mockReturnValueOnce('mytoken')
+    mockIsLegacyFormat.mockReturnValue(false)
+    mockIsWhatsappConfigCanonicalWriteEnabled.mockReturnValue(true)
+    mockNeedsKidConvergence.mockReturnValue(false)
+
+    const { GET } = await import('./route')
+    const res = await GET(getRequest(verifyUrl('mytoken')))
+    expect(res.status).toBe(200)
+
+    expect(builderCalls).not.toContainEqual({ table: 'whatsapp_config', method: 'update' })
   })
 })
 
