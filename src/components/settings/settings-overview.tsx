@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronRight, Loader2, Pencil, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 import { createClient } from '@/lib/supabase/client';
@@ -10,7 +10,9 @@ import { useTheme } from '@/hooks/use-theme';
 import { THEMES } from '@/lib/themes';
 import { CURRENCIES } from '@/lib/currency';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
 import { SECTION_META, type SettingsSection } from './settings-sections';
@@ -36,8 +38,17 @@ export function SettingsOverview({
 }: {
   onSelect: (section: SettingsSection) => void;
 }) {
-  const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
-    useAuth();
+  const {
+    user,
+    profile,
+    account,
+    accountId,
+    accountRole,
+    defaultCurrency,
+    canManageMembers,
+    canEditSettings,
+    refreshProfile,
+  } = useAuth();
   const { mode, theme } = useTheme();
   const t = useTranslations('settings.tabs');
   const to = useTranslations('settings.overview');
@@ -53,6 +64,54 @@ export function SettingsOverview({
   // from blanking the rest of the landing.
   const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
   const [whatsappLoading, setWhatsappLoading] = useState(true);
+
+  // Workspace (accounts.name) rename — inline edit, admin+ only.
+  // Wired to the existing PATCH /api/account route (E5a); this is the
+  // first UI caller of that endpoint's `name` field — previously the
+  // capability existed but nothing in the app exposed it.
+  const [workspaceNameEditing, setWorkspaceNameEditing] = useState(false);
+  const [workspaceNameValue, setWorkspaceNameValue] = useState('');
+  const [workspaceNameSaving, setWorkspaceNameSaving] = useState(false);
+  const [workspaceNameErr, setWorkspaceNameErr] = useState<string | null>(null);
+
+  const startWorkspaceNameEdit = () => {
+    setWorkspaceNameValue(account?.name ?? '');
+    setWorkspaceNameErr(null);
+    setWorkspaceNameEditing(true);
+  };
+
+  const cancelWorkspaceNameEdit = () => {
+    setWorkspaceNameEditing(false);
+    setWorkspaceNameErr(null);
+  };
+
+  const saveWorkspaceName = async () => {
+    const trimmed = workspaceNameValue.trim();
+    if (!trimmed || trimmed === account?.name) {
+      setWorkspaceNameEditing(false);
+      return;
+    }
+    setWorkspaceNameSaving(true);
+    setWorkspaceNameErr(null);
+    try {
+      const res = await fetch('/api/account', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setWorkspaceNameErr(body?.error ?? to('workspace_name_error'));
+        return;
+      }
+      await refreshProfile();
+      setWorkspaceNameEditing(false);
+    } catch {
+      setWorkspaceNameErr(to('workspace_name_error'));
+    } finally {
+      setWorkspaceNameSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!user || !accountId) return;
@@ -249,6 +308,69 @@ export function SettingsOverview({
           </SettingsChip>
         ) : null}
       </Card>
+
+      {/* Workspace identity */}
+      {account ? (
+        <Card className="mt-4 flex-row items-center gap-4 px-5 py-5">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-medium text-muted-foreground">
+              {to('workspace')}
+            </div>
+            {workspaceNameEditing ? (
+              <div className="mt-1 flex items-center gap-2">
+                <Input
+                  autoFocus
+                  value={workspaceNameValue}
+                  onChange={(e) => setWorkspaceNameValue(e.target.value)}
+                  disabled={workspaceNameSaving}
+                  maxLength={120}
+                  className="h-8 max-w-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveWorkspaceName();
+                    if (e.key === 'Escape') cancelWorkspaceNameEdit();
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={saveWorkspaceName}
+                  disabled={workspaceNameSaving}
+                >
+                  {workspaceNameSaving ? to('workspace_saving') : to('workspace_save')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={cancelWorkspaceNameEdit}
+                  disabled={workspaceNameSaving}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-0.5 truncate text-base font-semibold text-foreground">
+                {account.name}
+              </div>
+            )}
+            {workspaceNameErr ? (
+              <div className="mt-1 text-xs text-red-400">{workspaceNameErr}</div>
+            ) : null}
+          </div>
+          {canEditSettings && !workspaceNameEditing ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={startWorkspaceNameEdit}
+              className="shrink-0 gap-1.5"
+            >
+              <Pencil className="size-3.5" />
+              {to('workspace_rename')}
+            </Button>
+          ) : null}
+        </Card>
+      ) : null}
 
       {/* Status tiles */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

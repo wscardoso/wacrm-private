@@ -65,7 +65,14 @@ function LoginPageInner() {
     if (inviteToken) {
       router.push(`/join/${encodeURIComponent(inviteToken)}`);
     } else {
-      router.push("/dashboard");
+      // Active platform operators land on the supervisor console
+      // (/act) instead of their own tenant dashboard — mirrors the
+      // gate in src/app/act/page.tsx so the redirect target and the
+      // route's own access check never disagree. A failed/errored RPC
+      // (e.g. transient network issue) falls back to /dashboard rather
+      // than blocking sign-in.
+      const { data: isOperator } = await supabase.rpc("is_platform_operator");
+      router.push(isOperator ? "/act" : "/dashboard");
     }
   };
 

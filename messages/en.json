@@ -565,7 +565,13 @@
       "tag_count": "{count, plural, =1 {# tag} other {# tags}}",
       "custom_field_count": "{count, plural, =1 {# custom field} other {# custom fields}}",
       "loading": "Loading…",
-      "your_account": "Your account"
+      "your_account": "Your account",
+      "workspace": "Workspace",
+      "workspace_rename": "Rename",
+      "workspace_save": "Save",
+      "workspace_cancel": "Cancel",
+      "workspace_saving": "Saving…",
+      "workspace_name_error": "Couldn't rename the workspace. Please try again."
     },
     "profile": {
       "title": "Profile",
