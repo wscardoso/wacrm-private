@@ -15,11 +15,13 @@ interface Captured {
   url: string
   method: string
   headers: Record<string, string>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   body: any
 }
 
 let captured: Captured | null = null
-const fetchMock = vi.fn(async (url: string | URL | Request, init?: any) => {
+const fetchMock = vi.fn(async (url: string | URL | Request, // eslint-disable-next-line @typescript-eslint/no-explicit-any
+init?: any) => {
   captured = {
     url: url.toString(),
     method: (init?.method ?? 'GET').toUpperCase(),

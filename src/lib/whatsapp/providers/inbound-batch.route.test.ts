@@ -30,14 +30,18 @@ const TEST_SECRET = 's3cr3t-n0nm3ta-uazapi-batch'
 const TEST_HASH = hashWebhookSecret(TEST_SECRET)
 
 function makeChain(table: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = { __table: table, __maybeSingle: false }
   for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'single', 'is', 'not', 'gte', 'lt', 'head']) {
     chain[m] = vi.fn(() => chain)
   }
   chain.maybeSingle = vi.fn(() => { chain.__maybeSingle = true; return chain })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chain.then = (resolve: (v: any) => void) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any = null
-    let error: any = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error: any = null
     if (table === 'whatsapp_config') {
       data = [
         {
@@ -125,6 +129,7 @@ beforeEach(() => {
   rpcCalls.length = 0
   rpcInserts = true
   // restore spy (clearAllMocks clears call history but keeps implementation)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   spy.mockImplementation(processInboundMessage as any)
 })
 
@@ -167,6 +172,7 @@ describe('uazapi batch data[] via real provider route', () => {
 
     const res = await POST(postRequest(payload), {
       params: Promise.resolve({ provider: 'uazapi', connectionId: TEST_CONNECTION_ID, webhookSecret: TEST_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
 
     expect(res.status).toBe(200)
@@ -175,8 +181,10 @@ describe('uazapi batch data[] via real provider route', () => {
     expect(spy).toHaveBeenCalledTimes(3)
     // One idempotency RPC per genuinely-inserted message.
     expect(rpcCalls.filter((f) => f === 'insert_inbound_message').length).toBe(3)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const firstArg = spy.mock.calls[0][0] as any
     expect(firstArg.messageId).toBe('evt-batch-1')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const thirdArg = spy.mock.calls[2][0] as any
     expect(thirdArg.messageId).toBe('evt-batch-3')
   })
@@ -213,6 +221,7 @@ describe('uazapi batch data[] via real provider route', () => {
 
     const res = await POST(postRequest(payload), {
       params: Promise.resolve({ provider: 'uazapi', connectionId: TEST_CONNECTION_ID, webhookSecret: TEST_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
 
     expect(res.status).toBe(200)

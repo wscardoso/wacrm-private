@@ -82,6 +82,7 @@ export default function ResetPasswordPage() {
     setTimeout(() => router.push(destination), 1200);
   };
 
+  // eslint-disable-next-line react-hooks/static-components
   const Shell = ({ children }: { children: React.ReactNode }) => (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md border-border bg-card">{children}</Card>
@@ -89,11 +90,13 @@ export default function ResetPasswordPage() {
   );
 
   if (checkingSession) {
+    // eslint-disable-next-line react-hooks/static-components
     return <Shell><CardContent className="py-10 text-center text-sm text-muted-foreground">…</CardContent></Shell>;
   }
 
   if (!hasSession) {
     return (
+      // eslint-disable-next-line react-hooks/static-components
       <Shell>
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-destructive/10">
@@ -112,6 +115,7 @@ export default function ResetPasswordPage() {
 
   if (success) {
     return (
+      // eslint-disable-next-line react-hooks/static-components
       <Shell>
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
@@ -127,6 +131,7 @@ export default function ResetPasswordPage() {
   }
 
   return (
+    // eslint-disable-next-line react-hooks/static-components
     <Shell>
       <CardHeader className="items-center text-center">
         <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">

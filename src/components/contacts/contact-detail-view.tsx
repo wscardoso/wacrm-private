@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
-import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal } from '@/types';
+import type { Contact, Tag, ContactNote, CustomField, Deal } from '@/types';
 import {
   Sheet,
   SheetContent,
@@ -19,8 +19,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Phone,
   Mail,
@@ -31,7 +29,6 @@ import {
   Plus,
   Trash2,
   Save,
-  X,
   DollarSign,
 } from 'lucide-react';
 
@@ -168,6 +165,7 @@ export function ContactDetailView({
 
   useEffect(() => {
     if (open && contactId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchContact();
       fetchTags();
       fetchNotes();

@@ -77,6 +77,10 @@ const eslintConfig = defineConfig([
       "src/app/api/whatsapp/config/route.ts",
       "src/app/api/whatsapp/send/route.ts",
       "src/app/api/whatsapp/webhook/route.ts",
+      // kid-convergence-sweep reads legacy ciphertext; it needs
+      // isLegacyFormat to detect records still awaiting re-encryption
+      // (IMP-CRYPTO-001 §6 step 4).
+      "src/app/api/whatsapp/config/kid-convergence-sweep/route.ts",
     ],
     rules: {
       "no-restricted-imports": [

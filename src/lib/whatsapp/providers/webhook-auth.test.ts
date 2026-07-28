@@ -50,15 +50,19 @@ const configRows: Record<string, ConfigRow> = {
 }
 
 function makeChain(table: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = { __table: table, __maybeSingle: false, __eq: null as null | { col: string; val: unknown } }
   for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'neq', 'in', 'order', 'limit', 'single', 'is', 'not', 'gte', 'lt', 'head']) {
     chain[m] = vi.fn(() => chain)
   }
   chain.eq = vi.fn((col: string, val: unknown) => { chain.__eq = { col, val }; return chain })
   chain.maybeSingle = vi.fn(() => { chain.__maybeSingle = true; return chain })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chain.then = (resolve: (v: any) => void) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any = null
-    let error: any = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error: any = null
     if (table === 'whatsapp_config') {
       data = Object.values(configRows)
       if (chain.__eq && chain.__eq.col === 'connection_id') {
@@ -123,6 +127,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
   it('accepts a valid Z-API connection + secret and processes the message', async () => {
     const res = await POST(postRequest('zapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
       params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -133,6 +138,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
     const uaBody = { event: 'MESSAGES_UPSERT', data: [{ messages: [{ key: { remoteJid: '5511999887766@s.whatsapp.net', id: 'ua-auth-1' }, messageTimestamp: 1710000000, message: { conversation: 'oi' } }] }] }
     const res = await POST(postRequest('uazapi', UAZAPI_CONN, UAZAPI_SECRET, uaBody), {
       params: Promise.resolve({ provider: 'uazapi', connectionId: UAZAPI_CONN, webhookSecret: UAZAPI_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(200)
   })
@@ -140,6 +146,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
   it('returns uniform 401 when connection_id does not exist', async () => {
     const res = await POST(postRequest('zapi', 'conn-does-not-exist', VALID_SECRET, ZAPI_BODY), {
       params: Promise.resolve({ provider: 'zapi', connectionId: 'conn-does-not-exist', webhookSecret: VALID_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
@@ -148,6 +155,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
   it('returns uniform 401 on provider mismatch (Z-API secret under uazapi route)', async () => {
     const res = await POST(postRequest('uazapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
       params: Promise.resolve({ provider: 'uazapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
@@ -159,6 +167,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
     }) as unknown as NextRequest
     const res = await POST(req, {
       params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: '' }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(401)
   })
@@ -166,6 +175,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
   it('returns uniform 401 when the secret is invalid (wrong value)', async () => {
     const res = await POST(postRequest('zapi', VALID_CONN, 'wrong-secret', ZAPI_BODY), {
       params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: 'wrong-secret' }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
@@ -175,6 +185,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
     configRows[VALID_CONN] = { ...configRows[VALID_CONN], webhook_secret_hash: '' }
     const res = await POST(postRequest('zapi', VALID_CONN, 'anything', ZAPI_BODY), {
       params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: 'anything' }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     expect(res.status).toBe(401)
     // Confirm the legacy verify_token was NOT used to authenticate.
@@ -186,6 +197,7 @@ describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
   it('does NOT scan every config: issues exactly one indexed lookup', async () => {
     await POST(postRequest('zapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
       params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     const selects = mockFromImpl.mock.calls.filter((c) => c[0] === 'whatsapp_config')
     // A single `.from('whatsapp_config')` call (resolved by indexed

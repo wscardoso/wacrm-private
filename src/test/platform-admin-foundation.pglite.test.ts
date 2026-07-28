@@ -73,6 +73,7 @@ $$;
 
 function loadMigration(name: string): string {
   const dir = join(process.cwd(), 'supabase', 'migrations')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const file = require('node:fs')
     .readdirSync(dir)
     .find((f: string) => f.endsWith(name))

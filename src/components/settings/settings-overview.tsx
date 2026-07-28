@@ -117,7 +117,6 @@ export function SettingsOverview({
     if (!user || !accountId) return;
     let cancelled = false;
     const supabase = createClient();
-    const userId = user.id;
     const acctId = accountId;
 
     // Cheap counts — resolve fast, render immediately.

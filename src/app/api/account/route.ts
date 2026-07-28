@@ -42,7 +42,6 @@ import {
   RATE_LIMITS,
 } from "@/lib/rate-limit";
 import {
-  MAX_NAME_LEN,
   MAX_LEGAL_NAME_LEN,
   PHONE_RE,
   EMAIL_RE,

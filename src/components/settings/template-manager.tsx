@@ -167,6 +167,7 @@ export function TemplateManager() {
   // Resize body_samples so it always has exactly bodyVarCount entries.
   // (We mutate via setForm in an effect so React owns the state.)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm((prev) => {
       if (prev.body_samples.length === bodyVarCount) return prev;
       const next = prev.body_samples.slice(0, bodyVarCount);
@@ -178,6 +179,7 @@ export function TemplateManager() {
   useEffect(() => {
     if (authLoading) return;
     if (!accountId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       return;
     }

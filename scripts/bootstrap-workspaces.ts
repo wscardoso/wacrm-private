@@ -1,19 +1,11 @@
 #!/usr/bin/env node
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.resolve(__dirname, "..", ".env.local");
-const ENV_KEYS = [
-  "NEXT_PUBLIC_SUPABASE_URL",
-  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-  "SUPABASE_SERVICE_ROLE_KEY",
-  "BOOTSTRAP_OPERATOR_EMAIL",
-  "BOOTSTRAP_OPERATOR_PASSWORD",
-] as const;
 
 interface WorkspaceDef {
   name: string;
@@ -35,6 +27,14 @@ const WORKSPACES: WorkspaceDef[] = [
     ownerName: "Carla Elize Wauczinski",
     ownerEmail: "administrativo@oralunicalmirantetamandare.com.br",
   },
+  // Atomo — dados pendentes (2026-07-27). Preencher CNPJ, nome e
+  // e-mail do responsável e descomentar quando disponível.
+  // {
+  //   name: "Atomo",
+  //   cnpj: "00.000.000/0000-00",
+  //   ownerName: "",
+  //   ownerEmail: "",
+  // },
 ];
 
 function normalizeCnpj(raw: string): string {

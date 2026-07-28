@@ -7,9 +7,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const chainCalls: Array<{ table: string; method: string }> = []
 
 // Controls what the messages table returns for the idempotency upsert.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let messagesUpsertResult: { data: any; error: any } = { data: [{ id: 'msg-1' }], error: null }
 
 function makeChain() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {}
   for (const m of [
     'select', 'insert', 'update', 'upsert', 'delete',
@@ -21,8 +23,11 @@ function makeChain() {
       return chain
     })
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chain.then = (resolve: (v: any) => void) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let error: any = null
     if (chain.__table === 'conversations') {
       data = { id: 'conv-1', unread_count: 5, account_id: 'acc-1', user_id: 'user-1', contact_id: 'contact-1' }
@@ -43,6 +48,7 @@ const mockFromImpl = vi.fn((t: string) => {
 })
 
 const mockRpcImpl = vi.fn((fn: string, _params: Record<string, unknown>) => {
+  void _params
   if (fn === 'insert_inbound_message') {
     const id = messagesUpsertResult.data?.[0]?.id ?? null
     return Promise.resolve({ data: id, error: messagesUpsertResult.error })
@@ -61,17 +67,21 @@ vi.mock('@/lib/whatsapp/phone-utils', () => ({
 const mockFindExistingContact = vi.fn()
 const mockIsUniqueViolation = vi.fn(() => false)
 vi.mock('@/lib/contacts/dedupe', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   findExistingContact: (a: any, b: any) => (mockFindExistingContact as any)(a, b),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   isUniqueViolation: (a: any) => (mockIsUniqueViolation as any)(a),
 }))
 
 const mockRunAutomations = vi.fn()
 vi.mock('@/lib/automations/engine', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runAutomationsForTrigger: (..._a: any[]) => (mockRunAutomations as any)(..._a),
 }))
 
 const mockDispatchFlows = vi.fn(async () => ({ consumed: false }))
 vi.mock('@/lib/flows/engine', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatchInboundToFlows: (..._a: any[]) => (mockDispatchFlows as any)(..._a),
 }))
 

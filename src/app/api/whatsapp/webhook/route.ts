@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
-import type { Contact } from '@/types'
 import {
   encrypt,
   isLegacyFormat,
@@ -12,7 +11,7 @@ import {
   isWhatsappConfigCanonicalWriteEnabled,
 } from '@/lib/whatsapp/config-binding'
 import { needsKidConvergence, getCurrentWriteKid } from '@/lib/crypto/kidConvergence'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'

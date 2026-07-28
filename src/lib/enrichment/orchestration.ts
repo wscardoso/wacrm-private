@@ -1,8 +1,8 @@
 import { resolveCredential, CredentialResolutionError } from './credential-resolver'
-import { classifyEnrichmentFailure, computeEnrichmentBackoff } from './failure-classifier'
+import { classifyEnrichmentFailure } from './failure-classifier'
 import { fetchAdData, GraphApiError } from './graph-api-client'
 import { enqueuePendingAttributions, claimBatch, resolveSuccess, resolveFailure, reclaimStuck, expireStale } from './enrichment-ledger'
-import { ENRICHMENT_MAX_ATTEMPT_COUNT, ENRICHMENT_TTL_MS, ENRICHMENT_BATCH_LIMIT } from './types'
+import { ENRICHMENT_MAX_ATTEMPT_COUNT, ENRICHMENT_BATCH_LIMIT } from './types'
 
 export interface EnrichmentCycleResult {
   enqueued: number

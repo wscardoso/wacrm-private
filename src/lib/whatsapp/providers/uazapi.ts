@@ -338,6 +338,7 @@ export class UazapiProvider implements WhatsAppProvider {
   }
 
   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {
+    void _req; void _rawBody
     // uazapi doesn't sign payloads. Security comes from the secret
     // embedded in the webhook URL path (see /api/whatsapp/webhook/uazapi/[secret]).
     return true

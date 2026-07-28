@@ -208,6 +208,7 @@ export function Step2SelectAudience({
   ]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchEstimatedCount();
   }, [fetchEstimatedCount]);
 

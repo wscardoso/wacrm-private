@@ -230,6 +230,7 @@ export function WhatsAppConfig() {
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       return;
     }

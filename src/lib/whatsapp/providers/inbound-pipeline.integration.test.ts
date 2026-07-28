@@ -14,13 +14,16 @@ const rpcCalls: Array<{ fn: string; params: Record<string, unknown> }> = []
 let rpcInserts = true
 
 function makeChain() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {}
   for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'maybeSingle', 'single', 'is', 'not', 'gte', 'lt']) {
     chain[m] = vi.fn(() => chain)
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chain.then = (resolve: (v: any) => void) => {
     // conversations upsert (findOrCreateConversation) and contacts insert
     // both resolve to a row; count head resolves to { count: 0 }.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any = null
     if (chain.__table === 'conversations') data = { id: 'conv-1', unread_count: 0, account_id: 'acc-1', user_id: 'user-1', contact_id: 'contact-1' }
     else if (chain.__table === 'contacts') data = { id: 'contact-1', name: 'Alice' }
@@ -60,11 +63,13 @@ vi.mock('@/lib/contacts/dedupe', () => ({
 
 const mockDispatchFlows = vi.fn(async () => ({ consumed: false }))
 vi.mock('@/lib/flows/engine', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatchInboundToFlows: ((..._a: any[]) => (mockDispatchFlows as any)(..._a)) as any,
 }))
 
 const mockRunAutomations = vi.fn()
 vi.mock('@/lib/automations/engine', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runAutomationsForTrigger: ((..._a: any[]) => (mockRunAutomations as any)(..._a)) as any,
 }))
 

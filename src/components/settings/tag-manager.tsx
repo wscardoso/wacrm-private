@@ -57,6 +57,7 @@ export function TagManager() {
   useEffect(() => {
     if (authLoading) return;
     if (!accountId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       return;
     }

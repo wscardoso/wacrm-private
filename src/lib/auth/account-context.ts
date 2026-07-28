@@ -40,7 +40,7 @@ import {
   getCurrentAccount,
   type AccountContext,
 } from "./account";
-import { hasMinRole, type AccountRole } from "./roles";
+import type { AccountRole } from "./roles";
 
 export type AccountAccessMode = "member" | "platform_operator";
 

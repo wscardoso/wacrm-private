@@ -85,18 +85,23 @@ const builderCalls: Array<{ table: string; method: string }> = []
 
 // Dedicated flags for the C4 assertions, set inside the recorder so they
 // survive any array-reset timing in the async flow.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let sawMessagesUpsert = false
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let sawMessagesInsert = false
 let sawConversationUpdate = false
 let sawInboundRpc = false
 let sawRpcReturnedId = false
 
 // Per-table terminal result for the `await`/`.then` resolution.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const tableTerminal: Record<string, { data: any; error: any }> = {}
 
 function makeRecorderChain(table: string) {
   const terminal = tableTerminal[table] ?? { data: [], error: null }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     then: (resolve: (v: any) => void) => {
       resolve(terminal)
       return Promise.resolve(terminal)
@@ -121,6 +126,7 @@ function makeRecorderChain(table: string) {
 // RPC mock for the C4 idempotent insert. insert_inbound_message returns
 // the new row id (or NULL on redelivery) based on tableTerminal['messages'].
 function makeRpc(fn: string, _params: Record<string, unknown>) {
+  void _params
   builderCalls.push({ table: `<rpc:${fn}>`, method: 'rpc' })
   if (fn === 'insert_inbound_message') {
     sawInboundRpc = true

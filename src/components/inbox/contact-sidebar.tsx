@@ -5,14 +5,12 @@ import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { usePlatformContext } from "@/hooks/use-platform-context";
-import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag, LeadAttribution } from "@/types";
 import {
   Phone,
   Mail,
   Copy,
   Check,
-  User,
   Tag as TagIcon,
   DollarSign,
   StickyNote,

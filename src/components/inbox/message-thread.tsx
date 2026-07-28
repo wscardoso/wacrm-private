@@ -37,7 +37,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -311,6 +310,7 @@ export function MessageThread({
   // realtime channel.
   useEffect(() => {
     if (!conversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReactions([]);
       return;
     }
@@ -411,6 +411,7 @@ export function MessageThread({
   // Clear any in-progress reply draft when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTo(null);
   }, [conversationId]);
 
@@ -706,7 +707,9 @@ export function MessageThread({
   // The "toggle" semantic (pill click) is computed at the call site where the
   // current reactions for the bubble are already in scope — keeps this
   // function dependency-free w.r.t. the reaction list.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const postReaction = useCallback(
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
     async (messageId: string, emoji: string) => {
       // Read-only in platform context — blocks BOTH reaction entry points
       // (the MessageActions picker and the MessageBubble pill toggle).

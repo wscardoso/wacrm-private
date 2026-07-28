@@ -5,7 +5,7 @@
  * - DLQ enqueue (webhook error handling)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
 // Test 1: fetchWithRetry — Exponential backoff
@@ -104,10 +104,6 @@ describe('Automation dedup (60s window)', () => {
   })
 
   it('should execute automation if no recent run', () => {
-    const automationId = 'auto-1'
-    const contactId = 'contact-1'
-    const triggerType = 'new_message_received'
-
     // Mock: no recent logs
     const recentLogs: unknown[] = []
 

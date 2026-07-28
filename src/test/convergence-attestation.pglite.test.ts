@@ -75,6 +75,7 @@ $$;
 
 function loadMigration(name: string): string {
   const dir = join(process.cwd(), 'supabase', 'migrations')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const file = require('node:fs')
     .readdirSync(dir)
     .find((f: string) => f.endsWith(name))
@@ -318,7 +319,7 @@ describe('validate_kid_destroyable / destroy_kid — CRITICAL SCENARIO 2: Attest
   })
 
   it('re-issuing against the now-current version makes the KID destroyable again', async () => {
-    const kid = 'STALE_VERSION_KID' // continues from the previous test — version is now 3
+    // continues from the previous test — version is now 3
 
     // The old attestation is immutable and cannot be overwritten in place —
     // re-issuing for a truly stale KID in production would require the

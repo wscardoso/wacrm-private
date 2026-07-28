@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadActivity, loadConversationsSeries, loadMetrics, loadPipelineDonut, loadResponseTime } from './queries'
 
 const EMPTY_LIST = { data: [], error: null }
-const EMPTY_COUNT = { data: null, error: null, count: 0 }
+
 
 beforeEach(() => {
   vi.useFakeTimers()
