@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
 import { listPlatformOperatorAccounts } from "@/lib/auth/platform-accounts";
 import { CreateWorkspaceDialog } from "@/components/workspaces/create-workspace-dialog";
+import { ActControlTower } from "@/components/platform-ops/act-control-tower";
 
 // P1c / Lot 2 — Platform Account Discovery page (server component).
 //
@@ -45,7 +45,7 @@ export default async function ActDiscoveryPage() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
+    <main className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-foreground">
@@ -58,27 +58,9 @@ export default async function ActDiscoveryPage() {
         <CreateWorkspaceDialog />
       </div>
 
-      {accounts.length === 0 ? (
-        <p className="mt-6 text-sm text-muted-foreground">
-          You are not assigned to any tenant yet.
-        </p>
-      ) : (
-        <ul className="mt-6 space-y-2">
-          {accounts.map((acc) => (
-            <li key={acc.account_id}>
-              <Link
-                href={`/act/${acc.account_id}/inbox`}
-                className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 text-sm transition-colors hover:border-primary/50"
-              >
-                <span className="font-medium text-foreground">{acc.name}</span>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                  {acc.access_role}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="mt-6">
+        <ActControlTower accounts={accounts} />
+      </div>
     </main>
   );
 }

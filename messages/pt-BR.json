@@ -840,5 +840,78 @@
   },
   "gated_button": {
     "tooltip": "Apenas leitura — seu cargo não pode {reason}"
+  },
+  "act": {
+    "tabs": {
+      "tenants": "Tenants",
+      "team": "Equipe"
+    },
+    "create_workspace_conflict": {
+      "hint": "Este CNPJ já está em uso por {name}.",
+      "go_to_tenant": "Ir para o tenant existente"
+    },
+    "summary": {
+      "tenants_supervised": "Tenants supervisionados",
+      "whatsapp_connected": "WhatsApp conectado",
+      "total_unread": "Não lidas",
+      "messages_today": "Mensagens hoje"
+    },
+    "tenant_card": {
+      "contacts": "Contatos",
+      "messages_today": "Mensagens hoje",
+      "unread": "Não lidas",
+      "last_message": "Última mensagem",
+      "last_message_never": "Nenhuma mensagem ainda",
+      "whatsapp_connected": "Conectado",
+      "whatsapp_pending": "Pendente",
+      "whatsapp_unconfigured": "Não configurado"
+    },
+    "empty_state": "Você ainda não está atribuído a nenhum tenant.",
+    "team": {
+      "title": "Equipe",
+      "description": "Gerencie operadores da plataforma e o acesso deles aos tenants.",
+      "invite_operator": "Convidar operador",
+      "column_operator": "Operador",
+      "column_role": "Cargo",
+      "column_status": "Status",
+      "column_tenants": "Tenants",
+      "column_actions": "Ações",
+      "status_active": "Ativo",
+      "status_revoked": "Revogado",
+      "role_admin": "Admin",
+      "role_operator": "Operador",
+      "manage_tenants": "Gerenciar tenants",
+      "revoke_access": "Revogar acesso",
+      "revoke_confirm_title": "Revogar acesso deste operador?",
+      "revoke_confirm_description": "{email} perderá acesso à plataforma imediatamente. Isso pode ser revertido concedendo o acesso novamente.",
+      "revoke_confirm_action": "Revogar",
+      "revoke_cancel": "Cancelar",
+      "no_operators": "Nenhum operador cadastrado ainda.",
+      "loading": "Carregando...",
+      "unauthorized": "Você precisa ser um admin ativo da plataforma para gerenciar a equipe.",
+      "assigned_tenants_none": "Nenhum tenant atribuído"
+    },
+    "invite_dialog": {
+      "title": "Convidar operador",
+      "description": "O usuário já precisa ter uma conta no sistema — este formulário não cria uma conta nova.",
+      "email_label": "E-mail",
+      "email_placeholder": "operador@empresa.com",
+      "email_required": "O e-mail é obrigatório.",
+      "role_label": "Cargo",
+      "role_operator": "Operador",
+      "role_admin": "Admin",
+      "submit": "Convidar",
+      "inviting": "Convidando...",
+      "cancel": "Cancelar"
+    },
+    "assign_dialog": {
+      "title": "Gerenciar tenants de {email}",
+      "description": "Atribua ou remova o acesso deste operador aos tenants que você supervisiona.",
+      "access_role_label": "Nível de acesso",
+      "assign": "Atribuir",
+      "unassign": "Remover",
+      "assigned_note": "Esta lista mostra apenas os tenants que você mesmo supervisiona — limitação conhecida caso outro admin provisione tenants de forma independente.",
+      "close": "Fechar"
+    }
   }
 }

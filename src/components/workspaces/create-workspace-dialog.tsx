@@ -18,9 +18,11 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { PlusIcon, TriangleAlert } from "lucide-react";
 
 import { createWorkspaceAction } from "@/app/act/actions";
+import type { CreateWorkspaceError } from "@/lib/workspaces/create-workspace";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,11 +39,19 @@ import { Label } from "@/components/ui/label";
 
 export function CreateWorkspaceDialog() {
   const router = useRouter();
+  const t = useTranslations("act.create_workspace_conflict");
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [cnpj, setCnpj] = React.useState("");
   const [ownerEmail, setOwnerEmail] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  // Populated ONLY on the CNPJ-conflict path, when the server-side
+  // lookup (platform_lookup_account_by_cnpj, migration 060) resolved
+  // which tenant already holds the CNPJ — lets us offer a direct link
+  // instead of a dead-end generic error. `error` above still carries
+  // the plain message so existing rendering keeps working even when
+  // this stays null (e.g. the lookup itself failed).
+  const [conflict, setConflict] = React.useState<CreateWorkspaceError | null>(null);
   const [pending, startTransition] = React.useTransition();
 
   // Reset transient form state whenever the dialog is dismissed so a
@@ -53,6 +63,7 @@ export function CreateWorkspaceDialog() {
       setCnpj("");
       setOwnerEmail("");
       setError(null);
+      setConflict(null);
     }
   }
 
@@ -72,6 +83,7 @@ export function CreateWorkspaceDialog() {
     }
 
     setError(null);
+    setConflict(null);
     startTransition(async () => {
       const result = await createWorkspaceAction({
         name,
@@ -90,7 +102,15 @@ export function CreateWorkspaceDialog() {
 
       // Preserve typed values; surface the safe, typed error message.
       setError(result.error.message);
+      if (result.error.field === "cnpj" && result.error.conflictAccountId) {
+        setConflict(result.error);
+      }
     });
+  }
+
+  function goToConflictingTenant() {
+    if (!conflict?.conflictAccountId) return;
+    router.push(`/act/${conflict.conflictAccountId}/inbox`);
   }
 
   const errorId = "create-workspace-error";
@@ -122,7 +142,22 @@ export function CreateWorkspaceDialog() {
                 aria-live="polite"
               >
                 <TriangleAlert />
-                <AlertDescription>{error}</AlertDescription>
+                <AlertDescription>
+                  <p>{error}</p>
+                  {conflict?.conflictAccountId && conflict.conflictAccountName && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span>{t("hint", { name: conflict.conflictAccountName })}</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={goToConflictingTenant}
+                      >
+                        {t("go_to_tenant")}
+                      </Button>
+                    </div>
+                  )}
+                </AlertDescription>
               </Alert>
             )}
 

@@ -20,6 +20,13 @@ const VALID_CNPJ_DIGITS_2 = "11444777000161";
 interface FakeOpts {
   user?: { id: string } | null;
   rpc?: { data: unknown; error: PostgrestError | null };
+  /**
+   * Per-RPC-name dispatcher — used when a flow calls more than one RPC
+   * (e.g. create_platform_workspace's 23505 path now follows up with
+   * platform_lookup_account_by_cnpj). Takes precedence over `rpc` when
+   * provided; `rpc` alone still works for every existing single-RPC test.
+   */
+  rpcImpl?: (name: string, params: Record<string, unknown>) => { data: unknown; error: PostgrestError | null };
 }
 
 function pgError(code: string, message = "boom"): PostgrestError {
@@ -27,8 +34,8 @@ function pgError(code: string, message = "boom"): PostgrestError {
 }
 
 function fakeClient(opts: FakeOpts) {
-  const rpc = vi.fn().mockResolvedValue(
-    opts.rpc ?? { data: null, error: null },
+  const rpc = vi.fn(async (name: string, params: Record<string, unknown>) =>
+    opts.rpcImpl ? opts.rpcImpl(name, params) : (opts.rpc ?? { data: null, error: null }),
   );
   const getUser = vi.fn().mockResolvedValue({
     data: { user: opts.user === undefined ? { id: "admin-1" } : opts.user },
@@ -423,5 +430,119 @@ describe("createPlatformWorkspace", () => {
       expect(result.error.message).toBe("Owner email is required.");
     }
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------
+  // CNPJ-conflict courtesy lookup (migration 060,
+  // platform_lookup_account_by_cnpj) — additive follow-up only after
+  // a real 23505 from create_platform_workspace(). That RPC itself is
+  // NOT modified: these tests assert the lookup is a second, separate
+  // rpc() call, never folded into the first.
+  // ------------------------------------------------------------
+
+  it("on CNPJ conflict, follows up with platform_lookup_account_by_cnpj and attaches the existing tenant", async () => {
+    const { client, rpc } = fakeClient({
+      rpcImpl: (name) => {
+        if (name === "create_platform_workspace") {
+          return { data: null, error: pgError("23505", "duplicate key value violates unique constraint") };
+        }
+        if (name === "platform_lookup_account_by_cnpj") {
+          return { data: { account_id: "acc-existing", name: "Acme Existing" }, error: null };
+        }
+        throw new Error(`unexpected rpc: ${name}`);
+      },
+    });
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
+      client,
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: "conflict",
+        field: "cnpj",
+        message: "A workspace with this CNPJ already exists.",
+        conflictAccountId: "acc-existing",
+        conflictAccountName: "Acme Existing",
+      },
+    });
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenNthCalledWith(2, "platform_lookup_account_by_cnpj", { p_cnpj: VALID_CNPJ_DIGITS });
+  });
+
+  it("on CNPJ conflict, a failed lookup leaves the plain conflict error in place (never masked)", async () => {
+    const { client } = fakeClient({
+      rpcImpl: (name) => {
+        if (name === "create_platform_workspace") {
+          return { data: null, error: pgError("23505", "duplicate key value violates unique constraint") };
+        }
+        if (name === "platform_lookup_account_by_cnpj") {
+          return { data: null, error: pgError("42501", "This action requires an active platform admin") };
+        }
+        throw new Error(`unexpected rpc: ${name}`);
+      },
+    });
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
+      client,
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: { code: "conflict", field: "cnpj", message: "A workspace with this CNPJ already exists." },
+    });
+  });
+
+  it("on CNPJ conflict, a NULL lookup result (no conflict found — a race) leaves the plain conflict error in place", async () => {
+    const { client } = fakeClient({
+      rpcImpl: (name) => {
+        if (name === "create_platform_workspace") {
+          return { data: null, error: pgError("23505", "duplicate key value violates unique constraint") };
+        }
+        if (name === "platform_lookup_account_by_cnpj") {
+          return { data: null, error: null };
+        }
+        throw new Error(`unexpected rpc: ${name}`);
+      },
+    });
+
+    const result = await createPlatformWorkspace(
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
+      client,
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: { code: "conflict", field: "cnpj", message: "A workspace with this CNPJ already exists." },
+    });
+  });
+
+  it("does not attempt the CNPJ lookup for non-conflict errors (e.g. unauthorized)", async () => {
+    const { client, rpc } = fakeClient({
+      rpc: { data: null, error: pgError("42501", "This action requires an active platform admin") },
+    });
+
+    await createPlatformWorkspace(
+      { name: "Acme", cnpj: VALID_CNPJ_DIGITS, ownerEmail: OWNER_EMAIL },
+      client,
+    );
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith("create_platform_workspace", expect.anything());
+  });
+
+  it("does not attempt the CNPJ lookup when the conflicting workspace had no CNPJ supplied (defensive — should be unreachable)", async () => {
+    const { client, rpc } = fakeClient({
+      rpc: { data: null, error: pgError("23505", "duplicate key value violates unique constraint") },
+    });
+
+    // No cnpj supplied at all — the 23505 branch requires validated.value.cnpj
+    // to be truthy before attempting the lookup.
+    await createPlatformWorkspace({ name: "Acme", ownerEmail: OWNER_EMAIL }, client);
+
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });

@@ -840,5 +840,78 @@
   },
   "gated_button": {
     "tooltip": "Read-only — your role can't {reason}"
+  },
+  "act": {
+    "tabs": {
+      "tenants": "Tenants",
+      "team": "Team"
+    },
+    "create_workspace_conflict": {
+      "hint": "This CNPJ is already used by {name}.",
+      "go_to_tenant": "Go to existing tenant"
+    },
+    "summary": {
+      "tenants_supervised": "Supervised tenants",
+      "whatsapp_connected": "WhatsApp connected",
+      "total_unread": "Unread",
+      "messages_today": "Messages today"
+    },
+    "tenant_card": {
+      "contacts": "Contacts",
+      "messages_today": "Messages today",
+      "unread": "Unread",
+      "last_message": "Last message",
+      "last_message_never": "No messages yet",
+      "whatsapp_connected": "Connected",
+      "whatsapp_pending": "Pending",
+      "whatsapp_unconfigured": "Unconfigured"
+    },
+    "empty_state": "You are not assigned to any tenant yet.",
+    "team": {
+      "title": "Team",
+      "description": "Manage platform operators and their access to tenants.",
+      "invite_operator": "Invite operator",
+      "column_operator": "Operator",
+      "column_role": "Role",
+      "column_status": "Status",
+      "column_tenants": "Tenants",
+      "column_actions": "Actions",
+      "status_active": "Active",
+      "status_revoked": "Revoked",
+      "role_admin": "Admin",
+      "role_operator": "Operator",
+      "manage_tenants": "Manage tenants",
+      "revoke_access": "Revoke access",
+      "revoke_confirm_title": "Revoke this operator's access?",
+      "revoke_confirm_description": "{email} will immediately lose access to the platform. This can be reverted by granting access again.",
+      "revoke_confirm_action": "Revoke",
+      "revoke_cancel": "Cancel",
+      "no_operators": "No operators yet.",
+      "loading": "Loading...",
+      "unauthorized": "You need to be an active platform admin to manage the team.",
+      "assigned_tenants_none": "No tenants assigned"
+    },
+    "invite_dialog": {
+      "title": "Invite operator",
+      "description": "The user must already have an account in the system — this form does not create a new one.",
+      "email_label": "Email",
+      "email_placeholder": "operator@company.com",
+      "email_required": "Email is required.",
+      "role_label": "Role",
+      "role_operator": "Operator",
+      "role_admin": "Admin",
+      "submit": "Invite",
+      "inviting": "Inviting...",
+      "cancel": "Cancel"
+    },
+    "assign_dialog": {
+      "title": "Manage {email}'s tenants",
+      "description": "Assign or remove this operator's access to the tenants you supervise.",
+      "access_role_label": "Access level",
+      "assign": "Assign",
+      "unassign": "Remove",
+      "assigned_note": "This list shows only the tenants you yourself supervise — a known limitation if another admin provisions tenants independently.",
+      "close": "Close"
+    }
   }
 }

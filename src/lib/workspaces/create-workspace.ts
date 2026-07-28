@@ -43,6 +43,18 @@ export interface CreateWorkspaceError {
   message: string;
   /** Which input field caused a validation/conflict error, when applicable. */
   field?: "name" | "cnpj" | "ownerEmail";
+  /**
+   * Populated ONLY for the CNPJ-conflict case (field === "cnpj"), when
+   * the follow-up platform_lookup_account_by_cnpj() lookup (migration
+   * 060) succeeds in resolving which existing tenant holds the CNPJ.
+   * Lets the UI offer "go to the existing tenant" instead of a dead-end
+   * generic error. If the lookup itself fails for any reason, this is
+   * left undefined and the UI falls back to the plain error message —
+   * a failed courtesy lookup must never mask or replace the original
+   * conflict error.
+   */
+  conflictAccountId?: string;
+  conflictAccountName?: string;
 }
 
 export type CreateWorkspaceResult =
@@ -295,7 +307,28 @@ export async function createPlatformWorkspace(
   });
 
   if (error) {
-    return { success: false, error: translateRpcError(error) };
+    const translated = translateRpcError(error);
+    if (translated.code === "conflict" && translated.field === "cnpj" && validated.value.cnpj) {
+      // Courtesy follow-up only — create_platform_workspace() (042/043)
+      // is NOT modified; this is an ADDITIVE lookup (migration 060) run
+      // after the fact to let the UI offer "go to the existing tenant".
+      // A failure here must never replace or mask the original conflict
+      // error, so any problem just leaves the plain message in place.
+      const { data: conflict, error: lookupError } = await supabase.rpc(
+        "platform_lookup_account_by_cnpj",
+        { p_cnpj: validated.value.cnpj },
+      );
+      if (!lookupError && conflict && typeof conflict === "object") {
+        const row = conflict as { account_id?: string; name?: string };
+        if (row.account_id && row.name) {
+          return {
+            success: false,
+            error: { ...translated, conflictAccountId: row.account_id, conflictAccountName: row.name },
+          };
+        }
+      }
+    }
+    return { success: false, error: translated };
   }
 
   if (typeof data !== "string" || data === "") {
