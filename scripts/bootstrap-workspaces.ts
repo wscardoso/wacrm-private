@@ -19,22 +19,20 @@ const WORKSPACES: WorkspaceDef[] = [
     name: "Oral Unic Contagem",
     cnpj: "42.689.093/0001-53",
     ownerName: "Izabela Caroline Resende",
-    ownerEmail: "administrativo@oraluniccontagem.com.br",
+    ownerEmail: "administracao@oraluniccontagem.com.br",
   },
   {
     name: "Oral Unic Almirante Tamandaré",
     cnpj: "43.615.570/0001-07",
     ownerName: "Carla Elize Wauczinski",
-    ownerEmail: "administrativo@oralunicalmirantetamandare.com.br",
+    ownerEmail: "administracao@oralunicalmirantetamandare.com.br",
   },
-  // Atomo — dados pendentes (2026-07-27). Preencher CNPJ, nome e
-  // e-mail do responsável e descomentar quando disponível.
-  // {
-  //   name: "Atomo",
-  //   cnpj: "00.000.000/0000-00",
-  //   ownerName: "",
-  //   ownerEmail: "",
-  // },
+  {
+    name: "Atomo Soluções",
+    cnpj: "49.556.450/0001-54",
+    ownerName: "Paulo Barboza",
+    ownerEmail: "atendimento@atomosolucoes.com",
+  },
 ];
 
 function normalizeCnpj(raw: string): string {
