@@ -29,11 +29,13 @@ O webhook secret anterior foi exposto em commits históricos do repositório (`3
 - **Script:** `scripts/rotate-zapi-webhook.mjs` (one-off, operacional)
 - **Connection ID:** `a3f7e05a-59f4-4727-b1b1-9843cfed4181`
 - **Account ID:** `eefd83ef-b6b2-49a4-af4d-71fd21a95dcb`
-- **Workspace:** Atomo Soluções
+- **Workspace:** Digitall Force *(correção — ver seção 7; rótulo original "Atomo Soluções" estava errado)*
 - **Timestamp da rotação:** `2026-07-28T05:06:39.044Z`
 - **Novo hash SHA-256 persistido:** `eb1272ef4e1ffef196b985be2f50571c6909e326bd365dc35c9bb43572392278`
 
 O secret foi gerado via `crypto.randomBytes(32).toString('base64url')`. Apenas o hash SHA-256 foi persistido em `whatsapp_config.webhook_secret_hash`. O plaintext foi exibido uma única vez na saída padrão do script e nunca foi registrado em arquivo, banco ou log.
+
+> **Nota (2026-07-28, execução do Grupo B):** o plaintext acima se perdeu (não foi salvo em gerenciador de senhas). Uma segunda rotação foi executada pelo operador para o Cenário 1 do Grupo B: novo hash `d2d3caf0e2d1d992105b100d931ecf1fe0f93a69991dae9c3380aa56b749b9b3`, timestamp `2026-07-28T15:34:55.275Z`, mesma `connection_id`/`account_id`. O hash listado acima (`eb1272ef...`) está superado por este novo valor.
 
 ---
 
@@ -60,3 +62,15 @@ O secret foi gerado via `crypto.randomBytes(32).toString('base64url')`. Apenas o
 - [ ] Enviar mensagem de teste; confirmar 200 + inbound processing
 - [ ] Confirmar que URL antiga retorna 401
 - [ ] Confirmar descriptografia do token de acesso permanece íntegra
+
+---
+
+## 7. Correção de Rótulo — Workspace (2026-07-28)
+
+O rótulo **"Workspace: Atomo Soluções"** na seção 3 estava **incorreto**. Verificação cruzada:
+
+- `CHECKPOINT-FORCECRM-OPERATIONAL-GATE-RESULT.md` (seção "SEEDED ACCOUNTS") lista o `account_id` real de Atomo Soluções como `1e3aa534-b56d-4037-b0d7-aa0e27919466` — diferente do `eefd83ef-b6b2-49a4-af4d-71fd21a95dcb` rotacionado aqui.
+- O mesmo documento registra, para `account_id eefd83ef-...`, um `Decrypted Token` iniciando em `E3BE09CE2BF95D2...`, que é idêntico ao "Token da instância" da instância Z-API **Digitall Force Labs** (confirmado visualmente no painel Z-API pelo operador).
+- O painel administrativo "Supervised tenants" do ForceCRM confirma: dos 4 tenants existentes (Oral Unic Contagem, Oral Unic Almirante Tamandaré, Atomo Soluções, Digitall Force), **apenas Digitall Force está "Conectado"** — os outros três, incluindo Atomo Soluções, estão "Não configurado".
+
+**Conclusão:** `account_id eefd83ef-b6b2-49a4-af4d-71fd21a95dcb` pertence ao workspace **Digitall Force**, não Atomo Soluções. O rótulo errado se originou de uma sessão anterior que não cruzou o `account_id` contra a lista de contas seedadas antes de nomeá-lo. Nenhuma persistência ou configuração incorreta chegou a ser salva por causa desse erro — foi detectado e corrigido antes de qualquer ação no workspace errado.
