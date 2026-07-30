@@ -24,14 +24,14 @@ O `MASTER-ROADMAP.md` v1.3 (atualizado ontem, 2026-07-28, para refletir E7) most
 | **E4a** | Outbound Delivery Integrity | **CONCLUÍDO** | commit `ef7e4f9`; `ODI-001` publicado (`8057b22`); `delivery/settlement.ts` implementa intent→settle com `idempotency_key` |
 | **E4b** | Async Reliability (DLQ/retry) | **CONCLUÍDO** | `docs/checkpoints/E4b-final-checkpoint.md`, commit final `60b0565`; 691 testes verdes; `ADR-E4B-001/002/003`, `ADR-SYS-001`, `ARO-001` fechados |
 | **E5** | Workspace Commercial Identity | **CONCLUÍDO** | commit `485b1e6`; `docs/architecture/E5-workspace-commercial-identity.md` |
-| **E6** | Attribution End-to-End (completo) | **PARCIAL** | Ver §4. 1 de 4 entregáveis fechado (enriquecimento); ADR-ATTR-001 segue "Proposto"; UI de relatório ausente; CAPI inexistente (não-objetivo declarado de E6.0) |
-| **E6.0** | Enrichment via Marketing API (sub-escopo de E6) | **IMPLEMENTADO, não formalmente fechado** | commit `2c4daef` (+2387 linhas: migrations 055/056, `src/lib/enrichment/` com 6 módulos, 2 rotas, `ADR-ATTR-002`); 57 testes verdes incluindo isolamento D-8 multi-tenant. **Lacuna é documental**: doc ainda diz "Rascunho para Gate arquitetural", baseline desatualizado (`485b1e6`, o commit *anterior* à implementação); sem checkpoint de encerramento |
+| **E6** | Attribution End-to-End → **Infraestrutura** (reescopado) | **CONCLUÍDO (2026-07-30)** | Ver §4 e addendum §9. ADR-ATTR-001/002 Aceitos; enriquecimento fechado; UI de relatório reescopada para E12; CAPI fora do MVP |
+| **E6.0** | Enrichment via Marketing API (sub-escopo de E6) | **CONCLUÍDO (2026-07-29)** | commit `2c4daef` (+2387 linhas: migrations 055/056, `src/lib/enrichment/` com 6 módulos, 2 rotas, `ADR-ATTR-002`); 57 testes verdes incluindo isolamento D-8 multi-tenant. Fechado em `docs/checkpoints/E6.0-final-checkpoint.md` |
 | **E7** | Encryption Key Versioning | **CONCLUÍDO** | 5 fases, `docs/checkpoints/E7-final-checkpoint.md`, `ADR-CRYPTO-001`/`ADR-E7-001` congelados |
 | **E8** | Integridade Referencial (C16/C19/C21) | **NÃO INICIADO** | Sem commits, sem migrations correspondentes |
 | **E9** | Platform Operations UI | **CONCLUÍDO** | commit `2a2da71` "Platform Operations UI — control tower grid + team management" |
 | **E10** | ADR-AUT-001 + Convergência Automations×Flows | **NÃO INICIADO** | Sem `ADR-AUT-001`, sem commits |
 | **E11** | Public API v1 Resources | **NÃO INICIADO** | Só `GET /api/v1/me` (scaffold pré-existente) |
-| **E12** | Reporting & Export | **NÃO INICIADO** | Bloqueado por E6 incompleto (roadmap §8.2) |
+| **E12** | Reporting & Export | **NÃO INICIADO, desbloqueado** | E6 concluído em 2026-07-30; E12 herda a UI de relatório de attribution (ver addendum §9). Não iniciado por prioridade, não por dependência |
 | **E13** | Observabilidade | **NÃO INICIADO** | Sem correlation IDs, sem logs estruturados além de `console.error` |
 
 ---
@@ -89,7 +89,7 @@ E0 ✅ → E1 ✅ → E2.0 ✅ → E2.1 ❌ (PRÓXIMO)
                     │
                     └──────────────→ E4a ✅ → E4b ✅
 E1 ✅ → E3 ❌ (bloqueia E8, E11, E13)
-E6 🟡 (parcial) → E12 ❌ (continua bloqueado)
+E6 ✅ (infraestrutura, concluído 2026-07-30) → E12 ❌ (desbloqueado, não iniciado)
 E5 ✅, E7 ✅, E9 ✅ — paralelos, já concluídos
 E10, E11, E13 — sem bloqueio técnico, apenas não priorizados ainda
 ```
@@ -121,3 +121,15 @@ Confirmados como realmente abertos, sem mudança: **E2.1, E3, E8, E10, E11, E12,
 **Alternativa de menor esforço, se preferir ganho rápido antes:** fechar E6.0 formalmente (promover `E6.0-attribution-enrichment-marketing-api.md` de "Rascunho" para aprovado, criar `E6.0-final-checkpoint.md`) — é trabalho documental puro sobre código já pronto e testado, sem decisão arquitetural nova. Não é um épico de código, mas resolve uma dívida de rastreabilidade real.
 
 Nenhuma decisão foi tomada nesta auditoria — cabe ao Weyner escolher entre iniciar E2.1 ou fechar a lacuna documental de E6.0 primeiro.
+
+---
+
+## 9. Addendum (2026-07-30) — dívidas de governança fechadas
+
+Este addendum não reabre a auditoria original (§1–§8 permanecem como registro histórico do estado em `26e5d39`). Registra o que mudou desde então, por decisão explícita de Weyner:
+
+1. **`ADR-ATTR-001` e `ADR-ATTR-002` promovidos a Aceito** (2026-07-29) — evidência verificada contra código real (migration `055`, `credential-resolver.ts`), sem reabertura de nenhuma decisão de conteúdo. Ver §11 de `ADR-ATTR-001` e §14 de `ADR-ATTR-002`.
+2. **`E6.0` fechado formalmente** (2026-07-29) — `docs/architecture/E6.0-attribution-enrichment-marketing-api.md` promovido de "Rascunho para Gate arquitetural" para "Implementado e fechado"; checkpoint dedicado em `docs/checkpoints/E6.0-final-checkpoint.md`.
+3. **`E6` (épica completa) reescopada e fechada como infraestrutura** (2026-07-30) — a auditoria original (§4) já havia identificado que a UI de relatório de attribution existe só como backend (RPC `get_enrichment_report`, rota `/api/enrichment/report`, zero consumidores de front-end) e que o CAPI é não-objetivo declarado de E6.0. Weyner decidiu: UI de relatório vira entregável natural de `E12` (que já existia como "Reporting & Export" e estava bloqueado por E6 sem necessidade real — inversão de dependência corrigida); CAPI confirmado fora do MVP. Checkpoint de fechamento da épica completa em `docs/checkpoints/CHECKPOINT-E6-FINAL.md`.
+
+`MASTER-ROADMAP.md` atualizado para v1.5 refletindo os três pontos acima.

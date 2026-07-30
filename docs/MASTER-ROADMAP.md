@@ -1,6 +1,6 @@
 # WACRM/FORCECRM — MASTER ROADMAP
 
-**Versão:** v1.4 · **Snapshot auditado:** HEAD `26e5d39`, working tree limpa
+**Versão:** v1.5 · **Snapshot auditado:** HEAD `26e5d39` (fechamentos documentais de 2026-07-29/30 aplicados sobre este snapshot; nenhuma alteração de código considerada)
 **Fonte de verdade do escopo restante.** Documentos normativos derivados: `docs/adr/ADR-MSG-001.md`, `docs/architecture/EIS-001-external-identity-storage.md`, `docs/architecture/DN-001-eis001-implementation-preconditions.md`, `docs/architecture/DLB-001-delivery-layer-boundary.md`, `docs/architecture/ODI-001-outbound-delivery-integrity.md`, `docs/architecture/ARO-001-async-recovery-orchestration.md`, `docs/adr/ADR-E4B-001-retry-lifecycle-semantics.md`, `docs/adr/ADR-E4B-002-ambiguous-delivery-recovery.md`, `docs/adr/ADR-E4B-003-provider-capability-contract.md`, `docs/adr/ADR-CRYPTO-001.md`, `docs/adr/ADR-E7-001-encryption-key-versioning.md`, `docs/implementation/IMP-CRYPTO-001.md`, `docs/implementation/IMP-E7-001-encryption-key-versioning.md`, `docs/architecture/E5-workspace-commercial-identity.md`, `docs/architecture/E6.0-attribution-enrichment-marketing-api.md`, `docs/adr/ADR-ATTR-001-lead-attribution.md`, `docs/adr/ADR-ATTR-002-per-tenant-ad-account-credentials.md`. Reconciliação completa em `docs/checkpoints/CHECKPOINT-ROADMAP-RECONCILIATION.md`.
 
 **Legenda de confiança:** `[C]` confirmado no código · `[I]` inferido · `[P]` planejado em doc · `[R]` recomendação · `[?]` desconhecido.
@@ -11,6 +11,7 @@
 - **v1.2** — persistência como artefato versionado; cadeia de precedência dura `E1 → E2.0 → E2.1` registrada conforme `DN-001`; §8 e §9 atualizados; §16 remete aos contratos derivados em vez de duplicá-los.
 - **v1.3** (2026-07-29) — snapshot avançado de `c8f1585` para `26e5d39` (40 commits). **E7 (Encryption Key Versioning) concluído** — as 5 fases do `IMP-E7-001` fechadas e mergeadas (`ADR-CRYPTO-001` v2.0 e `ADR-E7-001` RC1.1 congelados); atualizado em §6, §7, §8, §9, §10, §13. Registrada, como nota operacional (não como épico novo), a sequência Sprint C (bug real do badge de sessão corrigido) → rotação de webhook secret Z-API (2×, a primeira invalidada por perda do plaintext) → Gate Operacional do Grupo B fechado `APROVADO COM RESSALVAS` em 2026-07-28 — ver `docs/checkpoints/CHECKPOINT-FORCECRM-GROUP-B-RESULT.md`. Nenhum desses itens altera os épicos E0–E13 ou a cadeia de precedência; são validação operacional e correção de bug pontual, não escopo restante de messaging.
 - **v1.4** (2026-07-29) — **reconciliação completa contra o repositório real** (`docs/checkpoints/CHECKPOINT-ROADMAP-RECONCILIATION.md`), motivada por E1 ter sido encontrado já concluído quando a v1.3 assumia que era o próximo item da fila. Achado: **E1, E2.0, E4a, E4b, E5, E9 estavam concluídos e não refletidos**; **E6.0 está implementado e testado (57 testes verdes, isolamento D-8), mas nunca formalmente fechado** (doc em "Rascunho", sem checkpoint); **E2.1 confirmado como único elo realmente aberto da cadeia dura `E1 → E2.0 → E2.1`** — verificado por duas auditorias independentes. `ADR-ATTR-001` e `ADR-ATTR-002` seguem "Proposto" apesar de código consumidor em produção — dívida de governança registrada, não bloqueante. **Decisão registrada: E2.1 é a próxima épica oficial**, aprovada por Weyner em 2026-07-29. Atualizado em §1, §5, §6, §7, §8, §9, §10, §13.
+- **v1.5** (2026-07-30) — **duas dívidas de governança fechadas.** `ADR-ATTR-001` e `ADR-ATTR-002` promovidos a **Aceito** (evidência contra código real, sem reabertura de decisão). `E6.0` fechado formalmente (`docs/checkpoints/E6.0-final-checkpoint.md`). **E6 reescopado e fechado como infraestrutura**: UI de relatório de attribution movida para `E12` (decisão de Weyner — o backend está pronto e testado, a tela é trabalho de produto, e mantê-la em E6 bloqueava E12 sem necessidade); CAPI confirmado fora do MVP. Ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`. Atualizado em §1, §6, §7, §8, §9.
 
 ---
 
@@ -26,9 +27,9 @@ O projeto está num estado assimétrico:
 
 **R16 — corrigido.** `zapi.ts` agora declara `messageId` como identidade primária e grava `wamid`/`provider_message_id` como `ExternalIdentity` via `message_external_ids` (migration 047). **Ressalva:** essas identidades são gravadas mas hoje não têm consumidor — o único parser de status existente (rota Meta) resolve por `message_id` legado, não pelo conjunto de identidades. E2.1 é o consumidor que falta.
 
-**Cadeia de precedência dura, registrada em `DN-001`:** `E1 ✅ → E2.0 ✅ → E2.1 ❌ (próxima épica oficial)`. E4a/E4b não dependiam de E2.1 (ramos paralelos a partir de E2.0) e por isso puderam ser concluídos antes.
+**Cadeia de precedência dura, registrada em `DN-001`:** `E1 ✅ → E2.0 ✅ → E2.1 🟡 (Fase 0 concluída — contrato aprovado; Fase 1 é a próxima entrega)`. E4a/E4b não dependiam de E2.1 (ramos paralelos a partir de E2.0) e por isso puderam ser concluídos antes. Detalhe do estado de E2.1 em §17.
 
-**Risco de fundo, ainda aberto:** o North Star (atribuição CTWA) tem a captura em produção e o enriquecimento (E6.0) implementado e testado, mas `ADR-ATTR-001` e `ADR-ATTR-002` seguem "Proposto" — nunca formalmente congelados apesar do código consumidor já rodar. Ver D3 em §15 e `CHECKPOINT-ROADMAP-RECONCILIATION.md` §4.
+**Risco de fundo, resolvido (2026-07-30):** o North Star (atribuição CTWA) tem a captura em produção, o enriquecimento (E6.0) implementado e testado, e `ADR-ATTR-001`/`ADR-ATTR-002` agora **Aceitos** — fechamento em 2026-07-29 (ver §11 de `ADR-ATTR-001` e §14 de `ADR-ATTR-002`). E6 fechado como infraestrutura em 2026-07-30, ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`.
 
 ---
 
@@ -164,18 +165,18 @@ IDENTIDADE DE MENSAGEM (estado real)
 | ~~Provider boundary~~ | `getProvider` em send/broadcast/engines/react | — | ADR-MSG-001 | **CONCLUÍDO — E1** |
 | ~~Fronteira de criação de saída~~ | dono único (`delivery/`) | — | ADR-MSG-001 D6 · DLB-001 | **CONCLUÍDO — E1** |
 | ~~Message identity~~ | `ExternalIdentity` + `message_external_ids` (047), R16 corrigido | consumidor (E2.1) | E1 · EIS-001 | **CONCLUÍDO — E2.0** |
-| Status não-Meta | — | pipeline de status + rota | E2.0 ✅ | **P0 — PRÓXIMA (E2.1)** |
+| Status não-Meta | contrato canônico (`ADR-MSG-STATUS-001`, Fase 0) | implementação: parsers, escada e rota (Fase 1) | E2.0 ✅ | **P0 — Fase 0 concluída; Fase 1 é a próxima entrega (E2.1)** |
 | ~~Outbound integrity~~ | intent→settle, `idempotency_key` | — | E1 | **CONCLUÍDO — E4a** |
 | ~~Reliability async~~ | retry ledger, scheduler, orphan sweeper | — | E4a | **CONCLUÍDO — E4b** |
 | Modelo `messages` | RLS via JOIN | `account_id`, `connection_id` | E2.0 | P1 |
 | Multi-conexão | UNIQUE(account_id) | tabela `connections` | E2.0 | P1 |
 | ~~Encryption~~ | ~~chave global~~ | ~~`key_version` + re-encrypt~~ | — | **CONCLUÍDO — E7, ver §7** |
 | ~~Workspace identity~~ | 3 campos + RPC + UI (E5) | — | — | **CONCLUÍDO** |
-| Attribution | captura + tabela + enriquecimento (E6.0, não promovido) | congelar ADR-ATTR-001, UI de relatório, CAPI | E1 ✅ | **P1 — parcial** |
+| Attribution | captura + tabela + enriquecimento + ADR-ATTR-001/002 (Aceitos) | CAPI (fora do MVP, P3/P4) | E1 ✅ | **CONCLUÍDO — infraestrutura (E6)** |
 | ~~Platform ops UI~~ | telas (E9) | — | — | **CONCLUÍDO** |
 | Automations × Flows | ambos | decisão de convergência | ADR-AUT-001 | P2 |
 | Public API | `/me` | recursos + enforcement | E3 | P2 |
-| Reporting | dashboard | relatórios + export | E6 | P2 |
+| Reporting | dashboard | relatórios + export + UI de attribution (herdada de E6, reescopo 2026-07-30) | E6 ✅ | P2 |
 | FKs / integridade | — | C16, C19, C20, C21 | E3 | P2 |
 | Testes | ~60 arquivos | cross-tenant, matriz provider, retry | — | P1 |
 | Observabilidade | `console.error` | correlation IDs, logs estruturados | E3 | P2 |
@@ -191,19 +192,19 @@ IDENTIDADE DE MENSAGEM (estado real)
 | **E0** | ADR Messaging Core | Congelar o modelo antes do código | `docs/adr/ADR-MSG-001.md` — **Aceito (2026-07-21)** | **CONCLUÍDO** |
 | **E1** | Delivery Layer & Provider Boundary | Fronteira única de envio e de criação de mensagem de saída | `docs/architecture/DLB-001-delivery-layer-boundary.md` | **CONCLUÍDO** — commits `78bd7cd`, `b0f5988`; zero import direto de `meta-api` fora de `providers/`/`delivery/` |
 | **E2.0** | Message Identity Correction | Conjunto de identidades; correção de R16 | `docs/architecture/EIS-001-external-identity-storage.md` | **CONCLUÍDO, subutilizado** — `zapi.ts` corrigido, migration 047; identidades gravadas sem consumidor até E2.1 fechar |
-| **E2.1** | Status Canônico | Ciclo de vida da mensagem por resolução de identidade | a escrever | **NÃO INICIADO — PRÓXIMA ÉPICA OFICIAL (aprovado 2026-07-29)** |
+| **E2.1** | Status Canônico | Ciclo de vida da mensagem por resolução de identidade | `docs/adr/ADR-MSG-STATUS-001.md` + `docs/checkpoints/CHECKPOINT-E2.1-STATUS-CANONICAL.md` | **FASE 0 CONCLUÍDA** — contrato escrito e aprovado no gate de 2026-07-29 (`CHECKPOINT-E2.1` §9); Fase 1 (implementação) é a próxima entrega, sujeita às pré-condições de §17 |
 | **E3** | Connections | Multi-conexão por workspace | a escrever | P1 — não iniciado |
 | **E4a** | Outbound Delivery Integrity | persist-before-send, idempotency-key, estado `failed` | `docs/architecture/ODI-001-outbound-delivery-integrity.md` | **CONCLUÍDO** — commit `ef7e4f9` |
 | **E4b** | Async Reliability | DLQ wiring + reprocesso | `ADR-E4B-001/002/003`, `ARO-001` | **CONCLUÍDO** — `docs/checkpoints/E4b-final-checkpoint.md`, commit `60b0565`, 691 testes verdes |
 | **E5** | Workspace Commercial Identity | 3 campos + RPC + `/act/[accountId]/settings` | `docs/architecture/E5-workspace-commercial-identity.md` | **CONCLUÍDO** — commit `485b1e6` |
-| **E6** | Attribution End-to-End | Congelar ADR-ATTR-001, enriquecimento, UI, CAPI | `docs/architecture/E6.0-attribution-enrichment-marketing-api.md` | **PARCIAL** — 1/4 entregáveis fechado (enriquecimento); ADR não congelado; UI de relatório e CAPI ausentes |
-| **E6.0** | Enrichment via Marketing API (sub-escopo de E6) | Enriquecer `lead_attributions` via Graph API + relatório mínimo | idem, status "Rascunho para Gate" no doc | **IMPLEMENTADO, não fechado formalmente** — commit `2c4daef`, 57 testes verdes (incl. isolamento D-8); falta promoção do doc + checkpoint |
+| **E6** | Attribution — Infraestrutura (reescopado 2026-07-30) | Captura + enriquecimento + ADR-ATTR-001/002 congelados | `docs/architecture/E6.0-attribution-enrichment-marketing-api.md`, `docs/checkpoints/CHECKPOINT-E6-FINAL.md` | **CONCLUÍDO** — UI de relatório reescopada para E12 (RPC `get_enrichment_report` e rota `/api/enrichment/report` já existem, zero consumidores de front-end); CAPI fora do MVP (P3/P4, decisão de Weyner 2026-07-29) |
+| **E6.0** | Enrichment via Marketing API (sub-escopo de E6) | Enriquecer `lead_attributions` via Graph API + relatório mínimo | idem, status **Implementado e fechado** no doc | **CONCLUÍDO** — commit `2c4daef`, 57 testes verdes (incl. isolamento D-8); fechado em `docs/checkpoints/E6.0-final-checkpoint.md` (2026-07-29) |
 | **E7** | Encryption Key Versioning | `key_version` + re-encrypt | `ADR-E7-001` + `IMP-E7-001` | **CONCLUÍDO (2026-07-27)** |
 | **E8** | Integridade Referencial | C16, C19, C21 | a escrever | P2 — não iniciado |
 | **E9** | Platform Operations UI | grant/revoke, assign, audit viewer, suspensão | a escrever | **CONCLUÍDO** — commit `2a2da71` |
 | **E10** | ADR-AUT-001 + Convergência | Automations × Flows | a escrever | P2 — não iniciado |
 | **E11** | Public API v1 Resources | Endpoints com escopos enforced | a escrever | P2 — não iniciado |
-| **E12** | Reporting & Export | Relatórios e export | a escrever | P2 — não iniciado, bloqueado por E6 parcial |
+| **E12** | Reporting & Export | Relatórios e export, incluindo UI de relatório de attribution (herdada de E6, reescopo 2026-07-30) | a escrever | P2 — não iniciado, **desbloqueado** (E6 concluído em 2026-07-30) |
 | **E13** | Observabilidade | Correlation IDs, logs estruturados | a escrever | P2 — não iniciado |
 
 ---
@@ -237,8 +238,8 @@ IDENTIDADE DE MENSAGEM (estado real)
         │
    ┌────┼──────┬──────────┬──────────┐
    ↓    ↓      ↓          ↓          ↓
-  E8   E11    E13        E10        (E6 já liberado por E1)
-                                     E6 Attribution ──→ E12 Reporting
+  E8   E11    E13        E10        E6 ✅ CONCLUÍDO (infraestrutura, 2026-07-30)
+                                     E12 Reporting (herda UI de attribution de E6)
 ```
 
 ### 8.1 Cadeia de precedência dura
@@ -257,7 +258,7 @@ Nenhum elo admite inversão. Os fundamentos são distintos e ambos normativos:
 
 - **E0 bloqueia E1, E2.0, E2.1, E3.**
 - **E3 bloqueia E8, E11, E13** — todos precisam de `messages.account_id`.
-- **E6 bloqueia E12.**
+- ~~E6 bloqueia E12~~ — **removido 2026-07-30**: E6 concluído como infraestrutura; UI de relatório reescopada para E12, que agora está desbloqueado (não iniciado por prioridade, não por dependência).
 
 ### 8.3 Não é bloqueio
 
@@ -279,7 +280,7 @@ E5, E7 e E9 não dependem de messaging e podem avançar em paralelo a E0/E1.
 
 **FASE 3 — Modelo de dados.** E3 → E8. Só depois que boundary e identidade estão corretos. Risco máximo do roadmap; ensaio em cópia de produção e rollback escrito antes de começar.
 
-**FASE 4 — Produto.** E6 → E12, com E9 em paralelo. Validação: um lead de anúncio real rastreado do clique ao relatório. **Estado: E9 CONCLUÍDO (commit `2a2da71`). E6 PARCIAL — enriquecimento (E6.0) implementado e testado mas não fechado formalmente; ADR-ATTR-001/002 não congelados; UI de relatório e CAPI ausentes. E12 continua bloqueado.**
+**FASE 4 — Produto.** E6 → E12, com E9 em paralelo. Validação: um lead de anúncio real rastreado do clique ao relatório. **Estado (2026-07-30): E9 CONCLUÍDO (commit `2a2da71`). E6 CONCLUÍDO como infraestrutura — enriquecimento (E6.0) fechado, ADR-ATTR-001/002 Aceitos (ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`). UI de relatório reescopada para E12; CAPI fora do MVP. E12 desbloqueado, não iniciado — sem dependência pendente.**
 
 **FASE 5 — Maturidade.** E11, E13, execução de E10.
 
@@ -388,11 +389,12 @@ Não requisitos até decisão explícita: billing/assinatura, notificações, ta
 |---|---|---|---|
 | **D1** | `Connection` como unidade vs. manter `whatsapp_config` | Estrutural, bloqueia tudo. Sustentada após revisão adversarial | Arquiteto + Weyner |
 | **D2** | Automations e Flows convergem ou coexistem? | Dobra manutenção | Produto |
-| **D3** | ADR-ATTR-001: congelar ou revogar? Código implementado, ADR "Proposto" | North Star | **Weyner** |
 | **D4** | Backfill do histórico `delivered` → `received`? | Consistência histórica | Arquiteto + data |
 | **D5** | Dois números no mesmo tenant → uma ou duas conversas? | Modelo de conversa | Produto |
 | **D6** | Providers não-oficiais suportam equivalente a template? | Escopo de E1 | Pesquisa |
 | **D7** | Pipeline de migration em produção: manual ou automatizado? | Risco de deploy | Ops |
+
+**D3 — resolvida em 2026-07-29, removida da tabela.** Era *"ADR-ATTR-001: congelar ou revogar?"*. Decisão: **congelar**. `ADR-ATTR-001` promovido a **Aceito** (§11 do próprio ADR) e `ADR-ATTR-002` a **Aceito** (§14), ambos com evidência verificada contra código real — ver v1.5 acima e `CHECKPOINT-E6-FINAL.md`. **A numeração D1–D7 é preservada deliberadamente**: `D4` (backfill `delivered` → `received`) é referenciada por identificador em `ADR-MSG-001` §7/D7 e em `ADR-MSG-STATUS-001`; renumerar quebraria essas referências.
 
 **Pendências abertas nos contratos:** N-3 (dedup de efeitos no caminho de saída, `ADR-MSG-001` §11) · convivência `delivered`/`received` sem portador documental (`EIS-001` §10) · retenção de variante de evento não reconhecida (`ADR-MSG-001` D3).
 
@@ -456,7 +458,23 @@ PROTEGIDO — NÃO TOCAR
 
 **Pré-condições obrigatórias antes da implementação**
 
-- **R1:** Capturar payloads reais de callbacks de status (Z-API/uazapi).
-- **R2:** Quantificar a incidência do defeito D-C (possível interpretação incorreta de callbacks de status como mensagens inbound).
+- **R1:** Capturar payloads reais de callbacks de status (Z-API/uazapi). **Aberta.** Depende de ambiente externo (painel do provider + aparelho real); será tratada em ciclo próprio. ⚠️ A captura não é operação neutra: apontar o webhook de status para o endpoint de produção **dispararia D-C**, caso ele seja real. A captura deve ir para um coletor inerte, nunca para `/api/whatsapp/webhook/zapi/...`.
+
+- **R2:** Quantificar a incidência do defeito D-C. **Medição realizada — pendência é de formalização de evidência, não técnica.**
+
+  Consulta somente-leitura ao banco de produção, executada em 2026-07-29:
+
+  | Métrica | Valor |
+  |---|---|
+  | `messages` — total | 172 |
+  | `messages` — `sender_type = 'customer'` | 167 |
+  | Fantasmas: cliente + `message_id = ''` | **0** |
+  | Fantasmas: cliente + `message_id IS NULL` | **0** |
+  | Fantasmas (estrito): + `content_text IS NULL` | **0** |
+  | `whatsapp_webhook_dlq` — linhas | 0 |
+
+  **Resultado: incidência zero.** D-C é risco **latente, nunca materializado** — coerente com o fato de apenas o webhook "Ao receber" ter sido apontado ao endpoint (`CHECKPOINT-FORCECRM-GROUP-B-RESULT.md` §3.1); o webhook de status nunca chegou à aplicação. Isso **não invalida D-C**, que permanece confirmado como defeito de código (o parser de entrada Z-API não discrimina pelo campo `type` do envelope — `ADR-MSG-STATUS-001` §2.6/D-C).
+
+  **Evidência atual: consulta operacional não versionada.** Foi executada em sessão, por script efêmero fora do repositório; não há artefato reproduzível commitado. Por isso R2 **permanece aberta apenas quanto à formalização** — o que falta é um artefato versionado e reexecutável que sustente o número, não investigação adicional.
 
 O roadmap continua correto ao dizer que a implementação da E2.1 não começou; este registro reflete que a fase arquitetural já foi encerrada.
