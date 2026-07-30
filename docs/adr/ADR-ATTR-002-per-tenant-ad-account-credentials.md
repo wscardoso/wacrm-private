@@ -5,7 +5,7 @@
 | **Tipo** | Architecture Decision Record — **fronteira de segredos**; decide estrutura e autorização, não runtime nem implementação |
 | **Épico** | Pré-requisito de **E6.0** (enriquecimento + relatório) e de **P3/CAPI** — não é E6.0 |
 | **Deriva de / reusa** | `ADR-ATTR-001 §0.4` (retrofit — este ADR foi nomeado ali como obrigatório) · `whatsapp_config` (001/032 — precedente de segredo por tenant cifrado app-side) · `encryption.ts` (AES-256-GCM, chave global) · `ADR-SYS-001` + `042`/`E5b` (padrão de RPC platform SECURITY DEFINER, gate tenant-scoped `access_role='admin'`, `platform_audit_log`) · `037`/`038` (`is_platform_operator_for`, `platform_audit_log`) |
-| **Status** | Proposto · pronto para Gate |
+| **Status** | **Aceito** — congelado em 2026-07-29, verificado contra implementação real (ver §14) |
 | **Autoridade** | Decide **apenas** a fronteira de armazenamento, autorização, rotação, auditoria e isolamento das credenciais de conta de anúncios por tenant. **Não** decide o job de enriquecimento (E6.0), **não** decide CAPI (P3), **não** constrói E7, **não** reabre nenhum contrato fechado (E4b, E5, ADR-ATTR-001-captura, ODI-001, DLB-001, EIS-001, ADR-SYS-001). |
 | **Baseline de código** | HEAD `485b1e6` |
 
@@ -160,4 +160,21 @@ Duas camadas, ambas obrigatórias:
 
 ---
 
-*Fim do ADR. Fronteira de segredos apenas — nenhum código, migration, RPC concreta, nome de coluna ou implementação foi produzido. Pré-requisito de E6.0; consumido por E6.0 (enriquecimento) e P3 (CAPI).*
+## 14. Fechamento — verificação contra código real (2026-07-29)
+
+O gate arquitetural pendente ("pronto para Gate") foi cumprido por verificação direta da implementação real (`migration 055_ad_account_credentials.sql`, `src/lib/enrichment/credential-resolver.ts`), não por leitura de resumo de terceiro:
+
+| Critério (§12) | Verificado |
+|---|---|
+| 1. Tabela dedicada, ciphertext AES-256-GCM | ✅ `055_ad_account_credentials.sql` |
+| 2. Escrita/rotação só por operador platform admin-para-tenant, `42501` para não-autorizado, `search_path` pinado, RPC não decifra | ✅ `SECURITY DEFINER`, `SET search_path = public`, gate `access_role = 'admin'`, RPC retorna `ciphertext` (nunca decrypted) |
+| 3. Estado da credencial + rotação de chave deferida a E7 | ✅ Consumida por `decryptWithBindingContext` (padrão E7 Binding Context) — migração pós-ADR para o esquema E7-aware previsto em §6, cumprindo a promessa de compatibilidade sem reabrir este ADR |
+| 4. Auditoria em `platform_audit_log`, ator/tenant/ação, nunca o valor | ✅ Ações `ad_credential_set`/`ad_credential_revoked` gravadas na RPC |
+| 5. Isolamento por RLS + invariante D-8 | ✅ Verificado por teste dedicado — `enrichment-d8-isolation.test.ts`, 4 cenários, confirmado em `CHECKPOINT-ROADMAP-RECONCILIATION.md` §4 |
+| 6. Sem impacto em messaging/E4b/E5/captura | ✅ Nenhum dos épicos foi tocado pela implementação |
+
+**Decisão:** ADR-ATTR-002 promovido de "Proposto · pronto para Gate" para **"Aceito"**. Todas as oito decisões estruturais (D-1…D-8) foram implementadas fielmente, incluindo uma evolução não prevista no texto original — a credencial já consome o Binding Context de E7 em vez do `encrypt()` genérico de chave global previsto em D-2/§4.2-F — que é compatível com a decisão original (E7-aware, §6) e não a contradiz.
+
+---
+
+*Fim do ADR. Verificado contra código real em 2026-07-29. Pré-requisito de E6.0; consumido por E6.0 (enriquecimento) e P3 (CAPI).*

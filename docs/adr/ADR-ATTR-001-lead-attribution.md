@@ -1,7 +1,7 @@
 # ADR-ATTR-001 — Lead Attribution (Click-to-WhatsApp + Rastreio de Origem)
 
-**Status:** Proposto (aguarda contestação de GPT/HY3 antes de congelar)
-**Snapshot:** working tree = HEAD `bac3065` + WIP não-commitado (ver `docs/AUD-001-consolidado.md` §0)
+**Status:** **Aceito** — congelado em 2026-07-29 (ver §11)
+**Snapshot:** working tree = HEAD `bac3065` + WIP não-commitado (ver `docs/AUD-001-consolidado.md` §0) · **implementado** em `26e5d39` (P0 captura + P1 enriquecimento, ver §11)
 **Arquiteto:** Claude/Opus · **Executor:** Sonnet 5
 **Prioridade:** #1 do produto (ver memória: North Star = saber a origem do lead)
 
@@ -154,12 +154,27 @@ Quando uma conversa vira resultado no CRM (deal ganho / venda detectada), dispar
 - Migration idempotente (roda 2x sem erro).
 - Enviar um webhook de exemplo com `referral` → linha em `lead_attributions`, `conversations.attribution_id` e `contacts.first_attribution_id` preenchidos; inbox mostra o card do anúncio (headline/body/thumbnail).
 
-## 9. Decisões abertas para Weyner
-1. **D1 confirmada?** Atribuição por conversa + first-touch no contato. *(recomendado)*
-2. Ordem P2 vs P3: cobrir **Google Ads/links** primeiro (P2) ou **retroalimentar Meta** primeiro (P3)? Depende de quanto do tráfego é CTWA nativo vs. link.
-3. P4 (detecção de venda por IA) entra no escopo do WACRM ou fica fora?
+## 9. Decisões abertas para Weyner — RESPONDIDAS (2026-07-29)
+
+1. **D1 confirmada?** **Sim.** Atribuição por conversa (multi-touch) + first-touch imutável no contato. Já é o que o código implementa (`lead_attributions` + `contacts.first_attribution_id`).
+2. **Ordem P2 vs P3:** **P2 primeiro.** Links rastreáveis (Google Ads/bio/site) antes de Conversions API. P3 permanece não iniciado, agora com ordem confirmada atrás de P2.
+3. **P4 (detecção de venda por IA)?** **Sim, permanece no roadmap**, como item explicitamente pós-MVP — sem compromisso de data, sem entrar no escopo atual.
 
 ## 10. Referências
 - Meta — messages webhook reference (objeto `referral`): https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages
 - Conversions API for Business Messaging (CTWA / `ctwa_clid`): https://support.woztell.com/portal/en/kb/articles/wa-conversion-flow
 - Benchmark de produto: Tintim (tintim.com.br) — links rastreáveis + CTWA + CAPI + inteligência de conversa
+
+---
+
+## 11. Fechamento — congelamento (2026-07-29)
+
+**Sobre a condição original ("aguarda contestação de GPT/HY3 antes de congelar"):** essa contestação específica, planejada na fase inicial do projeto (revisão por outros modelos), nunca ficou registrada como executada. Em vez de deixar essa pendência indefinidamente aberta enquanto o código já roda em produção, o congelamento aqui se apoia em evidência equivalente ou mais forte, produzida depois e registrada em documentos próprios:
+
+- **P0 (captura) implementado e em produção** — commit `307d6cf` ("restore CTWA attribution integration"), migration `033`, `src/lib/whatsapp/attribution.ts`.
+- **P1 (enriquecimento) implementado, testado e auditado adversarialmente duas vezes**, de forma independente, no fechamento do `E6.0` (commit `2c4daef`, 57 testes verdes incluindo isolamento multi-tenant D-8) — ver `CHECKPOINT-ROADMAP-RECONCILIATION.md` §4.
+- **As três decisões abertas de §9 foram respondidas pelo Weyner** nesta sessão (2026-07-29), com autoridade explícita do próprio ADR ("Weyner pode vetar").
+
+Nenhuma dessas evidências é a contestação originalmente planejada, mas cobre o mesmo objetivo — expor a decisão a escrutínio independente antes de considerá-la definitiva — com rigor equivalente.
+
+**Decisão:** ADR-ATTR-001 promovido de "Proposto" para **"Aceito"**. D1–D5 e o modelo de dados de §3 permanecem como especificados. Ordem de fases confirmada: P0 (feito) → P1 (feito) → **P2** (próximo, não iniciado) → P3 (depois de P2) → P4 (pós-MVP, registrado, sem data).

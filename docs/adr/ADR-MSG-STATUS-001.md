@@ -4,7 +4,7 @@
 |---|---|
 | **Tipo** | ADR derivado — normatiza o que `ADR-MSG-001` D7 delegou explicitamente a contrato derivado |
 | **Épico** | E2.1 — Canonical Message Status (Fase 0 — contrato) |
-| **Status** | **Proposto para Gate arquitetural** |
+| **Status** | **Aceito** — aprovado no Gate arquitetural de 2026-07-29, registrado em `docs/checkpoints/CHECKPOINT-E2.1-STATUS-CANONICAL.md` §9 ("🟢 Contrato aprovado para implementação"). Sincronização de estado em 2026-07-30: o gate havia aprovado o contrato sem que este campo fosse promovido. Nenhum conteúdo normativo foi alterado nesta promoção — as sete pré-condições vinculantes de `CHECKPOINT-E2.1` §8 permanecem exigíveis. |
 | **Deriva de / vinculado a** | `ADR-MSG-001` D3, D4, D7, invariantes A–D, §6.2, §7 · `EIS-001` §3.3, §3.4, §4.1, §4.2, §4.3, §8 critérios 4 e 10–16 · `ODI-001` §5, §6.1 · `ADR-E4B-001/002/003` (eixo de tentativa — fronteira, não reuso) · `DLB-001` §10.1 |
 | **Autoridade** | Decide **exclusivamente** o vocabulário canônico de estado de mensagem, suas transições, a normalização de callbacks de provider e a resolução de identidade no caminho de status. **Não** decide migration, DDL, nome de tabela/coluna, RPC, nem assinatura de função. **Não** reabre `ADR-MSG-001`, `EIS-001`, `ODI-001`, `ADR-E4B-001/002/003`, `DLB-001` ou `ADR-ATTR-001/002`. |
 | **Baseline de código auditado** | `HEAD 26e5d39` |
@@ -192,10 +192,12 @@ Sendo `nivel(x)` a posição de `x` no eixo de D2:
 | `sent` | ⭕ | ⭕ | ✅ | ✅ | ✅ |
 | `delivered` | ⭕ | ⭕ | ⭕ | ✅ | 🚫 |
 | `read` | ⭕ | ⭕ | ⭕ | ⭕ | 🚫 |
-| `failed` | ⭕ | ⭕ | ⭕ | ⭕ | ⭕ |
+| `failed` | 🚫 | 🚫 | 🚫 | 🚫 | 🚫 |
 | `received` | 🚫 | 🚫 | 🚫 | 🚫 | 🚫 |
 
 ✅ aplica · ⭕ noop silencioso (repetição/reentrega esperada) · 🚫 **noop observável** — produz sinal (D8)
+
+> **Errata (2026-07-30).** A linha `failed` desta matriz continha `⭕` nas cinco colunas na versão original, contradizendo a própria prosa de T4 ("Evento posterior é **noop observável** (D8/N2)") e a classificação D8 (que trata qualquer evento inadmissível, incluindo os que alvejam um estado terminal, como N2 — nunca como `⭕`). A matriz estava errada; T4 e D8 são a fonte da verdade e permanecem inalterados. Corrigido para `🚫` nas cinco colunas: qualquer evento posterior a `failed` — incluindo um `failed` repetido — é sinal de que o provider está se contradizendo (ou de reentrega tardia de uma falha já registrada), não silêncio esperado. Achado durante a implementação de Fase 1; a implementação (`evaluateTransition` em `src/lib/message/status.ts`) já seguia T4 corretamente antes desta correção — apenas a matriz do ADR estava desalinhada com o próprio texto.
 
 **T1 admite salto deliberadamente.** Webhooks se perdem: um `read` que chega sem que o `delivered` tenha chegado é ocorrência normal, não anomalia. Um contrato que exija `delivered` como pré-condição de `read` deixa a mensagem **permanentemente presa** no nível inferior sempre que o provider perder um evento intermediário — e o eixo de progresso passa a medir a confiabilidade do webhook, não o fato do mundo.
 
