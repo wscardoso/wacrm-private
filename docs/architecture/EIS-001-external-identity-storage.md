@@ -196,6 +196,18 @@ Por §2.1, o fallback é na prática um mecanismo de correlação de **status so
 
 O fallback é **transitório por natureza e permanente por decisão**: sua remoção exigiria backfill completo do acervo, operação que este documento não recomenda (§7).
 
+#### Errata — alcance efetivo da restrição "à conexão" (2026-07-30)
+
+**Origem.** `docs/architecture/E2.1-RC1-canonical-status-adjudication.md` §7. Errata de precisão: registra o alcance com que a regra acima é hoje executável. **Não altera a regra** nem qualquer decisão do `ADR-MSG-001`.
+
+**Fato verificado.** A restrição por conexão é, no regime atual, **estruturalmente inalcançável na forma literal**: `messages` não possui vínculo a conexão. Possui vínculo a conversa, e a conversa à conta. O único escopo aplicável ao fallback é, portanto, **a conta**.
+
+1. Sob `whatsapp_config_account_id_key UNIQUE(account_id)` (017), existe no máximo uma conexão por conta. Nesse regime, **escopo por conta é equivalente a escopo por conexão** — a restrição de §4.3 é cumprida integralmente, ainda que por um caminho diferente do literal.
+2. A equivalência é **datada**. Ela cessa no momento em que E3 introduzir multi-conexão por workspace: a partir daí, duas conexões da mesma conta compartilhariam o escopo de fallback, e a restrição de §4.3 deixaria de ser cumprida.
+3. O escopo por conexão torna-se **obrigatório em E3**. O critério 15 de §8 deve ser reexecutado sob aquele regime, e não pode ser considerado satisfeito por transporte do resultado obtido em E2.x.
+
+Esta errata é registro de alcance, não permissão: nenhuma implementação está autorizada a escopar o fallback de forma mais ampla que a conta.
+
 ---
 
 ## 5. Contrato de escrita
