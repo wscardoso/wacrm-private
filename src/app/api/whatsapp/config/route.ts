@@ -18,6 +18,7 @@ import {
 } from '@/lib/whatsapp/config-binding'
 import { ZApiProvider } from '@/lib/whatsapp/providers/zapi'
 import { UazapiProvider } from '@/lib/whatsapp/providers/uazapi'
+import { bootstrapConnection, generateConnectionId } from '@/lib/whatsapp/webhook-auth'
 import type { WhatsAppProviderKind } from '@/types'
 
 /**
@@ -383,7 +384,7 @@ export async function POST(request: Request) {
 
       const { data: existing } = await supabase
         .from('whatsapp_config')
-        .select('id')
+        .select('id, connection_id')
         .eq('account_id', accountId)
         .maybeSingle()
 
@@ -423,6 +424,13 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       }
 
+      // connection_id (036_webhook_nonmeta_security.sql) is NOT NULL with no
+      // DB default — a fresh row must set it at INSERT time or the insert
+      // fails outright. Existing rows keep their connection_id untouched:
+      // regenerating it on every save would silently break a webhook URL
+      // the operator already pasted into Z-API/uazapi.
+      const connectionId = existing?.connection_id ?? generateConnectionId()
+
       if (existing) {
         const { error: updateError } = await supabase
           .from('whatsapp_config')
@@ -435,14 +443,33 @@ export async function POST(request: Request) {
       } else {
         const { error: insertError } = await supabase
           .from('whatsapp_config')
-          .insert({ account_id: accountId, user_id: userId, ...row })
+          .insert({ account_id: accountId, user_id: userId, connection_id: connectionId, ...row })
         if (insertError) {
           console.error('Error inserting whatsapp_config:', insertError)
           return NextResponse.json({ error: 'Failed to save configuration' }, { status: 500 })
         }
       }
 
-      return NextResponse.json({ success: true, saved: true, registered: true })
+      // Bootstrap the webhook secret (ADR-SEC-001 / C7). Idempotent-safe:
+      // a connection that already has webhook_secret_hash is left alone
+      // (status 'already_initialized') so re-saving credentials never
+      // rotates a live webhook URL out from under the operator.
+      const bootstrap = await bootstrapConnection(connectionId)
+      const webhookSecret = bootstrap.status === 'ok' ? bootstrap.result.webhookSecret : null
+      if (bootstrap.status === 'error') {
+        console.error('bootstrapConnection failed after saving whatsapp_config:', bootstrap.message)
+      }
+
+      return NextResponse.json({
+        success: true,
+        saved: true,
+        registered: true,
+        connection_id: connectionId,
+        // Revealed exactly once — only present the moment the secret is
+        // (re)generated. On subsequent saves of an already-bootstrapped
+        // connection this is null; the plaintext is never persisted.
+        webhook_secret: webhookSecret,
+      })
     }
 
     // ── Meta provider: existing full flow ─────────────────────
@@ -513,7 +540,7 @@ export async function POST(request: Request) {
 
     const { data: existing } = await supabase
       .from('whatsapp_config')
-      .select('id, registered_at, phone_number_id')
+      .select('id, registered_at, phone_number_id, connection_id')
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -576,9 +603,14 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Failed to update configuration' }, { status: 500 })
       }
     } else {
+      // connection_id (036_webhook_nonmeta_security.sql) is NOT NULL with
+      // no DB default — every row needs one at INSERT time, even Meta's,
+      // which never routes through the connectionId-based webhook (it
+      // keeps using the separate /api/whatsapp/webhook endpoint). This is
+      // purely to satisfy the shared column constraint.
       const { error: insertError } = await supabase
         .from('whatsapp_config')
-        .insert({ account_id: accountId, user_id: userId, ...baseRow })
+        .insert({ account_id: accountId, user_id: userId, connection_id: generateConnectionId(), ...baseRow })
       if (insertError) {
         console.error('Error inserting whatsapp_config:', insertError)
         return NextResponse.json({ error: 'Failed to save configuration' }, { status: 500 })

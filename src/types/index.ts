@@ -259,6 +259,8 @@ export interface WhatsAppConfig {
   instance_id?: string;
   /** uazapi server base URL, e.g. https://my-server.com */
   base_url?: string;
+  /** Opaque public identifier used in the non-Meta webhook URL path (036_webhook_nonmeta_security.sql). */
+  connection_id?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
