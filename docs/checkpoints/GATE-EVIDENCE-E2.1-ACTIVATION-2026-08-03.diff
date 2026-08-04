@@ -1,0 +1,423 @@
+diff --git a/package.json b/package.json
+index 7f6804b..b509860 100644
+--- a/package.json
++++ b/package.json
+@@ -66,10 +66,12 @@
+     "@electric-sql/pglite": "^0.5.4",
+     "@tailwindcss/postcss": "^4",
+     "@types/node": "^25",
++    "@types/pg": "^8.20.3",
+     "@types/react": "^19",
+     "@types/react-dom": "^19",
+     "eslint": "^9",
+     "eslint-config-next": "16.2.6",
++    "pg": "^8.22.0",
+     "prettier": "^3.8.4",
+     "prettier-plugin-tailwindcss": "^0.8.0",
+     "tailwindcss": "^4",
+diff --git a/src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts b/src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts
+index 359df81..1b5f3aa 100644
+--- a/src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts
++++ b/src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts
+@@ -5,6 +5,7 @@ import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding';
+ import { getProvider, type ProviderConfig } from '@/lib/whatsapp/providers';
+ import type { InboundMessage } from '@/lib/whatsapp/providers/types';
+ import { processInboundMessage } from '@/lib/whatsapp/inbound-processor';
++import { handleCanonicalStatusEvent } from '@/lib/whatsapp/status-handler';
+ import {
+   checkRateLimit,
+   rateLimitResponse,
+@@ -140,10 +141,55 @@ export async function POST(
+     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+   }
+ 
+-  // Z-API delivers a single message object; uazapi (Evolution) may deliver
+-  // an array of messages inside payload.data. Normalize to an array of
+-  // parsed events and dispatch each independently so one malformed event
+-  // never blocks the others.
++  // =============================================================
++  // Status-first dispatch (ADR-MSG-STATUS-001 §2.11, D-C).
++  //
++  // Each payload is checked for status events BEFORE inbound parsing,
++  // so that a provider status webhook (Z-API MessageStatusCallback,
++  // uazapi MESSAGES_UPDATE) routes to the canonical status handler
++  // instead of producing a phantom 'unknown' inbound message.
++  //
++  // Z-API delivers a single object; uazapi may deliver an array or
++  // { event, data: { messages: [...] } }.
++  // =============================================================
++  let statusCount = 0;
++  let inboundCount = 0;
++
++  // Status events are extracted from the WHOLE payload, by the adapter,
++  // before any inbound interpretation. Each adapter owns its own envelope:
++  // Z-API sends one object with `ids[]`; uazapi sends
++  // { event: 'MESSAGES_UPDATE', data: { messages: [...] } } — where `data`
++  // is an OBJECT, not an array, so it must never be fed through the
++  // inbound array-unwrapping below.
++  let statusEvents: ReturnType<typeof providerInstance.parseStatusEvent> = [];
++  try {
++    statusEvents = providerInstance.parseStatusEvent(payload);
++  } catch (err) {
++    console.error('[webhook] parseStatusEvent failed:', err);
++  }
++
++  if (statusEvents.length > 0) {
++    // I5 — N identifiers, N independent applications: one failure must not
++    // suppress the others.
++    for (const statusEvent of statusEvents) {
++      try {
++        await handleCanonicalStatusEvent(statusEvent, config.id);
++        statusCount++;
++      } catch (err) {
++        console.error('[webhook] status event failed:', err);
++      }
++    }
++
++    return NextResponse.json({
++      received: true,
++      processed: 0,
++      inboundProcessed: 0,
++      statusProcessed: statusCount,
++    });
++  }
++
++  // Not a status event — inbound path, unchanged from the pre-E2.1
++  // behaviour (Z-API single object; uazapi array or { data: [...] }).
+   const events: InboundMessage[] = [];
+ 
+   if (provider === 'zapi') {
+@@ -165,6 +211,7 @@ export async function POST(
+   for (const event of events) {
+     try {
+       await processInboundMessage(event, config.account_id, config.user_id);
++      inboundCount++;
+     } catch (err) {
+       console.error('[webhook] processInboundMessage failed:', err);
+     }
+@@ -172,6 +219,8 @@ export async function POST(
+ 
+   return NextResponse.json({
+     received: true,
+-    processed: events.length,
++    processed: inboundCount,
++    inboundProcessed: inboundCount,
++    statusProcessed: statusCount,
+   });
+ }
+diff --git a/src/lib/whatsapp/providers/meta.ts b/src/lib/whatsapp/providers/meta.ts
+index 5faae66..869d5d3 100644
+--- a/src/lib/whatsapp/providers/meta.ts
++++ b/src/lib/whatsapp/providers/meta.ts
+@@ -30,6 +30,8 @@ import type {
+   ExternalIdentity,
+   ProviderCapabilities,
+   SendOutcomeClass,
++  CanonicalStatus,
++  CanonicalStatusEvent,
+ } from './types'
+ 
+ /**
+@@ -207,6 +209,57 @@ export class MetaProvider implements WhatsAppProvider {
+     return parseMetaPayload(payload)
+   }
+ 
++  /**
++   * ADR-MSG-STATUS-001 D9 — Meta status map.
++   *
++   * The Meta vocabulary and the canonical vocabulary coincide textually.
++   * D1 makes that coincidence the RESULT of an explicit identity mapping,
++   * not the absence of one — which is what the old inline handler assumed
++   * ("Meta's status values already match the CHECK constraint").
++   *
++   * Meta emits exactly four values in `statuses[]`: sent, delivered, read,
++   * failed. There is NO `pending` — a map entry for it would describe a
++   * vocabulary that does not exist (ADR §2.2), so it is deliberately
++   * absent here.
++   *
++   * Unlike the other two adapters, this shape IS verified: it is the
++   * payload the production Meta webhook has consumed since day one
++   * (webhook/route.ts:276).
++   */
++  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
++    const s = payload as Record<string, unknown> | undefined
++    if (!s || !s.id || !s.status) return []
++
++    const statusMap: Record<string, CanonicalStatus> = {
++      sent: 'sent',
++      delivered: 'delivered',
++      read: 'read',
++      failed: 'failed',
++    }
++
++    const canonicalStatus = statusMap[String(s.status)]
++    if (!canonicalStatus) {
++      // D8/N3 — includes Meta's `deleted`, and anything Meta adds later.
++      console.warn(
++        '[meta] N3',
++        JSON.stringify({ reason: 'unmapped status value', value: s.status }),
++      )
++      return []
++    }
++
++    // D5/D9 — Meta emits seconds; normalise to ms inside the adapter.
++    const rawTs = Number(s.timestamp)
++    const timestamp = String(
++      Number.isFinite(rawTs) && rawTs > 0
++        ? rawTs > 1e12
++          ? rawTs
++          : rawTs * 1000
++        : Date.now(),
++    )
++
++    return [{ externalId: String(s.id), status: canonicalStatus, timestamp }]
++  }
++
+   async verifyWebhookRequest(req: Request, rawBody: string): Promise<boolean> {
+     const sig = req.headers.get('x-hub-signature-256') ?? ''
+     return verifyMetaWebhookSignature(rawBody, sig)
+diff --git a/src/lib/whatsapp/providers/types.ts b/src/lib/whatsapp/providers/types.ts
+index eb4e2f5..433e80e 100644
+--- a/src/lib/whatsapp/providers/types.ts
++++ b/src/lib/whatsapp/providers/types.ts
+@@ -1,3 +1,6 @@
++import type { CanonicalStatus, CanonicalStatusEvent } from '@/lib/message/status'
++export type { CanonicalStatus, CanonicalStatusEvent }
++
+ export interface ExternalIdentity {
+   kind: string
+   value: string
+@@ -147,6 +150,30 @@ export interface WhatsAppProvider {
+   sendInteractiveButtons(args: SendInteractiveButtonsArgs): Promise<SendResult>
+   sendInteractiveList(args: SendInteractiveListArgs): Promise<SendResult>
+   parseInboundMessage(payload: unknown): InboundMessage | null
++  /**
++   * ADR-MSG-STATUS-001 D9 — translates a provider status webhook into
++   * canonical events. Returns an EMPTY ARRAY when the payload is not a
++   * status event at all (an inbound message, a heartbeat, an unknown
++   * envelope).
++   *
++   * Returns an ARRAY, not a single event, because I5 requires a provider
++   * event carrying N identifiers (Z-API `ids[]`) to become N independent
++   * applications — one failing must not suppress the others.
++   *
++   * Each `externalId` is the provider-level identifier referenced by the
++   * status webhook; correlation is the caller's job, via
++   * `resolveMessageByExternalId` (D10), never a direct read of
++   * `messages.message_id`.
++   *
++   * `timestamp` MUST be normalised to a ms-epoch string here: providers
++   * disagree on the unit (Meta seconds, Z-API milliseconds) and D5 keeps
++   * that conversion inside the adapter, never in the domain.
++   *
++   * A recognised status event whose value is outside the declared map is
++   * dropped here and recorded by the caller as N3 (D8). It is never
++   * guessed, and never defaulted to `failed` (A6).
++   */
++  parseStatusEvent(payload: unknown): CanonicalStatusEvent[]
+   verifyWebhookRequest(req: Request, rawBody: string): Promise<boolean>
+   /**
+    * ADR-E4B-003 §3.4 — translates a caught send failure (whatever this
+diff --git a/src/lib/whatsapp/providers/uazapi.ts b/src/lib/whatsapp/providers/uazapi.ts
+index 2985822..d041f5f 100644
+--- a/src/lib/whatsapp/providers/uazapi.ts
++++ b/src/lib/whatsapp/providers/uazapi.ts
+@@ -22,6 +22,8 @@ import type {
+   ExternalIdentity,
+   ProviderCapabilities,
+   SendOutcomeClass,
++  CanonicalStatus,
++  CanonicalStatusEvent,
+ } from './types'
+ 
+ /**
+@@ -337,6 +339,90 @@ export class UazapiProvider implements WhatsAppProvider {
+     }
+   }
+ 
++  /**
++   * ADR-MSG-STATUS-001 D9 — uazapi / Baileys `ack` map.
++   *
++   *   2 (server-ack) -> sent · 3 (delivery-ack) -> delivered
++   *   4 (read) / 5 (played) -> read · 0 (error) -> failed
++   *   1 (pending) -> NOT APPLICABLE — precedes provider acceptance and
++   *                  does not transition (D9 normative map).
++   *
++   * ⚠️ UNVERIFIED SHAPE. No real `MESSAGES_UPDATE` payload has been
++   * captured (CHECKPOINT-E2.1 §8 pré-condição 1 unsatisfied; no uazapi
++   * tenant currently has a connected number). Shape below is inferred from
++   * the Evolution/Baileys contract, not observed.
++   */
++  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
++    const event = payload as Record<string, unknown> | null
++    if (!event) return []
++    if (event.event !== 'MESSAGES_UPDATE') return []
++
++    const rawData = event.data as Record<string, unknown> | undefined
++    const messages = rawData?.messages
++    if (!Array.isArray(messages) || messages.length === 0) return []
++
++    // 1 is deliberately absent: "pendente — anterior ao aceite; não
++    // transiciona" (D9). Mapping it to `sending` would let the provider
++    // move a message backwards on the progress axis.
++    const ackMap: Record<number, CanonicalStatus> = {
++      0: 'failed',
++      2: 'sent',
++      3: 'delivered',
++      4: 'read',
++      5: 'read', // D4 — played collapses into read
++    }
++
++    const events: CanonicalStatusEvent[] = []
++
++    // I5 — a batch of N updates becomes N independent applications.
++    for (const raw of messages) {
++      const msg = raw as Record<string, unknown> | undefined
++      const key = msg?.key as Record<string, unknown> | undefined
++      if (!msg || !key) continue
++
++      // A status update only exists for an outbound message.
++      if (key.fromMe !== true) continue
++
++      const messageObj = msg.message as Record<string, unknown> | undefined
++      if (!messageObj || messageObj.messageTimingType !== 'ack') continue
++
++      const ackValue = messageObj.ack
++      if (typeof ackValue !== 'number') continue
++
++      // Non-applicable, not unknown: `1` is a declared value that
++      // deliberately produces no transition. Not an N3.
++      if (ackValue === 1) continue
++
++      const canonicalStatus = ackMap[ackValue]
++      if (!canonicalStatus) {
++        // D8/N3 — outside the declared map. Never guessed, never `failed`.
++        console.warn(
++          '[uazapi] N3',
++          JSON.stringify({ reason: 'unmapped ack value', value: ackValue }),
++        )
++        continue
++      }
++
++      const externalId = typeof key.id === 'string' ? key.id : ''
++      if (!externalId) continue
++
++      // D5/D9 — Baileys emits seconds; the domain must never see a
++      // provider time unit. Normalise to ms here.
++      const rawTs = Number(msg.messageTimestamp)
++      const timestamp = String(
++        Number.isFinite(rawTs) && rawTs > 0
++          ? rawTs > 1e12
++            ? rawTs
++            : rawTs * 1000
++          : Date.now(),
++      )
++
++      events.push({ externalId, status: canonicalStatus, timestamp })
++    }
++
++    return events
++  }
++
+   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {
+     void _req; void _rawBody
+     // uazapi doesn't sign payloads. Security comes from the secret
+diff --git a/src/lib/whatsapp/providers/webhook-auth.test.ts b/src/lib/whatsapp/providers/webhook-auth.test.ts
+index aa1d3a1..a6ccd5c 100644
+--- a/src/lib/whatsapp/providers/webhook-auth.test.ts
++++ b/src/lib/whatsapp/providers/webhook-auth.test.ts
+@@ -81,7 +81,10 @@ function makeChain(table: string) {
+ const mockFromImpl = vi.fn((t: string) => makeChain(t))
+ 
+ vi.mock('@/lib/supabase/admin-client', () => ({
+-  supabaseAdmin: () => ({ from: mockFromImpl }),
++  supabaseAdmin: () => ({
++    from: mockFromImpl,
++    rpc: vi.fn(() => Promise.resolve({ data: 'msg-new-1', error: null })),
++  }),
+ }))
+ vi.mock('@/lib/whatsapp/encryption', () => ({
+   encrypt: (v: string) => v,
+diff --git a/src/lib/whatsapp/providers/zapi.ts b/src/lib/whatsapp/providers/zapi.ts
+index 2a25f0b..de8900e 100644
+--- a/src/lib/whatsapp/providers/zapi.ts
++++ b/src/lib/whatsapp/providers/zapi.ts
+@@ -21,6 +21,8 @@ import type {
+   ExternalIdentity,
+   ProviderCapabilities,
+   SendOutcomeClass,
++  CanonicalStatus,
++  CanonicalStatusEvent,
+ } from './types'
+ 
+ /**
+@@ -316,6 +318,69 @@ export class ZApiProvider implements WhatsAppProvider {
+     }
+   }
+ 
++  /**
++   * ADR-MSG-STATUS-001 D9 — Z-API status map.
++   *
++   *   SENT -> sent · RECEIVED -> delivered · READ/PLAYED -> read
++   *
++   * ⚠️ `RECEIVED` maps to `delivered`, NEVER to `received`. Z-API's
++   * "RECEIVED" means "arrived at the recipient's device"; the canonical
++   * `received` is the initial state of an INBOUND message (ADR-MSG-001 D7)
++   * and is unreachable from any status callback. This homonym is risk R1
++   * of the ADR — the highest-severity trap in the whole map.
++   *
++   * ⚠️ UNVERIFIED SHAPE. No real `MessageStatusCallback` payload has ever
++   * been captured (CHECKPOINT-E2.1 §8 pré-condição 1 remains unsatisfied;
++   * whatsapp_webhook_dlq is empty and no webhook log exists). ADR §2.2
++   * documents the value field as `status`; the first implementation of
++   * this method assumed `ack`. Nobody can currently say which is right, so
++   * this reads BOTH and discriminates on the `type` envelope field when it
++   * is present. That tolerance is deliberate and provisional: it must be
++   * narrowed to the observed shape once a real payload is captured.
++   */
++  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
++    const msg = payload as Record<string, unknown> | null
++    if (!msg) return []
++
++    // Envelope discriminator, when Z-API sends one. Its ABSENCE in the
++    // inbound parser is defect D-C; here we use it positively.
++    const envelopeType = typeof msg.type === 'string' ? msg.type : undefined
++    if (envelopeType && envelopeType !== 'MessageStatusCallback') return []
++
++    const rawValue = msg.status ?? msg.ack
++    const ids = msg.ids
++    if (rawValue === undefined || rawValue === null) return []
++    if (!Array.isArray(ids) || ids.length === 0) return []
++
++    const statusMap: Record<string, CanonicalStatus> = {
++      SENT: 'sent',
++      RECEIVED: 'delivered', // R1 — never `received`
++      READ: 'read',
++      PLAYED: 'read', // D4 — collapses into `read`, no new canonical state
++    }
++
++    const key = String(rawValue).toUpperCase()
++    const canonicalStatus = statusMap[key]
++    if (!canonicalStatus) {
++      // D8/N3 — unknown provider value. Recorded, never guessed, and never
++      // defaulted to `failed` (A6): ignorance is not evidence of failure.
++      console.warn(
++        '[zapi] N3',
++        JSON.stringify({ reason: 'unmapped status value', value: rawValue }),
++      )
++      return []
++    }
++
++    // D5/D9 — Z-API `momment` is already milliseconds; normalise here so
++    // the domain never sees a provider time unit.
++    const timestamp = String(msg.momment ?? Date.now())
++
++    // I5 — one provider event, N identifiers, N independent applications.
++    return ids
++      .filter((id): id is string => typeof id === 'string' && id.length > 0)
++      .map((externalId) => ({ externalId, status: canonicalStatus, timestamp }))
++  }
++
+   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {
+     void _req; void _rawBody
+     // Z-API doesn't sign webhook payloads by default.
