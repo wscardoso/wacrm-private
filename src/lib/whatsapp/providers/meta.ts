@@ -30,6 +30,8 @@ import type {
   ExternalIdentity,
   ProviderCapabilities,
   SendOutcomeClass,
+  CanonicalStatus,
+  CanonicalStatusEvent,
 } from './types'
 
 /**
@@ -205,6 +207,57 @@ export class MetaProvider implements WhatsAppProvider {
     // If you need to unit-test Meta webhook parsing, call parseMetaPayload
     // below directly.
     return parseMetaPayload(payload)
+  }
+
+  /**
+   * ADR-MSG-STATUS-001 D9 — Meta status map.
+   *
+   * The Meta vocabulary and the canonical vocabulary coincide textually.
+   * D1 makes that coincidence the RESULT of an explicit identity mapping,
+   * not the absence of one — which is what the old inline handler assumed
+   * ("Meta's status values already match the CHECK constraint").
+   *
+   * Meta emits exactly four values in `statuses[]`: sent, delivered, read,
+   * failed. There is NO `pending` — a map entry for it would describe a
+   * vocabulary that does not exist (ADR §2.2), so it is deliberately
+   * absent here.
+   *
+   * Unlike the other two adapters, this shape IS verified: it is the
+   * payload the production Meta webhook has consumed since day one
+   * (webhook/route.ts:276).
+   */
+  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
+    const s = payload as Record<string, unknown> | undefined
+    if (!s || !s.id || !s.status) return []
+
+    const statusMap: Record<string, CanonicalStatus> = {
+      sent: 'sent',
+      delivered: 'delivered',
+      read: 'read',
+      failed: 'failed',
+    }
+
+    const canonicalStatus = statusMap[String(s.status)]
+    if (!canonicalStatus) {
+      // D8/N3 — includes Meta's `deleted`, and anything Meta adds later.
+      console.warn(
+        '[meta] N3',
+        JSON.stringify({ reason: 'unmapped status value', value: s.status }),
+      )
+      return []
+    }
+
+    // D5/D9 — Meta emits seconds; normalise to ms inside the adapter.
+    const rawTs = Number(s.timestamp)
+    const timestamp = String(
+      Number.isFinite(rawTs) && rawTs > 0
+        ? rawTs > 1e12
+          ? rawTs
+          : rawTs * 1000
+        : Date.now(),
+    )
+
+    return [{ externalId: String(s.id), status: canonicalStatus, timestamp }]
   }
 
   async verifyWebhookRequest(req: Request, rawBody: string): Promise<boolean> {

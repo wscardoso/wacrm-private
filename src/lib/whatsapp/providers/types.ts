@@ -1,3 +1,6 @@
+import type { CanonicalStatus, CanonicalStatusEvent } from '@/lib/message/status'
+export type { CanonicalStatus, CanonicalStatusEvent }
+
 export interface ExternalIdentity {
   kind: string
   value: string
@@ -147,6 +150,30 @@ export interface WhatsAppProvider {
   sendInteractiveButtons(args: SendInteractiveButtonsArgs): Promise<SendResult>
   sendInteractiveList(args: SendInteractiveListArgs): Promise<SendResult>
   parseInboundMessage(payload: unknown): InboundMessage | null
+  /**
+   * ADR-MSG-STATUS-001 D9 — translates a provider status webhook into
+   * canonical events. Returns an EMPTY ARRAY when the payload is not a
+   * status event at all (an inbound message, a heartbeat, an unknown
+   * envelope).
+   *
+   * Returns an ARRAY, not a single event, because I5 requires a provider
+   * event carrying N identifiers (Z-API `ids[]`) to become N independent
+   * applications — one failing must not suppress the others.
+   *
+   * Each `externalId` is the provider-level identifier referenced by the
+   * status webhook; correlation is the caller's job, via
+   * `resolveMessageByExternalId` (D10), never a direct read of
+   * `messages.message_id`.
+   *
+   * `timestamp` MUST be normalised to a ms-epoch string here: providers
+   * disagree on the unit (Meta seconds, Z-API milliseconds) and D5 keeps
+   * that conversion inside the adapter, never in the domain.
+   *
+   * A recognised status event whose value is outside the declared map is
+   * dropped here and recorded by the caller as N3 (D8). It is never
+   * guessed, and never defaulted to `failed` (A6).
+   */
+  parseStatusEvent(payload: unknown): CanonicalStatusEvent[]
   verifyWebhookRequest(req: Request, rawBody: string): Promise<boolean>
   /**
    * ADR-E4B-003 §3.4 — translates a caught send failure (whatever this

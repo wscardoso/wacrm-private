@@ -22,6 +22,8 @@ import type {
   ExternalIdentity,
   ProviderCapabilities,
   SendOutcomeClass,
+  CanonicalStatus,
+  CanonicalStatusEvent,
 } from './types'
 
 /**
@@ -335,6 +337,90 @@ export class UazapiProvider implements WhatsAppProvider {
       interactiveReplyId,
       interactiveReplyTitle,
     }
+  }
+
+  /**
+   * ADR-MSG-STATUS-001 D9 — uazapi / Baileys `ack` map.
+   *
+   *   2 (server-ack) -> sent · 3 (delivery-ack) -> delivered
+   *   4 (read) / 5 (played) -> read · 0 (error) -> failed
+   *   1 (pending) -> NOT APPLICABLE — precedes provider acceptance and
+   *                  does not transition (D9 normative map).
+   *
+   * ⚠️ UNVERIFIED SHAPE. No real `MESSAGES_UPDATE` payload has been
+   * captured (CHECKPOINT-E2.1 §8 pré-condição 1 unsatisfied; no uazapi
+   * tenant currently has a connected number). Shape below is inferred from
+   * the Evolution/Baileys contract, not observed.
+   */
+  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
+    const event = payload as Record<string, unknown> | null
+    if (!event) return []
+    if (event.event !== 'MESSAGES_UPDATE') return []
+
+    const rawData = event.data as Record<string, unknown> | undefined
+    const messages = rawData?.messages
+    if (!Array.isArray(messages) || messages.length === 0) return []
+
+    // 1 is deliberately absent: "pendente — anterior ao aceite; não
+    // transiciona" (D9). Mapping it to `sending` would let the provider
+    // move a message backwards on the progress axis.
+    const ackMap: Record<number, CanonicalStatus> = {
+      0: 'failed',
+      2: 'sent',
+      3: 'delivered',
+      4: 'read',
+      5: 'read', // D4 — played collapses into read
+    }
+
+    const events: CanonicalStatusEvent[] = []
+
+    // I5 — a batch of N updates becomes N independent applications.
+    for (const raw of messages) {
+      const msg = raw as Record<string, unknown> | undefined
+      const key = msg?.key as Record<string, unknown> | undefined
+      if (!msg || !key) continue
+
+      // A status update only exists for an outbound message.
+      if (key.fromMe !== true) continue
+
+      const messageObj = msg.message as Record<string, unknown> | undefined
+      if (!messageObj || messageObj.messageTimingType !== 'ack') continue
+
+      const ackValue = messageObj.ack
+      if (typeof ackValue !== 'number') continue
+
+      // Non-applicable, not unknown: `1` is a declared value that
+      // deliberately produces no transition. Not an N3.
+      if (ackValue === 1) continue
+
+      const canonicalStatus = ackMap[ackValue]
+      if (!canonicalStatus) {
+        // D8/N3 — outside the declared map. Never guessed, never `failed`.
+        console.warn(
+          '[uazapi] N3',
+          JSON.stringify({ reason: 'unmapped ack value', value: ackValue }),
+        )
+        continue
+      }
+
+      const externalId = typeof key.id === 'string' ? key.id : ''
+      if (!externalId) continue
+
+      // D5/D9 — Baileys emits seconds; the domain must never see a
+      // provider time unit. Normalise to ms here.
+      const rawTs = Number(msg.messageTimestamp)
+      const timestamp = String(
+        Number.isFinite(rawTs) && rawTs > 0
+          ? rawTs > 1e12
+            ? rawTs
+            : rawTs * 1000
+          : Date.now(),
+      )
+
+      events.push({ externalId, status: canonicalStatus, timestamp })
+    }
+
+    return events
   }
 
   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {

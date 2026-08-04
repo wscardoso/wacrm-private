@@ -261,6 +261,13 @@ describe('resolveMessageByExternalId — fallback histórico', () => {
     await expect(resolveMessageByExternalId(CONN_A, 'X')).resolves.toBeNull()
   })
 
+  it('resolve mensagem de saída enviada por automação (sender_type bot) — Gate 2', async () => {
+    db.messages = [
+      { id: 'msg-bot', conversation_id: 'conv-a', message_id: 'X', sender_type: 'bot' },
+    ]
+    await expect(resolveMessageByExternalId(CONN_A, 'X')).resolves.toBe('msg-bot')
+  })
+
   it('NÃO resolve quando o valor corresponde a duas mensagens da mesma conta', async () => {
     db.messages = [
       { id: 'msg-1', conversation_id: 'conv-a', message_id: 'X', sender_type: 'agent' },

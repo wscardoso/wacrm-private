@@ -117,7 +117,7 @@ export async function resolveMessageByExternalId(
     .from('messages')
     .select('id, conversations!inner(account_id)')
     .eq('message_id', value)
-    .eq('sender_type', 'agent')
+    .in('sender_type', ['agent', 'bot'])
     .eq('conversations.account_id', configRow.account_id)
 
   if (fallbackError) {

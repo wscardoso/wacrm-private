@@ -21,6 +21,8 @@ import type {
   ExternalIdentity,
   ProviderCapabilities,
   SendOutcomeClass,
+  CanonicalStatus,
+  CanonicalStatusEvent,
 } from './types'
 
 /**
@@ -314,6 +316,69 @@ export class ZApiProvider implements WhatsAppProvider {
       interactiveReplyId,
       interactiveReplyTitle,
     }
+  }
+
+  /**
+   * ADR-MSG-STATUS-001 D9 — Z-API status map.
+   *
+   *   SENT -> sent · RECEIVED -> delivered · READ/PLAYED -> read
+   *
+   * ⚠️ `RECEIVED` maps to `delivered`, NEVER to `received`. Z-API's
+   * "RECEIVED" means "arrived at the recipient's device"; the canonical
+   * `received` is the initial state of an INBOUND message (ADR-MSG-001 D7)
+   * and is unreachable from any status callback. This homonym is risk R1
+   * of the ADR — the highest-severity trap in the whole map.
+   *
+   * ⚠️ UNVERIFIED SHAPE. No real `MessageStatusCallback` payload has ever
+   * been captured (CHECKPOINT-E2.1 §8 pré-condição 1 remains unsatisfied;
+   * whatsapp_webhook_dlq is empty and no webhook log exists). ADR §2.2
+   * documents the value field as `status`; the first implementation of
+   * this method assumed `ack`. Nobody can currently say which is right, so
+   * this reads BOTH and discriminates on the `type` envelope field when it
+   * is present. That tolerance is deliberate and provisional: it must be
+   * narrowed to the observed shape once a real payload is captured.
+   */
+  parseStatusEvent(payload: unknown): CanonicalStatusEvent[] {
+    const msg = payload as Record<string, unknown> | null
+    if (!msg) return []
+
+    // Envelope discriminator, when Z-API sends one. Its ABSENCE in the
+    // inbound parser is defect D-C; here we use it positively.
+    const envelopeType = typeof msg.type === 'string' ? msg.type : undefined
+    if (envelopeType && envelopeType !== 'MessageStatusCallback') return []
+
+    const rawValue = msg.status ?? msg.ack
+    const ids = msg.ids
+    if (rawValue === undefined || rawValue === null) return []
+    if (!Array.isArray(ids) || ids.length === 0) return []
+
+    const statusMap: Record<string, CanonicalStatus> = {
+      SENT: 'sent',
+      RECEIVED: 'delivered', // R1 — never `received`
+      READ: 'read',
+      PLAYED: 'read', // D4 — collapses into `read`, no new canonical state
+    }
+
+    const key = String(rawValue).toUpperCase()
+    const canonicalStatus = statusMap[key]
+    if (!canonicalStatus) {
+      // D8/N3 — unknown provider value. Recorded, never guessed, and never
+      // defaulted to `failed` (A6): ignorance is not evidence of failure.
+      console.warn(
+        '[zapi] N3',
+        JSON.stringify({ reason: 'unmapped status value', value: rawValue }),
+      )
+      return []
+    }
+
+    // D5/D9 — Z-API `momment` is already milliseconds; normalise here so
+    // the domain never sees a provider time unit.
+    const timestamp = String(msg.momment ?? Date.now())
+
+    // I5 — one provider event, N identifiers, N independent applications.
+    return ids
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      .map((externalId) => ({ externalId, status: canonicalStatus, timestamp }))
   }
 
   async verifyWebhookRequest(_req: Request, _rawBody: string): Promise<boolean> {

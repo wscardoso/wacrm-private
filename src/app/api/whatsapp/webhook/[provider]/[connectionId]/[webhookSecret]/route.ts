@@ -5,6 +5,7 @@ import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding';
 import { getProvider, type ProviderConfig } from '@/lib/whatsapp/providers';
 import type { InboundMessage } from '@/lib/whatsapp/providers/types';
 import { processInboundMessage } from '@/lib/whatsapp/inbound-processor';
+import { handleCanonicalStatusEvent } from '@/lib/whatsapp/status-handler';
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -140,10 +141,55 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  // Z-API delivers a single message object; uazapi (Evolution) may deliver
-  // an array of messages inside payload.data. Normalize to an array of
-  // parsed events and dispatch each independently so one malformed event
-  // never blocks the others.
+  // =============================================================
+  // Status-first dispatch (ADR-MSG-STATUS-001 §2.11, D-C).
+  //
+  // Each payload is checked for status events BEFORE inbound parsing,
+  // so that a provider status webhook (Z-API MessageStatusCallback,
+  // uazapi MESSAGES_UPDATE) routes to the canonical status handler
+  // instead of producing a phantom 'unknown' inbound message.
+  //
+  // Z-API delivers a single object; uazapi may deliver an array or
+  // { event, data: { messages: [...] } }.
+  // =============================================================
+  let statusCount = 0;
+  let inboundCount = 0;
+
+  // Status events are extracted from the WHOLE payload, by the adapter,
+  // before any inbound interpretation. Each adapter owns its own envelope:
+  // Z-API sends one object with `ids[]`; uazapi sends
+  // { event: 'MESSAGES_UPDATE', data: { messages: [...] } } — where `data`
+  // is an OBJECT, not an array, so it must never be fed through the
+  // inbound array-unwrapping below.
+  let statusEvents: ReturnType<typeof providerInstance.parseStatusEvent> = [];
+  try {
+    statusEvents = providerInstance.parseStatusEvent(payload);
+  } catch (err) {
+    console.error('[webhook] parseStatusEvent failed:', err);
+  }
+
+  if (statusEvents.length > 0) {
+    // I5 — N identifiers, N independent applications: one failure must not
+    // suppress the others.
+    for (const statusEvent of statusEvents) {
+      try {
+        await handleCanonicalStatusEvent(statusEvent, config.id);
+        statusCount++;
+      } catch (err) {
+        console.error('[webhook] status event failed:', err);
+      }
+    }
+
+    return NextResponse.json({
+      received: true,
+      processed: 0,
+      inboundProcessed: 0,
+      statusProcessed: statusCount,
+    });
+  }
+
+  // Not a status event — inbound path, unchanged from the pre-E2.1
+  // behaviour (Z-API single object; uazapi array or { data: [...] }).
   const events: InboundMessage[] = [];
 
   if (provider === 'zapi') {
@@ -165,6 +211,7 @@ export async function POST(
   for (const event of events) {
     try {
       await processInboundMessage(event, config.account_id, config.user_id);
+      inboundCount++;
     } catch (err) {
       console.error('[webhook] processInboundMessage failed:', err);
     }
@@ -172,6 +219,8 @@ export async function POST(
 
   return NextResponse.json({
     received: true,
-    processed: events.length,
+    processed: inboundCount,
+    inboundProcessed: inboundCount,
+    statusProcessed: statusCount,
   });
 }

@@ -81,7 +81,10 @@ function makeChain(table: string) {
 const mockFromImpl = vi.fn((t: string) => makeChain(t))
 
 vi.mock('@/lib/supabase/admin-client', () => ({
-  supabaseAdmin: () => ({ from: mockFromImpl }),
+  supabaseAdmin: () => ({
+    from: mockFromImpl,
+    rpc: vi.fn(() => Promise.resolve({ data: 'msg-new-1', error: null })),
+  }),
 }))
 vi.mock('@/lib/whatsapp/encryption', () => ({
   encrypt: (v: string) => v,
