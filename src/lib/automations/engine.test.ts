@@ -6,11 +6,15 @@ const h = vi.hoisted(() => ({
   state: {
     owned: null as { id: string } | null,
     ownedCustomField: null as { id: string } | null,
+    // Row returned by the conversations lookup in resolveDealConversationId
+    // (account_id + contact_id + id all matched). null = "not found".
+    conversationFound: null as { id: string } | null,
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
     fromCalls: [] as string[],
     updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
     upsertCalls: [] as { table: string; payload: unknown }[],
+    dealInserts: [] as Record<string, unknown>[],
   },
 }));
 
@@ -40,6 +44,17 @@ vi.mock("./admin-client", () => {
       if (type === "upsert") {
         state.upsertCalls.push({ table, payload: ops.payload });
         return { data: null, error: null };
+      }
+      return { data: null, error: null };
+    }
+    if (table === "conversations") {
+      // resolveDealConversationId's ownership-scoped lookup.
+      return { data: state.conversationFound, error: null };
+    }
+    if (table === "deals") {
+      if (type === "insert") {
+        state.dealInserts.push(ops.payload as Record<string, unknown>);
+        return { data: { id: "deal1" }, error: null };
       }
       return { data: null, error: null };
     }
@@ -103,11 +118,13 @@ const ACCOUNT = "acct-1";
 beforeEach(() => {
   h.state.owned = null;
   h.state.ownedCustomField = null;
+  h.state.conversationFound = null;
   h.state.automations = [];
   h.state.steps = [];
   h.state.fromCalls = [];
   h.state.updateCalls = [];
   h.state.upsertCalls = [];
+  h.state.dealInserts = [];
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
@@ -225,6 +242,80 @@ describe("update_contact_field — custom fields", () => {
   });
 });
 
+describe("create_deal — conversation_id", () => {
+  it("persists context.conversation_id when it belongs to the account + contact", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.conversationFound = { id: "conv1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [createDealStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { conversation_id: "conv1" },
+    });
+
+    expect(h.state.dealInserts).toHaveLength(1);
+    expect(h.state.dealInserts[0].conversation_id).toBe("conv1");
+  });
+
+  it("persists null when context has no conversation_id", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [createDealStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+
+    expect(h.state.dealInserts).toHaveLength(1);
+    expect(h.state.dealInserts[0].conversation_id).toBeNull();
+  });
+
+  it("drops a conversation_id that does not resolve for this account + contact", async () => {
+    h.state.owned = { id: "c1" };
+    // Lookup scoped to account_id + contact_id finds nothing — the id in
+    // context belongs to another tenant or another contact.
+    h.state.conversationFound = null;
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [createDealStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { conversation_id: "foreign-conv" },
+    });
+
+    expect(h.state.dealInserts).toHaveLength(1);
+    expect(h.state.dealInserts[0].conversation_id).toBeNull();
+  });
+
+  it("still sets the other deal fields unchanged", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [createDealStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+
+    const insert = h.state.dealInserts[0];
+    expect(insert.account_id).toBe(ACCOUNT);
+    expect(insert.contact_id).toBe("c1");
+    expect(insert.pipeline_id).toBe("p1");
+    expect(insert.stage_id).toBe("st1");
+    expect(insert.status).toBe("open");
+  });
+});
+
 function automationWithUpdateStep() {
   return {
     id: "a1",
@@ -255,5 +346,16 @@ function customStep(field: string, value: string) {
     position: 0,
     parent_step_id: null,
     step_config: { field, value },
+  };
+}
+
+function createDealStep() {
+  return {
+    id: "s1",
+    automation_id: "a1",
+    step_type: "create_deal",
+    position: 0,
+    parent_step_id: null,
+    step_config: { pipeline_id: "p1", stage_id: "st1", title: "New deal" },
   };
 }

@@ -537,6 +537,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         .select('default_currency')
         .eq('id', args.automation.account_id)
         .maybeSingle()
+      const conversationId = await resolveDealConversationId(args)
       await db.from('deals').insert({
         // Tenancy + audit, same split as automation_logs above.
         account_id: args.automation.account_id,
@@ -544,6 +545,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         pipeline_id: cfg.pipeline_id,
         stage_id: cfg.stage_id,
         contact_id: args.contactId,
+        conversation_id: conversationId,
         title: interpolate(cfg.title, args),
         value: cfg.value ?? 0,
         currency: acct?.default_currency ?? 'USD',
@@ -604,6 +606,33 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   if (error) throw new Error(`conversation lookup failed: ${error.message}`)
   if (!data?.id) throw new Error('no conversation for contact')
   return data.id as string
+}
+
+/**
+ * Resolve the conversation to persist on a newly created deal.
+ *
+ * Unlike resolveConversationId (used for outbound sends, where a wrong
+ * id just fails loudly and nothing is stored), this writes a durable
+ * row. `context.conversation_id` is trusted as-is for send steps, but
+ * it can be caller-supplied — the manual POST /api/automations/engine
+ * entrypoint passes `body.context` straight through — so before
+ * persisting it on `deals.conversation_id` we verify it actually
+ * belongs to this automation's account AND to the triggering contact.
+ * A mismatch or missing context silently resolves to null rather than
+ * failing the whole step; deal creation must not break because of a
+ * stale or foreign conversation id.
+ */
+async function resolveDealConversationId(args: ExecuteArgs): Promise<string | null> {
+  const fromCtx = args.context.conversation_id
+  if (!fromCtx || !args.contactId) return null
+  const { data } = await supabaseAdmin()
+    .from('conversations')
+    .select('id')
+    .eq('id', fromCtx)
+    .eq('account_id', args.automation.account_id)
+    .eq('contact_id', args.contactId)
+    .maybeSingle()
+  return (data?.id as string | undefined) ?? null
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {

@@ -195,9 +195,16 @@ export function DealForm({
         setSaving(false);
         return;
       }
-      const { error } = await supabase
-        .from("deals")
-        .insert({ ...payload, user_id: user.id, account_id: accountId, status: "open" });
+      const { error } = await supabase.from("deals").insert({
+        ...payload,
+        user_id: user.id,
+        account_id: accountId,
+        status: "open",
+        // Set only on creation — deals.conversation_id is immutable
+        // afterward, so this must never be added to the shared
+        // `payload` object above (also used by the update branch).
+        conversation_id: linkedConversation?.id ?? null,
+      });
       if (error) {
         toast.error("Failed to create deal");
         setSaving(false);
