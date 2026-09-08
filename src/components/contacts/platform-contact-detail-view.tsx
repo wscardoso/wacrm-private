@@ -31,6 +31,7 @@ import {
   ListChecks,
   Megaphone,
 } from 'lucide-react';
+import { useResolvedMediaUrl } from '@/components/shared/account-media';
 
 // Platform read-only Contact DETAIL view (Option C: a platform-only component,
 // NOT a reuse of the member ContactDetailView). It renders a supervised
@@ -160,6 +161,12 @@ export function PlatformContactDetailView({
 
 function FoundDetail({ data }: { data: ContactDetailData }) {
   const { contact, tags, notes, customFields, customValues, deals, attribution } = data;
+  // S2 (plans/001-private-media-buckets-s2.md): ad_media_url is
+  // Meta-hosted ad creative today, never one of our buckets, but this
+  // resolves through the same shared path as every other stored media
+  // URL rather than assuming that never changes — a no-op for a URL
+  // that isn't recognizably ours.
+  const resolvedAdMediaUrl = useResolvedMediaUrl(attribution?.ad_media_url ?? null);
 
   return (
     <Tabs defaultValue="details" className="flex min-h-0 flex-1 flex-col">
@@ -308,7 +315,7 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
             <div className="mt-2 overflow-hidden rounded-lg border border-border">
               {attribution.ad_media_url && (
                 <img
-                  src={attribution.ad_media_url}
+                  src={resolvedAdMediaUrl}
                   alt={attribution.ad_headline ?? 'Ad creative'}
                   className="h-28 w-full object-cover"
                 />

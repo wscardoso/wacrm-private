@@ -33,6 +33,7 @@
  */
 
 import { supabaseAdmin } from "./admin-client";
+import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from "@/lib/storage/resolve-media-url";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -544,7 +545,12 @@ async function endRun(
 // new current_node_key before returning.
 // ============================================================
 
-async function advanceFromNodeKey(
+// Exported (only) so engine.test.ts can exercise the send_media
+// dispatch path — asserting the signed-URL resolution added by S2
+// (plans/001-private-media-buckets-s2.md) — without standing up a
+// full `dispatchInboundToFlows` webhook fixture. Not part of the
+// module's public API in any other sense.
+export async function advanceFromNodeKey(
   db: AdminClient,
   run: FlowRunRow,
   startNodeKey: string,
@@ -605,13 +611,24 @@ async function advanceFromNodeKey(
     if (node.node_type === "send_media") {
       const cfg = node.config as unknown as SendMediaNodeConfig;
       try {
+        // S2 (plans/001-private-media-buckets-s2.md): cfg.media_url is
+        // the OLD permanent public bucket URL shape — chat-media /
+        // flow-media are private post-migration-076. Resolve a
+        // short-lived signed URL right before it's forwarded to Meta
+        // as a fetchable `link`; passes through unchanged for a URL
+        // that isn't recognizably one of our buckets.
+        const resolvedMediaUrl = await resolveSignedMediaUrl(
+          db,
+          cfg.media_url,
+          MEDIA_SIGNED_URL_TTL_SECONDS,
+        );
         const { whatsapp_message_id } = await engineSendMedia({
           accountId: run.account_id,
     userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           kind: cfg.media_type,
-          link: cfg.media_url,
+          link: resolvedMediaUrl,
           caption: cfg.caption
             ? interpolateVars(cfg.caption, run.vars)
             : undefined,

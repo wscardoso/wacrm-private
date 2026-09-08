@@ -9,6 +9,7 @@ import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { settleMessageSystem, type SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import { classifyFailure } from '@/lib/whatsapp/delivery/failure-classifier'
 import { decideRetryOutcome, DEFAULT_BACKOFF_CONFIG, DEFAULT_TTL_MS, MAX_ATTEMPT_COUNT } from '@/lib/whatsapp/delivery/retry-policy'
+import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
 
 const BATCH_LIMIT = 50
 
@@ -175,10 +176,21 @@ async function processDueEntry(
     if (contentType === 'text') {
       sendResult = await provider.sendText({ to, text: msg.content_text ?? '', contextMessageId })
     } else if (['image', 'video', 'document', 'audio'].includes(contentType)) {
+      // S2 (plans/001-private-media-buckets-s2.md): msg.media_url is the
+      // OLD permanent public bucket URL shape — chat-media / flow-media
+      // are private post-migration-076. Resolve a short-lived signed URL
+      // right before re-attempting the send; `admin` is service-role, so
+      // it bypasses Storage RLS the same way it bypasses every other RLS
+      // check in this trusted background job. Passes through unchanged
+      // for a URL that isn't recognizably one of our buckets. A failure
+      // here (e.g. the object no longer exists) is caught below and
+      // routed through the same retry/dead-letter classification as any
+      // other send failure.
+      const resolvedMediaUrl = await resolveSignedMediaUrl(admin, msg.media_url ?? '', MEDIA_SIGNED_URL_TTL_SECONDS)
       sendResult = await provider.sendMedia({
         to,
         kind: contentType as 'image' | 'video' | 'document' | 'audio',
-        link: msg.media_url ?? '',
+        link: resolvedMediaUrl,
         caption: msg.content_text ?? undefined,
         contextMessageId,
       })

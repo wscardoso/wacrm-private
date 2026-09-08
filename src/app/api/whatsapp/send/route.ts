@@ -29,6 +29,7 @@ import {
 import type { MessageTemplate } from '@/types'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
 import { getProvider, type WhatsAppProvider, type ExternalIdentity, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
 
 type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
@@ -153,6 +154,27 @@ export async function POST(request: Request) {
         { error: 'Caption exceeds the 1024-character limit' },
         { status: 400 }
       )
+    }
+
+    // S2 (plans/001-private-media-buckets-s2.md): media_url stored on the
+    // message is the OLD permanent public bucket URL shape — chat-media /
+    // flow-media are private post-migration-076. Resolve a short-lived
+    // signed URL once, right before it's forwarded to a provider as a
+    // fetchable `link`; resolveSignedMediaUrl passes anything that isn't
+    // recognizably one of our buckets (e.g. forwarded/inbound Meta media)
+    // through unchanged.
+    let resolvedMediaUrl: string | undefined
+    if (isMediaKind) {
+      try {
+        resolvedMediaUrl = await resolveSignedMediaUrl(supabase, media_url, MEDIA_SIGNED_URL_TTL_SECONDS)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        console.error('[whatsapp/send] Failed to resolve signed media URL:', msg)
+        return NextResponse.json(
+          { error: `Failed to resolve media URL: ${msg}` },
+          { status: 500 },
+        )
+      }
     }
 
     // Fetch conversation and contact
@@ -331,7 +353,7 @@ export async function POST(request: Request) {
           ? await sendMedia(provider, {
               to: sanitizedPhone,
               kind: message_type as MediaKind,
-              link: media_url,
+              link: resolvedMediaUrl ?? media_url,
               caption: content_text || undefined,
               filename: filename || undefined,
               contextMessageId,
@@ -466,7 +488,7 @@ export async function POST(request: Request) {
         const result = await sendMedia(provider, {
           to: phone,
           kind: message_type as MediaKind,
-          link: media_url,
+          link: resolvedMediaUrl ?? media_url,
           caption: content_text || undefined,
           filename: filename || undefined,
           contextMessageId,

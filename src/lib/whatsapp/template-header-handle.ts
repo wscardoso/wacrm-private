@@ -1,5 +1,7 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadResumableMedia } from '@/lib/whatsapp/meta-api'
 import type { TemplatePayload } from '@/lib/whatsapp/template-validators'
+import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
 
 /**
  * Meta requires an `example.header_handle` (from the Resumable Upload
@@ -21,6 +23,7 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png']
 export async function ensureImageHeaderHandle(
   payload: TemplatePayload,
   accessToken: string,
+  supabase: SupabaseClient,
 ): Promise<void> {
   if (payload.header_type !== 'image') return
   if (payload.header_handle) return // already have one
@@ -33,11 +36,20 @@ export async function ensureImageHeaderHandle(
     )
   }
 
+  let mediaUrl: string
+  try {
+    mediaUrl = await resolveSignedMediaUrl(supabase, payload.header_media_url, MEDIA_SIGNED_URL_TTL_SECONDS)
+  } catch (err) {
+    throw new Error(
+      err instanceof Error ? `Could not resolve header image URL: ${err.message}` : 'Could not resolve header image URL.',
+    )
+  }
+
   // Fetch the sample image bytes (works for our uploaded chat-media URL
   // and for a manually-pasted public link).
   let res: Response
   try {
-    res = await fetch(payload.header_media_url)
+    res = await fetch(mediaUrl)
   } catch {
     throw new Error('Could not fetch the header image URL. Make sure it is publicly reachable.')
   }
