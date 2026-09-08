@@ -19,7 +19,7 @@
 
 O projeto está num estado assimétrico:
 
-- **A camada de tenant (member-side) é madura** `[C]`. Contatos, inbox, pipelines, broadcasts, automations, flows, templates Meta, API keys e settings existem ponta a ponta, com RLS em 33 tabelas e ~60 arquivos de teste.
+- **A camada de tenant (member-side) é madura** `[C]`. Contatos, inbox, pipelines, broadcasts, automations, flows, templates Meta, API keys e settings existem ponta a ponta, com RLS em 43 tabelas e ~60 arquivos de teste.
 - **A camada de Platform é recente e estreita** `[C]`. Fundação de autorização (037), contexto read-only (038), discovery (039), contatos e inbox read-only em `/act/[accountId]`, provisionamento de Workspace com Owner obrigatório (041–046, fechado em `c8f1585`). Não há tela de escrita platform-side além da criação de Workspace.
 - **A camada de messaging foi o débito dominante — hoje majoritariamente fechada** `[C]`. `E1` (Provider Boundary), `E2.0` (correção de identidade/R16), `E4a` (integridade de saída) e `E4b` (retry/DLQ) estão **concluídos**. Resta **E2.1** (Status Canônico) como único elo aberto da cadeia dura, e `E3` (Connections/multi-conexão) como item estrutural ainda não iniciado.
 
@@ -62,7 +62,7 @@ messages ( id, conversation_id,
 -- 034: UNIQUE (conversation_id, message_id) WHERE sender_type='customer'
 ```
 
-**33 tabelas** com RLS `[C]`; **20 RPCs** `[C]`.
+**43 tabelas** com RLS `[C]`; **74 funções/RPCs** `[C]`.
 
 ### 2.3 Inventário por módulo
 
@@ -72,7 +72,7 @@ messages ( id, conversation_id,
 
 **Platform (Superadmin)** — funcional parcial, read-heavy/write-thin `[C]`. Falta `/act/[accountId]/settings`, UI de operadores, visualizador de auditoria, suspensão de workspace, gestão de conexões.
 
-**Contacts** — completo member + read-only platform `[C]`. Risco: `findExistingContact` usa `LIKE '%sufixo'` → full scan `[C]`.
+**Contacts** — completo member + read-only platform `[C]`. Risco: `findExistingContact` usa `LIKE '%sufixo'` → full scan `[C]`. **Tags: feature completa, não lacuna `[C]`** — schema `tags`/`contact_tags` (001:58,73), RLS (017), RPC `filter_contacts_by_tags` (025/040), UI (`tag-manager.tsx`), uso em broadcast/automations/flows. Divergência da análise competitiva ChatPro corrigida (2026-08-07): a análise classificara Tags como "Não confirmado"; reconciliado em `docs/planning/RECONCILIACAO-FINAL-CHATPRO-2026-08-07.md`.
 
 **Conversations / Inbox** — funcional, débito estrutural `[C]`: `messages` sem `account_id` (C11), sem `provider` (C9), CHECK de status incompleto (C20), `assigned_agent_id` sem FK (C21).
 
@@ -82,9 +82,9 @@ messages ( id, conversation_id,
 
 **Pipelines / Deals** — funcional `[C]`. Risco C16 (CASCADE vs SET NULL no delete de contato).
 
-**Broadcasts** — funcional, Meta-only `[C]`.
+**Broadcasts** — funcional, provider-agnóstico via `getProvider()` `[C]` (`broadcast/route.ts:32,177`).
 
-**Automations & Flows** — dois motores paralelos, ambos funcionais, ambos Meta-only `[C]`. Nenhum documento explica se são complementares ou se um substitui o outro `[I]`.
+**Automations & Flows** — dois motores paralelos, ambos funcionais, ambos provider-agnósticos via `getProvider()` `[C]` (envio por `automations/meta-send.ts` e `flows/meta-send.ts` — contradiziam o próprio §1 deste documento quando declarados "Meta-only"; corrigido 2026-08-07). Nenhum documento explica se são complementares ou se um substitui o outro `[I]`. **Dívida reconhecida:** passo `assign_conversation` em modo `round_robin` é fake (`automations/engine.ts:451-464`). Critério de saída documentado (formalização no ADR-AUT-001, ainda não autorizado): gatilho quando (a) existir um dispatcher real de `conversation_assigned` (hoje validado em `validate.ts:173-176`, sem runtime) e a atribuição deixar de ser autor-only, OU (b) um cliente operar 2+ agentes ativos e distribuição equitativa virar requisito de produto.
 
 **Public API v1** — scaffold; um endpoint (`GET /api/v1/me`) `[C]`.
 
@@ -204,7 +204,7 @@ IDENTIDADE DE MENSAGEM (estado real)
 | **E9** | Platform Operations UI | grant/revoke, assign, audit viewer, suspensão | a escrever | **CONCLUÍDO** — commit `2a2da71` |
 | **E10** | ADR-AUT-001 + Convergência | Automations × Flows | a escrever | P2 — não iniciado |
 | **E11** | Public API v1 Resources | Endpoints com escopos enforced | a escrever | P2 — não iniciado |
-| **E12** | Reporting & Export | Relatórios e export, incluindo UI de relatório de attribution (herdada de E6, reescopo 2026-07-30) | a escrever | P2 — não iniciado, **desbloqueado** (E6 concluído em 2026-07-30) |
+| **E12** | Reporting & Export | Relatórios e export, incluindo UI de relatório de attribution (herdada de E6, reescopo 2026-07-30). **Nota de design (2026-08-07): nascer multi-origem desde a primeira query** — `source_channel` já suporta `ctwa_meta | tracked_link | organic | unknown` (033:45-47); Fonte B (`tracking_links`/`tracking_clicks`, `/r/[slug]`) já especificada e **Aceita** em `ADR-ATTR-001 §3.4/D2` (P2, não iniciada) — **sem novo ADR**, a decisão já está tomada. **Gap registrado no escopo de design:** `lead_attributions` não tem nenhuma FK/ligação com `deals` — se o objetivo de E12 for relatório comercial (receita por origem), a ligação attribution→deal entra no escopo agora, não como P3 futuro | a escrever | P2 — não iniciado, **desbloqueado** (E6 concluído em 2026-07-30) |
 | **E13** | Observabilidade | Correlation IDs, logs estruturados | a escrever | P2 — não iniciado |
 
 ---
@@ -368,7 +368,7 @@ Ativo a preservar `[C]`: ~60 arquivos, com testes PGlite reais de RPC e RLS.
 **Comunicação** — [x] inbox realtime · [x] mídia · [x] reactions (Meta) · [x] templates Meta · [x] **fronteira de entrega (E1)** · [x] **identidade correta (E2.0)** · [ ] **status não-Meta (E2.1) — próxima épica**
 **Automação** — [x] automations · [x] flows · [x] **envio provider-agnóstico (E1)**
 **Operação** — [x] falha de envio visível (E4a) · [x] DLQ ligada (E4b)
-**Segurança** — [x] RLS em 33 tabelas · [x] auth do webhook não-Meta · [x] rate-limit · [x] versionamento de chave (E7, concluído 2026-07-27)
+**Segurança** — [x] RLS em 43 tabelas · [x] auth do webhook não-Meta · [x] rate-limit · [x] versionamento de chave (E7, concluído 2026-07-27)
 **Auditoria** — [x] `platform_audit_log` · [ ] visualizador (E9)
 **Testes** — [x] suíte + PGlite · [ ] matriz de provider (E1) · [ ] regressão R16 (E2.0) · [ ] cross-tenant (E3)
 **Deploy** — [x] CI · [?] pipeline de migration em produção — confirmar (D7)
