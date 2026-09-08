@@ -1,4 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// S2 (plans/001-private-media-buckets-s2.md) — engine.ts resolves a
+// signed URL before forwarding a send_media node's media_url to Meta
+// as `link`. Mocked here so the "advanceFromNodeKey — send_media"
+// suite below can assert that resolution happens without a real
+// Supabase/Storage round trip. Other tests in this file (pure helper
+// functions) never touch these modules, so mocking them is inert
+// for the rest of the suite.
+const mockEngineSendMedia = vi.fn();
+vi.mock("./meta-send", () => ({
+  engineSendInteractiveButtons: vi.fn(),
+  engineSendInteractiveList: vi.fn(),
+  engineSendMedia: (...args: unknown[]) => mockEngineSendMedia(...args),
+  engineSendText: vi.fn(),
+}));
+
+const mockResolveSignedMediaUrl = vi.fn(async (_db: unknown, url: string) => url);
+vi.mock("@/lib/storage/resolve-media-url", () => ({
+  resolveSignedMediaUrl: (...args: Parameters<typeof mockResolveSignedMediaUrl>) => mockResolveSignedMediaUrl(...args),
+  MEDIA_SIGNED_URL_TTL_SECONDS: 86400,
+}));
+
 import {
   matchReplyId,
   matchesKeywordTrigger,
@@ -6,7 +28,9 @@ import {
   isSuspending,
   isTerminal,
   evaluateConditionPredicate,
+  advanceFromNodeKey,
 } from "./engine";
+import type { FlowNodeRow, FlowRunRow } from "./types";
 
 describe("matchReplyId", () => {
   it("returns null for nodes without options", () => {
@@ -295,5 +319,85 @@ describe("evaluateConditionPredicate", () => {
         configValue: "anything",
       }),
     ).toBe(false);
+  });
+});
+
+// ─── S2 (plans/001-private-media-buckets-s2.md) — signed URL at dispatch ──
+
+describe("advanceFromNodeKey — send_media resolves a signed URL before dispatch", () => {
+  function makeMockDb() {
+    const chain = {
+      insert: vi.fn().mockResolvedValue({ error: null }),
+      update: vi.fn(function (this: unknown) { return chain; }),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    };
+    return { from: vi.fn(() => chain) } as unknown as Parameters<typeof advanceFromNodeKey>[0];
+  }
+
+  const run: FlowRunRow = {
+    id: "run-1",
+    flow_id: "flow-1",
+    account_id: "account-1",
+    user_id: "user-1",
+    contact_id: "contact-1",
+    conversation_id: "conv-1",
+    status: "active",
+    current_node_key: "media1",
+    last_prompt_message_id: null,
+    vars: {},
+    reprompt_count: 0,
+    started_at: new Date().toISOString(),
+    last_advanced_at: new Date().toISOString(),
+    ended_at: null,
+    end_reason: null,
+  };
+
+  function mediaNode(mediaUrl: string): Map<string, FlowNodeRow> {
+    const node: FlowNodeRow = {
+      id: "node-1",
+      flow_id: "flow-1",
+      node_key: "media1",
+      node_type: "send_media",
+      config: {
+        media_type: "image",
+        media_url: mediaUrl,
+        next_node_key: "",
+      },
+      position_x: 0,
+      position_y: 0,
+      created_at: new Date().toISOString(),
+    };
+    return new Map([["media1", node]]);
+  }
+
+  beforeEach(() => {
+    mockEngineSendMedia.mockReset();
+    mockEngineSendMedia.mockResolvedValue({ whatsapp_message_id: "wamid.1" });
+    mockResolveSignedMediaUrl.mockReset();
+    mockResolveSignedMediaUrl.mockImplementation(async (_db: unknown, url: string) => url);
+  });
+
+  it("resolves a signed URL and forwards it (not the raw media_url) as `link`", async () => {
+    const rawUrl = "https://proj.supabase.co/storage/v1/object/public/flow-media/account-1/node.png";
+    const signedUrl = "https://proj.supabase.co/storage/v1/object/sign/flow-media/account-1/node.png?token=abc";
+    mockResolveSignedMediaUrl.mockResolvedValueOnce(signedUrl);
+
+    const db = makeMockDb();
+    await advanceFromNodeKey(db, run, "media1", mediaNode(rawUrl));
+
+    expect(mockResolveSignedMediaUrl).toHaveBeenCalledWith(db, rawUrl, 86400);
+    expect(mockEngineSendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ link: signedUrl }),
+    );
+  });
+
+  it("forwards a non-bucket media_url unchanged (resolver pass-through)", async () => {
+    const inboundUrl = "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=xyz";
+    const db = makeMockDb();
+    await advanceFromNodeKey(db, run, "media1", mediaNode(inboundUrl));
+
+    expect(mockEngineSendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ link: inboundUrl }),
+    );
   });
 });

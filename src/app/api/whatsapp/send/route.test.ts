@@ -78,6 +78,18 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: mockCreateClientImpl,
 }))
 
+// S2 (plans/001-private-media-buckets-s2.md) — the route resolves a
+// signed URL before forwarding media_url to a provider as `link`.
+// Default: pass the input straight through (mirrors the real
+// resolver's pass-through behavior for anything not one of our
+// buckets); individual tests override this to prove the resolved
+// value — not the raw media_url — is what reaches the provider.
+const mockResolveSignedMediaUrl = vi.fn(async (_supabase: unknown, url: string) => url)
+vi.mock('@/lib/storage/resolve-media-url', () => ({
+  resolveSignedMediaUrl: (...args: Parameters<typeof mockResolveSignedMediaUrl>) => mockResolveSignedMediaUrl(...args),
+  MEDIA_SIGNED_URL_TTL_SECONDS: 86400,
+}))
+
 const mockGetProvider = vi.fn()
 vi.mock('@/lib/whatsapp/providers', () => ({
   getProvider: mockGetProvider,
@@ -336,6 +348,57 @@ describe('POST /api/whatsapp/send', () => {
 
     const wcChain = db.from('whatsapp_config') as unknown as { update: ReturnType<typeof vi.fn> }
     expect(wcChain.update).not.toHaveBeenCalled()
+  })
+
+  // ─── S2 (plans/001-private-media-buckets-s2.md) — signed URL at dispatch ──
+
+  it('sends a media message using the resolved signed URL, not the raw stored media_url', async () => {
+    const rawUrl = 'https://proj.supabase.co/storage/v1/object/public/chat-media/account-a1/photo.png'
+    const signedUrl = 'https://proj.supabase.co/storage/v1/object/sign/chat-media/account-a1/photo.png?token=abc'
+    mockResolveSignedMediaUrl.mockResolvedValueOnce(signedUrl)
+    mockSendMediaMessage.mockResolvedValueOnce({ messageId: 'wamid.media1', externalIdentities: [] })
+
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'image',
+      media_url: rawUrl,
+    }))
+    expect(res.status).toBe(200)
+    expect(mockResolveSignedMediaUrl).toHaveBeenCalledWith(expect.anything(), rawUrl, 86400)
+    expect(mockSendMediaMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ link: signedUrl }),
+    )
+  })
+
+  it('forwards a non-bucket media_url unchanged (resolver pass-through)', async () => {
+    const inboundUrl = 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc123'
+    // Default mock implementation already passes the URL through unchanged.
+    mockSendMediaMessage.mockResolvedValueOnce({ messageId: 'wamid.media2', externalIdentities: [] })
+
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'image',
+      media_url: inboundUrl,
+    }))
+    expect(res.status).toBe(200)
+    expect(mockSendMediaMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ link: inboundUrl }),
+    )
+  })
+
+  it('returns 500 and does not attempt to send when signed-URL resolution fails', async () => {
+    mockResolveSignedMediaUrl.mockRejectedValueOnce(new Error('permission denied'))
+
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'image',
+      media_url: 'https://proj.supabase.co/storage/v1/object/public/chat-media/account-other/photo.png',
+    }))
+    expect(res.status).toBe(500)
+    expect(mockSendMediaMessage).not.toHaveBeenCalled()
   })
 
   it('sends a template message successfully', async () => {
