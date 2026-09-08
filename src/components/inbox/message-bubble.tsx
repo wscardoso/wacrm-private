@@ -17,6 +17,7 @@ import {
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+import { useResolvedMediaUrl } from "@/components/shared/account-media";
 
 interface MessageBubbleProps {
   message: Message;
@@ -75,8 +76,27 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
         setLoading(false);
       }
     } else {
-      setSrc(url);
-      setLoading(false);
+      // S2 (plans/001-private-media-buckets-s2.md): chat-media / flow-media
+      // are private post-migration-076 — a stored public URL 403s. Resolve
+      // a short-lived signed URL before rendering; no-ops for anything
+      // that isn't recognizably one of our buckets.
+      try {
+        const res = await fetch("/api/media/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        if (!res.ok) throw new Error("Failed to resolve media URL");
+        const data = (await res.json()) as { url?: string };
+        setSrc(data.url || url);
+      } catch {
+        // Fall back to the raw URL — still works for anything that
+        // wasn't ever ours (e.g. legacy inbound media stored as a
+        // direct link), and <img onError> handles the rest.
+        setSrc(url);
+      } finally {
+        setLoading(false);
+      }
     }
   }, [url]);
 
@@ -117,6 +137,42 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   );
 }
 
+// S2 (plans/001-private-media-buckets-s2.md): video/audio/document
+// never had their own async loading state (unlike MediaImage above),
+// so these route straight through the shared hook rather than
+// duplicating MediaImage's blob/spinner machinery.
+
+function MediaVideo({ url, className }: { url: string; className: string }) {
+  const resolvedUrl = useResolvedMediaUrl(url);
+  return <video src={resolvedUrl} controls className={className} />;
+}
+
+function MediaAudio({ url, className }: { url: string; className: string }) {
+  const resolvedUrl = useResolvedMediaUrl(url);
+  return <audio src={resolvedUrl} controls className={className} />;
+}
+
+function MediaDocumentLink({
+  url,
+  label,
+}: {
+  url: string;
+  label: string;
+}) {
+  const resolvedUrl = useResolvedMediaUrl(url);
+  return (
+    <a
+      href={resolvedUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
+    >
+      <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+      <span className="truncate">{label}</span>
+    </a>
+  );
+}
+
 function MessageContent({ message }: { message: Message }) {
   switch (message.content_type) {
     case "text":
@@ -146,11 +202,7 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <video
-              src={message.media_url}
-              controls
-              className="max-h-64 max-w-60 rounded-lg"
-            />
+            <MediaVideo url={message.media_url} className="max-h-64 max-w-60 rounded-lg" />
           ) : (
             <MediaUnavailable label="Video" />
           )}
@@ -166,7 +218,7 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <audio src={message.media_url} controls className="max-w-60" />
+            <MediaAudio url={message.media_url} className="max-w-60" />
           ) : (
             <MediaUnavailable label="Audio" />
           )}
@@ -178,17 +230,10 @@ function MessageContent({ message }: { message: Message }) {
         return <MediaUnavailable label={message.content_text || "Document"} />;
       }
       return (
-        <a
-          href={message.media_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
-        >
-          <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <span className="truncate">
-            {message.content_text || "Document"}
-          </span>
-        </a>
+        <MediaDocumentLink
+          url={message.media_url}
+          label={message.content_text || "Document"}
+        />
       );
 
     case "template":

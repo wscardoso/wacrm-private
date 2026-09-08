@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ArrowLeft, ArrowRight, Eye, ImageIcon, Loader2 } from 'lucide-react';
+import { useResolvedMediaUrl } from '@/components/shared/account-media';
 
 type VariableType = 'static' | 'field' | 'custom_field';
 
@@ -83,6 +84,13 @@ export function Step3Personalize({
     Map<string, string>
   >(new Map());
   const [loadingPreview, setLoadingPreview] = useState(true);
+
+  // S2 (plans/001-private-media-buckets-s2.md): headerMediaUrl may be a
+  // chat-media/flow-media public URL (uploaded via the template header's
+  // file picker) — private post-migration-076, so the preview thumbnail
+  // needs a signed URL. No-ops for a URL that isn't ours (e.g. a pasted
+  // third-party sample URL).
+  const resolvedHeaderPreviewUrl = useResolvedMediaUrl(headerMediaUrl.trim());
 
   // Load user's custom fields + a representative contact for the
   // live preview. Fall back to sample data if no contacts exist yet.
@@ -276,7 +284,7 @@ export function Step3Personalize({
             headerMediaUrl.trim() && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={headerMediaUrl.trim()}
+                src={resolvedHeaderPreviewUrl}
                 alt="Header preview"
                 className="mt-3 max-h-40 rounded-lg border border-border object-contain"
               />

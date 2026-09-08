@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
+import { useResolvedMediaUrl } from "@/components/shared/account-media";
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -38,6 +39,12 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
   const [attribution, setAttribution] = useState<LeadAttribution | null>(null);
+  // S2 (plans/001-private-media-buckets-s2.md): ad_media_url is
+  // Meta-hosted ad creative today, never one of our buckets, but this
+  // resolves through the same shared path as every other stored media
+  // URL rather than assuming that never changes — a no-op for a URL
+  // that isn't recognizably ours.
+  const resolvedAdMediaUrl = useResolvedMediaUrl(attribution?.ad_media_url ?? null);
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -207,7 +214,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                 <div className="mt-2 overflow-hidden rounded-lg border border-border">
                   {attribution.ad_media_url && (
                     <img
-                      src={attribution.ad_media_url}
+                      src={resolvedAdMediaUrl}
                       alt={attribution.ad_headline ?? "Ad creative"}
                       className="h-28 w-full object-cover"
                     />
