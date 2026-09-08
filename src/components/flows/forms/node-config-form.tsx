@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { uploadAccountMedia, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media";
+import { useResolvedMediaUrl } from "@/components/shared/account-media";
 import { slugify, type BuilderNode } from "../shared";
 import { NextNodeRow, NodeKeySelect, TextRow } from "./fields";
 
@@ -892,6 +893,7 @@ function SendMediaForm({
   const displayName =
     cfg.filename ||
     (cfg.media_url ? cfg.media_url.split("/").pop() ?? "" : "");
+  const resolvedMediaUrl = useResolvedMediaUrl(cfg.media_url);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -963,7 +965,7 @@ function SendMediaForm({
           <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs">
             <Paperclip className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
             <a
-              href={cfg.media_url}
+              href={resolvedMediaUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="min-w-0 flex-1 truncate text-foreground hover:text-cyan-300"
