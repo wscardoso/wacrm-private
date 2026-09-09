@@ -889,6 +889,7 @@
       "no_operators": "No operators yet.",
       "loading": "Loading...",
       "unauthorized": "You need to be an active platform admin to manage the team.",
+      "load_error": "Could not load the team. {message}",
       "assigned_tenants_none": "No tenants assigned"
     },
     "invite_dialog": {

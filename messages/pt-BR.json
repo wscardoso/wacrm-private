@@ -889,6 +889,7 @@
       "no_operators": "Nenhum operador cadastrado ainda.",
       "loading": "Carregando...",
       "unauthorized": "Você precisa ser um admin ativo da plataforma para gerenciar a equipe.",
+      "load_error": "Não foi possível carregar a equipe. {message}",
       "assigned_tenants_none": "Nenhum tenant atribuído"
     },
     "invite_dialog": {

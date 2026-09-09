@@ -50,6 +50,7 @@ export function TeamTab({ supervisedAccounts }: TeamTabProps) {
   const t = useTranslations("act.team");
   const [operators, setOperators] = useState<PlatformOperatorRow[] | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<PlatformOperatorRow | null>(null);
   const [manageTarget, setManageTarget] = useState<PlatformOperatorRow | null>(null);
   const [revoking, setRevoking] = useState(false);
@@ -62,11 +63,20 @@ export function TeamTab({ supervisedAccounts }: TeamTabProps) {
   const refresh = useCallback(() => {
     return listOperatorsAction().then((result) => {
       if (!result.success) {
-        setUnauthorized(result.error.code === "unauthorized");
-        setOperators([]);
+        const isUnauthorized = result.error.code === "unauthorized";
+        setUnauthorized(isUnauthorized);
+        // A real fetch failure (e.g. an unexpected RPC error) must not
+        // render as "no operators yet" — that reading of an empty
+        // array is exactly what hid the 42804 type-mismatch bug in
+        // list_platform_operators() (062, fixed by 077) behind a
+        // silent "Nenhum operador cadastrado ainda". Only the
+        // genuinely-empty success case sets operators to [].
+        setLoadError(isUnauthorized ? null : result.error.message);
+        setOperators(null);
         return;
       }
       setUnauthorized(false);
+      setLoadError(null);
       setOperators(result.operators);
     });
   }, []);
@@ -86,6 +96,12 @@ export function TeamTab({ supervisedAccounts }: TeamTabProps) {
 
   if (unauthorized) {
     return <p className="text-sm text-muted-foreground">{t("unauthorized")}</p>;
+  }
+
+  if (loadError) {
+    return (
+      <p className="text-sm text-destructive">{t("load_error", { message: loadError })}</p>
+    );
   }
 
   if (operators === null) {
