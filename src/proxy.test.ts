@@ -110,4 +110,33 @@ describe("proxy — refreshed auth cookies survive redirects", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
+
+  // F-ENV-02 — /act (platform-operator "act as tenant" entry point) has its
+  // own robust server-side auth+authorization checks in page.tsx/layout.tsx,
+  // so this is defense-in-depth, not the only gate: an unauthenticated
+  // request short-circuits here instead of round-tripping through
+  // / → /dashboard → /login before landing on the same /login destination.
+  it("redirects an unauth user straight to /login from /act (and nested /act/* routes)", async () => {
+    mockUser = null;
+
+    const res = await proxy(new NextRequest("https://app.test/act"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+
+    const nested = await proxy(
+      new NextRequest("https://app.test/act/some-account-id/inbox"),
+    );
+    expect(nested.status).toBe(307);
+    expect(nested.headers.get("location")).toContain("/login");
+  });
+
+  it("passes through (no redirect) for a signed-in user on /act", async () => {
+    mockUser = { id: "user-1" };
+    refreshedCookies = [ROTATED];
+
+    const res = await proxy(new NextRequest("https://app.test/act"));
+
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
+  });
 });
