@@ -61,6 +61,18 @@ vi.mock('@/lib/storage/resolve-media-url', () => ({
   MEDIA_SIGNED_URL_TTL_SECONDS: 86400,
 }))
 
+// F-INT-04 (E2E validation) — cronDrain rate limit added on top of the
+// existing cron-secret gate. Defaults to always-allow so every
+// pre-existing test below keeps its exact prior behavior; the
+// dedicated 429 test overrides this.
+const mockCheckRateLimit = vi.fn()
+const mockRateLimitResponse = vi.fn()
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
+  rateLimitResponse: (...args: unknown[]) => mockRateLimitResponse(...args),
+  RATE_LIMITS: { cronDrain: { limit: 10, windowMs: 60_000 } },
+}))
+
 // ---------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------
@@ -161,6 +173,10 @@ beforeEach(() => {
     capabilities: { nativeIdempotency: false, deliveryReconciliation: false },
   })
   mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'sent' })
+  mockCheckRateLimit.mockReturnValue({ success: true, remaining: 9, reset: 0, limit: 10 })
+  mockRateLimitResponse.mockReturnValue(
+    new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }),
+  )
 })
 
 describe('GET /api/whatsapp/delivery/cron', () => {
@@ -175,6 +191,14 @@ describe('GET /api/whatsapp/delivery/cron', () => {
     const { GET } = await import('./route')
     const res = await GET(req('wrong-secret'))
     expect(res.status).toBe(401)
+  })
+
+  it('returns 429 when the cron drain rate limit is exceeded — F-INT-04', async () => {
+    mockCheckRateLimit.mockReturnValue({ success: false, remaining: 0, reset: 0, limit: 10 })
+    const { GET } = await import('./route')
+    const res = await GET(req('test-secret'))
+    expect(res.status).toBe(429)
+    expect(mockCheckRateLimit).toHaveBeenCalledWith('cron:whatsapp-delivery', { limit: 10, windowMs: 60_000 })
   })
 
   it('returns 401 when no secret is supplied', async () => {

@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { getProvider } from '@/lib/whatsapp/providers'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
@@ -48,6 +49,9 @@ export async function GET(request: Request) {
   ) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const limit = checkRateLimit('cron:whatsapp-orphan-sweep', RATE_LIMITS.cronDrain)
+  if (!limit.success) return rateLimitResponse(limit)
 
   const admin = supabaseAdmin()
 

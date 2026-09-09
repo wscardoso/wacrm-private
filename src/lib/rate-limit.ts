@@ -165,6 +165,16 @@ export const RATE_LIMITS = {
    *  against the webhook secret. A 401 or 429 still counts toward the
    *  budget so a scanner cannot burn the limit to mask its hit rate. */
   webhookNonMeta: { limit: 120, windowMs: 60_000 },
+  /** Outbound-delivery cron drains (`whatsapp/delivery/cron`,
+   *  `whatsapp/delivery/orphan-sweep`), keyed per route regardless of
+   *  caller. These already require AUTOMATION_CRON_SECRET via a
+   *  timing-safe comparison, but that's the only gate — a leaked
+   *  secret would otherwise let a caller trigger real outbound Meta
+   *  sends (up to BATCH_LIMIT per call) at unlimited frequency
+   *  (F-INT-04, E2E validation). A legitimate external scheduler
+   *  calls this at most once every few minutes, so 10/min is
+   *  generous headroom while bounding a tight-loop abuse attempt. */
+  cronDrain: { limit: 10, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests do not
