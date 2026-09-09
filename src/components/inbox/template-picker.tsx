@@ -80,6 +80,8 @@ export function TemplatePicker({
 }: TemplatePickerProps) {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
   const [selected, setSelected] = useState<MessageTemplate | null>(null);
   const [params, setParams] = useState<string[]>([]);
   const [headerText, setHeaderText] = useState<string>("");
@@ -91,6 +93,7 @@ export function TemplatePicker({
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setFetchError(false);
       const supabase = createClient();
       const {
         data: { user },
@@ -114,7 +117,7 @@ export function TemplatePicker({
       if (cancelled) return;
       if (error) {
         console.error("Failed to fetch templates:", error);
-        setTemplates([]);
+        setFetchError(true);
       } else {
         setTemplates((data as MessageTemplate[]) ?? []);
       }
@@ -124,7 +127,7 @@ export function TemplatePicker({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, retryToken]);
 
   function resetSelection() {
     setSelected(null);
@@ -201,6 +204,17 @@ export function TemplatePicker({
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              </div>
+            ) : fetchError ? (
+              <div className="rounded-md border border-border bg-background/50 p-6 text-center">
+                <p className="text-sm text-popover-foreground">Couldn&apos;t load templates</p>
+                <button
+                  type="button"
+                  onClick={() => setRetryToken((t) => t + 1)}
+                  className="mt-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-popover-foreground transition-colors hover:bg-muted"
+                >
+                  Try again
+                </button>
               </div>
             ) : templates.length === 0 ? (
               <div className="rounded-md border border-border bg-background/50 p-6 text-center">

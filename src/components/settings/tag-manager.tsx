@@ -46,6 +46,7 @@ export function TagManager() {
   const { user, accountId, canEditSettings, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [tags, setTags] = useState<Tag[]>([]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<Tag | null>(null);
@@ -68,6 +69,7 @@ export function TagManager() {
   async function fetchTags(acctId: string) {
     try {
       setLoading(true);
+      setFetchError(false);
       const { data, error } = await supabase
         .from('tags')
         .select('*')
@@ -79,6 +81,7 @@ export function TagManager() {
     } catch (err) {
       console.error('Failed to fetch tags:', err);
       toast.error('Failed to load tags');
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -164,6 +167,17 @@ export function TagManager() {
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="size-6 animate-spin text-primary" />
+          </div>
+        ) : fetchError ? (
+          <div className="flex flex-col items-center gap-2 py-8 text-center">
+            <p className="text-sm text-muted-foreground">Couldn&apos;t load tags.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => accountId && fetchTags(accountId)}
+            >
+              Try again
+            </Button>
           </div>
         ) : (
           <>

@@ -104,18 +104,21 @@ export default function ContactsPage() {
   const fetchSeq = useRef(0);
 
   const fetchTags = useCallback(async () => {
-    const { data } = await supabase.from('tags').select('*');
-    if (data) {
-      const map: Record<string, Tag> = {};
-      data.forEach((t) => (map[t.id] = t));
-      setTagsMap(map);
-      // Drop any filter selections whose tag no longer exists (e.g. a tag
-      // deleted elsewhere) so it can't linger invisibly in the query.
-      setSelectedTagIds((prev) => {
-        const pruned = prev.filter((id) => map[id]);
-        return pruned.length === prev.length ? prev : pruned;
-      });
+    const { data, error } = await supabase.from('tags').select('*');
+    if (error) {
+      console.error('[contacts] fetch tags failed:', error);
+      toast.error('Failed to load tags');
+      return;
     }
+    const map: Record<string, Tag> = {};
+    data.forEach((t) => (map[t.id] = t));
+    setTagsMap(map);
+    // Drop any filter selections whose tag no longer exists (e.g. a tag
+    // deleted elsewhere) so it can't linger invisibly in the query.
+    setSelectedTagIds((prev) => {
+      const pruned = prev.filter((id) => map[id]);
+      return pruned.length === prev.length ? prev : pruned;
+    });
   }, [supabase]);
 
   const fetchContacts = useCallback(async () => {
@@ -186,11 +189,19 @@ export default function ContactsPage() {
 
     // Fetch tags for these contacts
     const contactIds = contactRows.map((c) => c.id);
-    const { data: contactTags } = await supabase
+    const { data: contactTags, error: contactTagsError } = await supabase
       .from('contact_tags')
       .select('contact_id, tag_id')
       .in('contact_id', contactIds);
     if (seq !== fetchSeq.current) return; // superseded by a newer fetch
+    if (contactTagsError) {
+      // Don't blank the contact list over this — the contacts
+      // themselves loaded fine. But rendering everyone as untagged
+      // without saying so risks a mis-targeted broadcast or a missed
+      // compliance/opt-out tag (F-UI-06, E2E validation).
+      console.error('[contacts] fetch contact_tags failed:', contactTagsError);
+      toast.error('Failed to load tags for these contacts — tags shown may be incomplete');
+    }
 
     const tagsByContact: Record<string, string[]> = {};
     contactTags?.forEach((ct) => {

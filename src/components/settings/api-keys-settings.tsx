@@ -73,15 +73,21 @@ export function ApiKeysSettings() {
 
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
+      setFetchError(false);
       const res = await fetch('/api/account/api-keys', { cache: 'no-store' });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         toast.error(payload.error || 'Failed to load API keys');
+        // An admin auditing/rotating leaked credentials must not see
+        // a silent "no API keys yet" here — they could wrongly
+        // conclude there's nothing to revoke (F-UI-09, E2E validation).
+        setFetchError(true);
         return;
       }
       const data = (await res.json()) as { keys: ApiKey[] };
@@ -89,6 +95,7 @@ export function ApiKeysSettings() {
     } catch (err) {
       console.error('[ApiKeysSettings] load error:', err);
       toast.error('Could not reach the server');
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -129,6 +136,17 @@ export function ApiKeysSettings() {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="text-primary size-6 animate-spin" />
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-12 text-center">
+        <p className="text-sm text-muted-foreground">Couldn&apos;t load API keys.</p>
+        <Button variant="outline" size="sm" onClick={() => void load()}>
+          Try again
+        </Button>
       </div>
     );
   }

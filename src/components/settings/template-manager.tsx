@@ -129,6 +129,7 @@ export function TemplateManager() {
   const { user, accountId, canEditSettings, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -192,6 +193,7 @@ export function TemplateManager() {
   async function fetchTemplates(acctId: string) {
     try {
       setLoading(true);
+      setFetchError(false);
       const { data, error } = await supabase
         .from('message_templates')
         .select('*')
@@ -202,6 +204,7 @@ export function TemplateManager() {
     } catch (err) {
       console.error('Failed to fetch templates:', err);
       toast.error('Failed to load templates');
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -513,7 +516,20 @@ export function TemplateManager() {
         }
       />
 
-      {templates.length === 0 ? (
+      {fetchError ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center gap-2 py-12 text-center">
+            <p className="text-muted-foreground text-sm">Couldn&apos;t load templates.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => accountId && fetchTemplates(accountId)}
+            >
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      ) : templates.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <p className="text-muted-foreground text-sm">No templates yet.</p>

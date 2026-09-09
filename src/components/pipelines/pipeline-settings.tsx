@@ -163,10 +163,17 @@ export function PipelineSettings({
 
   async function handleRemoveStage(stageId: string) {
     // Refuse to delete if deals still reference the stage (FK would fail).
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from("deals")
       .select("id", { count: "exact", head: true })
       .eq("stage_id", stageId);
+    if (countError) {
+      // A failed guard query must never be read as "zero deals" — that
+      // would silently let the delete below proceed unguarded
+      // (F-UI-10, E2E validation).
+      toast.error("Couldn't check for deals in this stage — try again");
+      return;
+    }
     if (count && count > 0) {
       toast.error("Move or delete deals in this stage first");
       return;

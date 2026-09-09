@@ -131,6 +131,7 @@ export function MembersTab() {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removingMember, setRemovingMember] = useState<Member | null>(null);
@@ -140,6 +141,7 @@ export function MembersTab() {
 
   const loadEverything = useCallback(async () => {
     try {
+      setFetchError(false);
       const [mres, ires] = await Promise.all([
         fetch('/api/account/members', { cache: 'no-store' }),
         canManageMembers
@@ -150,6 +152,12 @@ export function MembersTab() {
       if (!mres.ok) {
         const payload = await mres.json().catch(() => ({}));
         toast.error(payload.error || 'Failed to load members');
+        // The roster itself failed — this is the security-relevant
+        // case (an admin reviewing access after an incident must not
+        // see a silently-empty "no team members" instead of an
+        // error, F-UI-08). Invitation-list failures below stay a
+        // toast-only concern; the roster is what matters here.
+        setFetchError(true);
         return;
       }
       const mdata = (await mres.json()) as { members: Member[] };
@@ -169,6 +177,7 @@ export function MembersTab() {
     } catch (err) {
       console.error('[MembersTab] load error:', err);
       toast.error('Could not reach the server');
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -275,6 +284,17 @@ export function MembersTab() {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="size-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-12 text-center">
+        <p className="text-sm text-muted-foreground">Couldn&apos;t load team members.</p>
+        <Button variant="outline" size="sm" onClick={() => void loadEverything()}>
+          Try again
+        </Button>
       </div>
     );
   }
