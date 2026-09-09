@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
 import type { ConversationsSeriesPoint } from '@/lib/dashboard/types'
-import { EmptyState } from './empty-state'
+import { EmptyState, ErrorState } from './empty-state'
 import { Skeleton } from './skeleton'
 import { cn } from '@/lib/utils'
 
@@ -12,9 +12,15 @@ type RangeDays = 7 | 30 | 90
 interface ConversationsChartProps {
   /** Per-range data, so switching tabs never re-fetches. */
   series: Record<RangeDays, ConversationsSeriesPoint[] | null>
+  /** Per-range fetch-failed flag — a range can be `null` either
+   *  because it hasn't been fetched yet or because the fetch failed;
+   *  this disambiguates the two so a failure isn't shown as "no
+   *  activity in this range". */
+  errors: Record<RangeDays, boolean>
   loading: boolean
   range: RangeDays
   onRangeChange: (r: RangeDays) => void
+  onRetry: () => void
 }
 
 // ------------------------------------------------------------
@@ -27,8 +33,16 @@ const VB_W = 760
 const VB_H = 240
 const PADDING = { top: 16, right: 16, bottom: 28, left: 40 }
 
-export function ConversationsChart({ series, loading, range, onRangeChange }: ConversationsChartProps) {
+export function ConversationsChart({
+  series,
+  errors,
+  loading,
+  range,
+  onRangeChange,
+  onRetry,
+}: ConversationsChartProps) {
   const data = series[range]
+  const hasError = errors[range]
 
   // Memoise the max so per-day hover math doesn't recompute it.
   const { maxY, niceTicks } = useMemo(() => {
@@ -72,8 +86,10 @@ export function ConversationsChart({ series, loading, range, onRangeChange }: Co
       </header>
 
       <div className="p-5">
-        {loading || !data ? (
+        {loading ? (
           <Skeleton className="h-[240px] w-full" />
+        ) : hasError || !data ? (
+          <ErrorState onRetry={onRetry} />
         ) : data.every((p) => p.incoming === 0 && p.outgoing === 0) ? (
           <EmptyState
             icon={MessageSquare}

@@ -60,6 +60,7 @@ export function CustomFieldsPanel() {
 
   const [fields, setFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -67,11 +68,17 @@ export function CustomFieldsPanel() {
   const fetchFields = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
-    const { data } = await supabase
+    setFetchError(false);
+    const { data, error } = await supabase
       .from('custom_fields')
       .select('*')
       .order('field_name');
-    setFields((data as CustomField[] | null) ?? []);
+    if (error) {
+      console.error('[custom-fields] fetch failed:', error);
+      setFetchError(true);
+    } else {
+      setFields((data as CustomField[] | null) ?? []);
+    }
     setLoading(false);
   }, [supabase, accountId]);
 
@@ -207,6 +214,13 @@ export function CustomFieldsPanel() {
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading…
+          </div>
+        ) : fetchError ? (
+          <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
+            <p>Couldn&apos;t load custom fields.</p>
+            <Button variant="outline" size="sm" onClick={() => void fetchFields()}>
+              Try again
+            </Button>
           </div>
         ) : fields.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">

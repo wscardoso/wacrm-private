@@ -64,6 +64,10 @@ export function ConversationList({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+  // Bumped by the retry button below to refire the fetch effect —
+  // same mechanism as the parent's resyncToken.
+  const [retryToken, setRetryToken] = useState(0);
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -85,6 +89,8 @@ export function ConversationList({
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFetchError(false);
 
     (async () => {
       // P1b.2: in a platform-operator context, scope the list to the
@@ -112,6 +118,7 @@ export function ConversationList({
           hint: error.hint,
           code: error.code,
         });
+        setFetchError(true);
         setLoading(false);
         return;
       }
@@ -126,7 +133,7 @@ export function ConversationList({
     // `resyncToken` is included so the parent can force a refetch when
     // the realtime channel reconnects or the tab regains focus — catches
     // up on any events sent while the WS was disconnected or throttled.
-  }, [resyncToken]);
+  }, [resyncToken, retryToken]);
 
   const filtered = useMemo(() => {
     let result = conversations;
@@ -220,6 +227,20 @@ export function ConversationList({
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+        ) : fetchError ? (
+          <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+            <p className="text-sm text-muted-foreground">Couldn&apos;t load conversations</p>
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                setRetryToken((t) => t + 1);
+              }}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              Try again
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">

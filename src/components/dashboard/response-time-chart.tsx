@@ -4,7 +4,7 @@ import { Clock } from 'lucide-react'
 import { DOW_SHORT_MON_FIRST } from '@/lib/dashboard/date-utils'
 import type { ResponseTimeSummary } from '@/lib/dashboard/types'
 import { BarChart } from '@/components/tremor/bar-chart'
-import { EmptyState } from './empty-state'
+import { EmptyState, ErrorState } from './empty-state'
 import { Skeleton } from './skeleton'
 
 interface ResponseTimeChartProps {
@@ -17,6 +17,8 @@ interface ResponseTimeChartProps {
    *  follow-up can introduce an overlay or extend the vendored
    *  BarChart with a `referenceLines` prop. */
   thresholdMinutes?: number
+  error?: boolean
+  onRetry?: () => void
 }
 
 // Single category, single colour — the data is "average minutes
@@ -29,6 +31,8 @@ export function ResponseTimeChart({
   data,
   loading,
   thresholdMinutes = 5,
+  error,
+  onRetry,
 }: ResponseTimeChartProps) {
   const hasData = data?.buckets.some((b) => b.avgMinutes != null) ?? false
 
@@ -79,8 +83,10 @@ export function ResponseTimeChart({
       </header>
 
       <div className="p-5">
-        {loading || !data ? (
+        {loading ? (
           <Skeleton className="h-[260px] w-full" />
+        ) : error || !data ? (
+          <ErrorState onRetry={() => onRetry?.()} />
         ) : !hasData ? (
           <EmptyState
             icon={Clock}

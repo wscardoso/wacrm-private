@@ -173,6 +173,10 @@ export function MessageThread({
   const { isPlatformContext } = usePlatformContext();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState(false);
+  // Bumped by the retry button below to refire the fetch effect —
+  // same mechanism as resyncToken.
+  const [retryToken, setRetryToken] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Reactive clock — ticks every 60s so the session badge updates even
   // when no new messages arrive. clearInterval on unmount is mandatory.
@@ -261,6 +265,7 @@ export function MessageThread({
 
     (async () => {
       setLoading(true);
+      setMessagesError(false);
 
       const { data, error } = await supabase
         .from("messages")
@@ -272,6 +277,7 @@ export function MessageThread({
 
       if (error) {
         console.error("Failed to fetch messages:", error);
+        setMessagesError(true);
       } else {
         onMessagesLoadedRef.current(data ?? []);
       }
@@ -285,8 +291,9 @@ export function MessageThread({
     // `resyncToken` is included so the parent can force a refetch when
     // the realtime channel reconnects or the tab regains focus —
     // realtime is best-effort and any message events sent while the WS
-    // was disconnected or throttled are otherwise lost.
-  }, [conversationId, resyncToken]);
+    // was disconnected or throttled are otherwise lost. `retryToken` is
+    // bumped by the error state's retry button below.
+  }, [conversationId, resyncToken, retryToken]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
   // from the channel subscription below so a `resyncToken` bump just
@@ -1006,6 +1013,17 @@ export function MessageThread({
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+        ) : messagesError ? (
+          <div className="flex flex-col items-center gap-2 py-12 text-center">
+            <p className="text-sm text-muted-foreground">Couldn&apos;t load messages</p>
+            <button
+              type="button"
+              onClick={() => setRetryToken((t) => t + 1)}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              Try again
+            </button>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">

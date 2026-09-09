@@ -1,5 +1,5 @@
-import { BarChart3 } from 'lucide-react'
-import type { ComponentType } from 'react'
+import { AlertTriangle, BarChart3 } from 'lucide-react'
+import type { ComponentType, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -13,11 +13,16 @@ export function EmptyState({
   hint,
   icon: Icon = BarChart3,
   className,
+  action,
 }: {
   title?: string
   hint?: string
   icon?: ComponentType<{ className?: string }>
   className?: string
+  /** Optional retry button (or any action) rendered below the hint —
+   *  used by the error variant of this panel so a failed fetch isn't
+   *  a dead end indistinguishable from a genuinely empty result. */
+  action?: ReactNode
 }) {
   return (
     <div
@@ -31,6 +36,34 @@ export function EmptyState({
       </div>
       <p className="text-sm font-medium text-muted-foreground">{title}</p>
       {hint && <p className="max-w-xs text-xs text-muted-foreground">{hint}</p>}
+      {action}
     </div>
+  )
+}
+
+/**
+ * Widget-level fetch failure — used in place of EmptyState's default
+ * "no data" copy so a real error (RLS glitch, bad RPC, network blip)
+ * can't be misread as "this account genuinely has nothing here yet".
+ * Every dashboard widget's failed-fetch branch renders this instead
+ * of silently falling through to the empty-state copy.
+ */
+export function ErrorState({ onRetry, className }: { onRetry: () => void; className?: string }) {
+  return (
+    <EmptyState
+      icon={AlertTriangle}
+      title="Couldn't load this"
+      hint="Something went wrong fetching this data."
+      className={className}
+      action={
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-1 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          Try again
+        </button>
+      }
+    />
   )
 }
