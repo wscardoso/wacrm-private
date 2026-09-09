@@ -20,7 +20,8 @@ const BATCH_LIMIT = 50
  *      providers with native idempotency get a due entry (next_attempt_at =
  *      now), providers without get a blocked entry (next_attempt_at = NULL)
  *      so the TTL will eventually resolve them (ADR-E4B-002 §5 item 2).
- *   2. **TTL sweep** — pending ledger entries whose message `created_at`
+ *   2. **TTL sweep** — pending ledger entries whose own `created_at`
+ *      (`outbound_retry_ledger.created_at`, not `messages.created_at`)
  *      is beyond the TTL horizon. Settles them `failed` + ledger → dead.
  *   3. **Reclaim stuck `retrying`** (Commit 6.1 correção #4) — a row
  *      claimed by the scheduler (pending → retrying) whose drainer

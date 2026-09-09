@@ -145,7 +145,7 @@ export type RetryOutcomeAction =
 /**
  * @param decision Resultado já calculado por `classifyFailure` (nunca recalculado aqui).
  * @param attemptCountBefore `attempt_count` do ledger antes desta tentativa.
- * @param createdAt `messages.created_at` da intenção (horizonte de TTL).
+ * @param createdAt `outbound_retry_ledger.created_at` da intenção (horizonte de TTL).
  */
 export function decideRetryOutcome(
   decision: RetryDecision,
