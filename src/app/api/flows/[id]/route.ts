@@ -23,6 +23,14 @@ async function requireOwnership(
   | {
       ok: true
       userId: string
+      /** Resolved from the RLS-scoped SELECT below, never trusted from
+       *  the request. Every subsequent admin-client (service-role,
+       *  RLS-bypassing) mutation on `flows` filters by this in
+       *  addition to `id` — F-API-02, E2E validation. RLS alone is
+       *  what actually gates this SELECT; this is defense in depth so
+       *  a future RLS policy change can't silently turn into a
+       *  cross-tenant write/delete primitive on the admin client. */
+      accountId: string
       supabase: Awaited<ReturnType<typeof createClient>>
     }
   | { ok: false; status: number; body: { error: string } }
@@ -38,13 +46,13 @@ async function requireOwnership(
   // returns null (404 below).
   const { data: flow } = await supabase
     .from('flows')
-    .select('id')
+    .select('id, account_id')
     .eq('id', flowId)
     .maybeSingle()
   if (!flow) {
     return { ok: false, status: 404, body: { error: 'Not found' } }
   }
-  return { ok: true, userId: user.id, supabase }
+  return { ok: true, userId: user.id, accountId: flow.account_id as string, supabase }
 }
 
 export async function GET(
@@ -93,6 +101,7 @@ export async function PUT(
   const { id } = await context.params
   const guard = await requireOwnership(id)
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
+  const { accountId } = guard
 
   const body = (await request.json().catch(() => null)) as PutBody | null
   if (!body) {
@@ -128,6 +137,7 @@ export async function PUT(
     .from('flows')
     .update(flowPatch)
     .eq('id', id)
+    .eq('account_id', accountId)
   if (updErr) {
     return NextResponse.json({ error: updErr.message }, { status: 500 })
   }
@@ -162,7 +172,7 @@ export async function PUT(
   // Re-fetch and return the new state — the editor uses the response
   // to reconcile its local form state.
   const [{ data: flow }, { data: nodes }] = await Promise.all([
-    admin.from('flows').select('*').eq('id', id).maybeSingle(),
+    admin.from('flows').select('*').eq('id', id).eq('account_id', accountId).maybeSingle(),
     admin
       .from('flow_nodes')
       .select('*')
@@ -185,7 +195,11 @@ export async function DELETE(
   // mechanism in v1, but that's intentional: deleting a flow is a
   // deliberate destructive action and the partial unique index will
   // free up the contact for new triggers immediately.
-  const { error } = await supabaseAdmin().from('flows').delete().eq('id', id)
+  const { error } = await supabaseAdmin()
+    .from('flows')
+    .delete()
+    .eq('id', id)
+    .eq('account_id', guard.accountId)
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }

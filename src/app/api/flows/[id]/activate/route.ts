@@ -42,15 +42,19 @@ export async function POST(
     )
   }
 
-  // Ownership via RLS — caller's client.
+  // Ownership via RLS — caller's client. account_id is resolved here
+  // (never trusted from the request) and re-applied on every
+  // admin-client (service-role, RLS-bypassing) write below — F-API-02,
+  // E2E validation, same defense-in-depth as flows/[id]/route.ts.
   const { data: existing } = await supabase
     .from('flows')
-    .select('id')
+    .select('id, account_id')
     .eq('id', id)
     .maybeSingle()
   if (!existing) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
+  const accountId = existing.account_id as string
 
   const admin = supabaseAdmin()
 
@@ -61,6 +65,7 @@ export async function POST(
         .from('flows')
         .select('name, trigger_type, trigger_config, entry_node_id')
         .eq('id', id)
+        .eq('account_id', accountId)
         .maybeSingle(),
       admin
         .from('flow_nodes')
@@ -99,6 +104,7 @@ export async function POST(
     .from('flows')
     .update({ status, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .eq('account_id', accountId)
     .select()
     .maybeSingle()
   if (error) {
