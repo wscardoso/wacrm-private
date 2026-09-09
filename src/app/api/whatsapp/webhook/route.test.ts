@@ -462,4 +462,86 @@ describe('POST /api/whatsapp/webhook', () => {
     // No conversation update (unread_count bump) fired on redelivery.
     expect(sawConversationUpdate).toBe(false)
   })
+
+  it('processes remaining messages in a batch after one throws — F-INT-02', async () => {
+    // config lookup returns a config row so processing proceeds for
+    // both messages; messages upsert resolves with one inserted row
+    // each time (the exact row shape doesn't matter for this test).
+    tableTerminal['whatsapp_config'] = {
+      data: [{ account_id: 'acc-1', user_id: 'user-1', access_token: 'enc' }],
+      error: null,
+    }
+    tableTerminal['messages'] = { data: [{ id: 'msg-1' }], error: null }
+
+    // The first message's insert_inbound_message call throws — before
+    // the F-INT-02 fix this propagated up through processWebhook's
+    // nested loops and silently dropped every message after it in the
+    // same webhook delivery (which is already 200-acked to Meta, so it
+    // would never be redelivered).
+    let insertInboundCallCount = 0
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn((t: string) => makeRecorderChain(t)),
+      rpc: (fn: string, params: Record<string, unknown>) => {
+        if (fn === 'insert_inbound_message') {
+          insertInboundCallCount++
+          if (insertInboundCallCount === 1) {
+            throw new Error('simulated DB failure on first message')
+          }
+        }
+        return makeRpc(fn, params)
+      },
+    })
+
+    const { POST } = await import('./route')
+    const body = JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'wa-account',
+        changes: [{
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { display_phone_number: '15551234567', phone_number_id: '123' },
+            contacts: [
+              { profile: { name: 'Alice' }, wa_id: '15559876543' },
+              { profile: { name: 'Bob' }, wa_id: '15559876544' },
+            ],
+            messages: [
+              {
+                from: '15559876543',
+                id: 'wamid.msg1',
+                timestamp: '1710000000',
+                type: 'text',
+                text: { body: 'First — throws' },
+              },
+              {
+                from: '15559876544',
+                id: 'wamid.msg2',
+                timestamp: '1710000001',
+                type: 'text',
+                text: { body: 'Second — must still process' },
+              },
+            ],
+          },
+          field: 'messages',
+        }],
+      }],
+    })
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await POST(postRequest(body))
+    expect(res.status).toBe(200)
+
+    // processWebhook runs fire-and-forget inside POST; let it settle.
+    await new Promise((r) => setTimeout(r, 50))
+
+    // Both messages were attempted — the second's insert call still
+    // happened despite the first one throwing.
+    expect(insertInboundCallCount).toBe(2)
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Error processing inbound message:',
+      'wamid.msg1',
+      expect.any(Error),
+    )
+    consoleErrorSpy.mockRestore()
+  })
 })

@@ -275,7 +275,17 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // Handle status updates
       if (value.statuses) {
         for (const status of value.statuses) {
-          await handleStatusUpdate(status)
+          // Per-item isolation (F-INT-02, E2E validation): the route
+          // already returns 200 to Meta before this runs (fire-and-
+          // forget below), so an uncaught throw here would silently
+          // drop every status/message after it in this batch — Meta
+          // considers the whole delivery acknowledged and never
+          // redelivers. One bad status must not take the rest down.
+          try {
+            await handleStatusUpdate(status)
+          } catch (err) {
+            console.error('Error processing status update:', status.id, err)
+          }
         }
       }
 
@@ -330,18 +340,27 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         const message = value.messages[i]
         const contact = value.contacts[i] || value.contacts[0]
 
-        await processMessage(
-          message,
-          contact,
-          // Tenancy — drives every contact / conversation lookup
-          // and the engines' active-row dispatch.
-          config.account_id,
-          // Audit / sender-of-record — used as the user_id on row
-          // inserts that need it for NOT NULL FK compliance. Always
-          // the admin who saved the WhatsApp config.
-          config.user_id,
-          decryptedAccessToken
-        )
+        // Per-item isolation (F-INT-02, E2E validation) — same
+        // rationale as the status-update loop above: this batch is
+        // already 200-acked to Meta, so one message throwing must not
+        // take the rest of this batch (or subsequent changes/entries
+        // in the same delivery) down with it.
+        try {
+          await processMessage(
+            message,
+            contact,
+            // Tenancy — drives every contact / conversation lookup
+            // and the engines' active-row dispatch.
+            config.account_id,
+            // Audit / sender-of-record — used as the user_id on row
+            // inserts that need it for NOT NULL FK compliance. Always
+            // the admin who saved the WhatsApp config.
+            config.user_id,
+            decryptedAccessToken
+          )
+        } catch (err) {
+          console.error('Error processing inbound message:', message.id, err)
+        }
       }
     }
   }
