@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 
 export async function GET(
   request: Request,
@@ -31,6 +32,9 @@ export async function GET(
         { status: 401 }
       )
     }
+
+    const limit = checkRateLimit(`media:${user.id}`, RATE_LIMITS.mediaFetch)
+    if (!limit.success) return rateLimitResponse(limit)
 
     // Resolve the caller's account_id — whatsapp_config is one-per-
     // account post-multi-user, so a teammate fetching media for a

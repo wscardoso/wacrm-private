@@ -544,4 +544,60 @@ describe('POST /api/whatsapp/webhook', () => {
     )
     consoleErrorSpy.mockRestore()
   })
+
+  it('replaying an identical status event twice is idempotent — F-INT-05', async () => {
+    function statusBody(statusValue: string) {
+      return JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [{
+          id: 'wa-account',
+          changes: [{
+            value: {
+              messaging_product: 'whatsapp',
+              metadata: { display_phone_number: '15551234567', phone_number_id: '123' },
+              statuses: [{
+                id: 'wamid.status1',
+                status: statusValue,
+                timestamp: '1710000000',
+                recipient_id: '15559876543',
+              }],
+            },
+            field: 'messages',
+          }],
+        }],
+      })
+    }
+
+    const { POST } = await import('./route')
+
+    // First delivery: message currently 'sent', incoming 'delivered' —
+    // a valid forward transition on the ladder. handleStatusUpdate's
+    // `.maybeSingle()` destructures a single object, not an array —
+    // unlike the other tests in this file, which only ever read
+    // `data[0]` off a list-select terminal.
+    tableTerminal['messages'] = { data: { id: 'msg-1', status: 'sent' }, error: null }
+    tableTerminal['broadcast_recipients'] = { data: null, error: null }
+
+    const res1 = await POST(postRequest(statusBody('delivered')))
+    expect(res1.status).toBe(200)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(
+      builderCalls.filter((c) => c.table === 'messages' && c.method === 'update').length,
+    ).toBe(1)
+
+    // Meta redelivers the identical event (retry/duplicate). Simulate
+    // the DB now reflecting the already-applied status, then replay.
+    tableTerminal['messages'] = { data: { id: 'msg-1', status: 'delivered' }, error: null }
+    builderCalls.length = 0
+
+    const res2 = await POST(postRequest(statusBody('delivered')))
+    expect(res2.status).toBe(200)
+    await new Promise((r) => setTimeout(r, 50))
+
+    // isValidStatusTransition('delivered', 'delivered') is false (not
+    // a forward move) — the replay must not re-fire the update.
+    expect(
+      builderCalls.filter((c) => c.table === 'messages' && c.method === 'update').length,
+    ).toBe(0)
+  })
 })

@@ -175,6 +175,13 @@ export const RATE_LIMITS = {
    *  calls this at most once every few minutes, so 10/min is
    *  generous headroom while bounding a tight-loop abuse attempt. */
   cronDrain: { limit: 10, windowMs: 60_000 },
+  /** WhatsApp media fetch (`whatsapp/media/[mediaId]`), keyed per
+   *  user. Meta scopes media access to the token that owns it, so a
+   *  cross-tenant mediaId is already rejected by Meta — this budget
+   *  exists so the route can't be used as a free proxy to hammer
+   *  Meta's media API (F-API-04, E2E validation). 120/min matches
+   *  `react`, comfortably above a human clicking through attachments. */
+  mediaFetch: { limit: 120, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests do not
