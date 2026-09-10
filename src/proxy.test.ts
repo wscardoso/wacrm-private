@@ -139,4 +139,46 @@ describe("proxy — refreshed auth cookies survive redirects", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
+
+  // Found while smoke-testing the orphan-sweep/delivery-cron/kid-convergence
+  // endpoints against production: these are called by an external pinger
+  // with no browser session, so `!user` is always true for them. Without
+  // this exemption, the generic /api/whatsapp/ 401 block below fires before
+  // the route ever gets a chance to check its own x-cron-secret header —
+  // the route's auth is unreachable no matter what secret is sent.
+  it.each([
+    "/api/whatsapp/delivery/cron",
+    "/api/whatsapp/delivery/orphan-sweep",
+    "/api/whatsapp/config/kid-convergence-sweep",
+  ])(
+    "passes an unauthenticated request through to %s (own x-cron-secret check applies, not session auth)",
+    async (path) => {
+      mockUser = null;
+
+      const res = await proxy(new NextRequest(`https://app.test${path}`));
+
+      expect(res.status).not.toBe(401);
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
+  it("still blocks an unauthenticated request to an ordinary /api/whatsapp/ route (e.g. send)", async () => {
+    mockUser = null;
+
+    const res = await proxy(new NextRequest("https://app.test/api/whatsapp/send"));
+
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body).toEqual({ error: "Unauthorized" });
+  });
+
+  it("still passes an unauthenticated request through to a /webhook route", async () => {
+    mockUser = null;
+
+    const res = await proxy(
+      new NextRequest("https://app.test/api/whatsapp/webhook"),
+    );
+
+    expect(res.status).not.toBe(401);
+  });
 });

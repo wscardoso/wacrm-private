@@ -77,9 +77,20 @@ export async function proxy(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // API routes that need auth (not webhooks)
+  // API routes that need auth (not webhooks, and not cron/system sweeps
+  // gated by their own AUTOMATION_CRON_SECRET / x-cron-secret check —
+  // see src/app/api/whatsapp/delivery/cron/route.ts and siblings. Those
+  // are called by an external pinger with no user session, so `!user`
+  // is always true for them; without this exemption this block returns
+  // 401 before the request ever reaches the route's own secret check.)
+  const cronSecretGatedPaths = [
+    '/api/whatsapp/delivery/cron',
+    '/api/whatsapp/delivery/orphan-sweep',
+    '/api/whatsapp/config/kid-convergence-sweep',
+  ]
   if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
-      !request.nextUrl.pathname.includes('/webhook')) {
+      !request.nextUrl.pathname.includes('/webhook') &&
+      !cronSecretGatedPaths.includes(request.nextUrl.pathname)) {
     return withRefreshedCookies(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     )
