@@ -15,7 +15,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
-import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { runAutomationsForTrigger, cancelPendingCadencesForContact } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import type { InboundMessage } from '@/lib/whatsapp/providers/types'
 
@@ -376,6 +376,15 @@ export async function processInboundMessage(
   if (!flowConsumed) triggers.push('new_message_received', 'keyword_match')
   if (contactOutcome.wasCreated) triggers.unshift('new_contact_created')
   if (isFirstInboundMessage) triggers.unshift('first_inbound_message')
+
+  // Cancel any waiting cadence steps for this contact upon incoming
+  // customer reply. Awaited before the trigger loop so a cadence this
+  // same reply might start is not clobbered by the cancellation.
+  try {
+    await cancelPendingCadencesForContact(accountId, contactRecord.id)
+  } catch (err) {
+    console.error('[inbound-processor] cancelPendingCadencesForContact error:', err)
+  }
 
   for (const triggerType of triggers) {
     retryOnError(

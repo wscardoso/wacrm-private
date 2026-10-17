@@ -13,9 +13,37 @@ import type {
   WaitStepConfig,
   CreateDealStepConfig,
   AssignConversationStepConfig,
+  MoveDealStageStepConfig,
+  UpdateDealFieldStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+
+// ------------------------------------------------------------
+// Deal-step guards
+// ------------------------------------------------------------
+
+/**
+ * Columns the `update_deal_field` step is allowed to write directly.
+ * The step runs through the service-role client (RLS bypassed), and
+ * `cfg.field` is authored in the automation builder — without this
+ * allowlist a misconfigured (or maliciously edited) automation could
+ * write arbitrary columns such as `account_id` or `id`. Everything not
+ * listed here must be namespaced as `custom:<key>` (JSONB).
+ */
+const ALLOWED_DEAL_FIELDS = new Set([
+  'title',
+  'value',
+  'currency',
+  'status',
+  'notes',
+  'expected_close_date',
+  'assigned_to',
+  'loss_reason',
+])
+
+/** Allowed built-ins that must be coerced to a number before writing. */
+const NUMERIC_DEAL_FIELDS = new Set(['value'])
 
 // ------------------------------------------------------------
 // Public API
@@ -32,6 +60,11 @@ export interface AutomationContext {
   tag_id?: string
   /** Agent the conversation was assigned to, for conversation_assigned. */
   agent_id?: string
+  /** Deal context for deal_created / deal_stage_changed */
+  deal_id?: string
+  pipeline_id?: string
+  stage_id?: string
+  old_stage_id?: string
 }
 
 export interface DispatchInput {
@@ -185,6 +218,69 @@ export async function resumePendingExecution(pending: {
     console.error('[automations] resume failed:', err)
     await markPending(pending.id, 'failed')
   }
+}
+
+/**
+ * Cancel or complete active pending cadences (waiting steps in
+ * automation_pending_executions) when a contact replies.
+ */
+export async function cancelPendingCadencesForContact(
+  accountId: string,
+  contactId: string,
+  reason = 'contact_replied',
+): Promise<number> {
+  const db = supabaseAdmin()
+  const { data: pendings, error: fetchErr } = await db
+    .from('automation_pending_executions')
+    .select('id, automation_id, log_id')
+    .eq('account_id', accountId)
+    .eq('contact_id', contactId)
+    .eq('status', 'pending')
+
+  if (fetchErr || !pendings || pendings.length === 0) return 0
+
+  let cancelledCount = 0
+  for (const pending of pendings) {
+    const { data: automation } = await db
+      .from('automations')
+      .select('cancel_on_reply')
+      .eq('id', pending.automation_id)
+      .maybeSingle()
+
+    if (automation && (automation as unknown as { cancel_on_reply?: boolean }).cancel_on_reply === false) {
+      continue
+    }
+
+    await db
+      .from('automation_pending_executions')
+      .update({ status: 'cancelled' })
+      .eq('id', pending.id)
+
+    if (pending.log_id) {
+      const { data: log } = await db
+        .from('automation_logs')
+        .select('steps_executed')
+        .eq('id', pending.log_id)
+        .single()
+
+      const steps = (log?.steps_executed as AutomationLogStepResult[]) ?? []
+      steps.push({
+        step_id: 'cadence_paused',
+        step_type: 'wait',
+        status: 'success',
+        detail: `cadence cancelled (${reason})`,
+      })
+      await db
+        .from('automation_logs')
+        .update({
+          steps_executed: steps,
+          status: 'success',
+        })
+        .eq('id', pending.log_id)
+    }
+    cancelledCount++
+  }
+  return cancelledCount
 }
 
 // ------------------------------------------------------------
@@ -453,15 +549,38 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!args.contactId) throw new Error('assign_conversation needs a contact')
       let agentId = cfg.agent_id
       if (cfg.mode === 'round_robin') {
-        // Pick any member of the account. The existing implementation
-        // only ever returned the automation's author; preserving that
-        // shape until a real round-robin algorithm replaces it.
-        const { data: profiles } = await db
+        // The account-scoped role lives in `profiles.account_role`
+        // (enum owner/admin/agent/viewer, migration 017). The legacy
+        // `profiles.role` column is a global TEXT that defaults to
+        // 'user' — filtering on it matched nobody, so round-robin
+        // silently fell back to "no agent resolved".
+        const { data: members } = await db
           .from('profiles')
           .select('user_id')
           .eq('account_id', args.automation.account_id)
-          .limit(1)
-        agentId = profiles?.[0]?.user_id
+          .in('account_role', ['owner', 'admin', 'agent'])
+          .order('user_id', { ascending: true })
+
+        if (members && members.length > 0) {
+          const { data: routing } = await db
+            .from('account_lead_routing')
+            .select('last_assigned_user_id')
+            .eq('account_id', args.automation.account_id)
+            .maybeSingle()
+
+          const lastId = routing?.last_assigned_user_id
+          const lastIdx = members.findIndex((m) => m.user_id === lastId)
+          const nextIdx = (lastIdx + 1) % members.length
+          agentId = members[nextIdx].user_id
+
+          await db
+            .from('account_lead_routing')
+            .upsert({
+              account_id: args.automation.account_id,
+              last_assigned_user_id: agentId,
+              updated_at: new Date().toISOString(),
+            })
+        }
       }
       if (!agentId) return 'no agent resolved'
       await db
@@ -530,8 +649,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // Match the account's configured default currency rather than
       // the static `deals.currency` DB default — keeps automation-
       // created deals consistent with the one-currency-per-account
-      // rule (issue #218). Fall back to USD if the row is somehow
-      // missing the value (pre-021 forks).
+      // rule (issue #218). Fall back to BRL if missing.
       const { data: acct } = await db
         .from('accounts')
         .select('default_currency')
@@ -548,10 +666,128 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         conversation_id: conversationId,
         title: interpolate(cfg.title, args),
         value: cfg.value ?? 0,
-        currency: acct?.default_currency ?? 'USD',
+        currency: acct?.default_currency ?? 'BRL',
         status: 'open',
       })
       return 'deal created'
+    }
+
+    case 'move_deal_stage': {
+      const cfg = step.step_config as MoveDealStageStepConfig
+      if (!cfg.stage_id) throw new Error('move_deal_stage needs stage_id')
+
+      // Tenant integrity: the service-role client bypasses RLS, so a
+      // stage_id from another account would be written blindly. Verify
+      // the target stage belongs to a pipeline owned by this account
+      // (and, when given, that it matches the requested pipeline).
+      const { data: stage } = await db
+        .from('pipeline_stages')
+        .select('id, pipeline_id, pipelines!inner(account_id)')
+        .eq('id', cfg.stage_id)
+        .eq('pipelines.account_id', args.automation.account_id)
+        .maybeSingle()
+      if (!stage) throw new Error('move_deal_stage: target stage not in account')
+      if (cfg.pipeline_id && stage.pipeline_id !== cfg.pipeline_id) {
+        throw new Error('move_deal_stage: stage does not belong to pipeline_id')
+      }
+
+      let dealId = args.context.deal_id
+      if (!dealId && args.contactId) {
+        const query = db
+          .from('deals')
+          .select('id')
+          .eq('account_id', args.automation.account_id)
+          .eq('contact_id', args.contactId)
+        if (cfg.pipeline_id) {
+          query.eq('pipeline_id', cfg.pipeline_id)
+        }
+        const { data: deal } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
+        dealId = deal?.id
+      }
+      if (!dealId) return 'no deal found to move stage'
+
+      const updateData: Record<string, unknown> = {
+        stage_id: cfg.stage_id,
+        updated_at: new Date().toISOString(),
+      }
+      if (cfg.pipeline_id) {
+        updateData.pipeline_id = cfg.pipeline_id
+      }
+      await db
+        .from('deals')
+        .update(updateData)
+        .eq('id', dealId)
+        .eq('account_id', args.automation.account_id)
+
+      return `deal ${dealId} moved to stage ${cfg.stage_id}`
+    }
+
+    case 'update_deal_field': {
+      const cfg = step.step_config as UpdateDealFieldStepConfig
+      if (!cfg.field) throw new Error('update_deal_field needs field name')
+
+      const isCustom = cfg.field.startsWith('custom:')
+      if (isCustom) {
+        if (!cfg.field.slice('custom:'.length)) {
+          throw new Error('update_deal_field: empty custom field key')
+        }
+      } else if (!ALLOWED_DEAL_FIELDS.has(cfg.field)) {
+        // Reject anything that is neither an allowlisted built-in nor a
+        // `custom:<key>` namespace — prevents writing protected columns.
+        throw new Error(`update_deal_field: field "${cfg.field}" is not allowed`)
+      }
+
+      let dealId = args.context.deal_id
+      if (!dealId && args.contactId) {
+        const { data: deal } = await db
+          .from('deals')
+          .select('id, custom_fields')
+          .eq('account_id', args.automation.account_id)
+          .eq('contact_id', args.contactId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        dealId = deal?.id
+      }
+      if (!dealId) return 'no deal found to update'
+
+      const rawVal = interpolate(cfg.value, args)
+      const val =
+        !isCustom && NUMERIC_DEAL_FIELDS.has(cfg.field)
+          ? Number(String(rawVal).replace(',', '.'))
+          : rawVal
+      if (!isCustom && NUMERIC_DEAL_FIELDS.has(cfg.field) && !Number.isFinite(val as number)) {
+        throw new Error(`update_deal_field: "${cfg.field}" must be numeric`)
+      }
+
+      if (isCustom) {
+        const customKey = cfg.field.slice('custom:'.length)
+        const { data: currentDeal } = await db
+          .from('deals')
+          .select('custom_fields')
+          .eq('id', dealId)
+          .eq('account_id', args.automation.account_id)
+          .single()
+        const existingCustom = (currentDeal?.custom_fields as Record<string, unknown>) ?? {}
+        await db
+          .from('deals')
+          .update({
+            custom_fields: { ...existingCustom, [customKey]: val },
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', dealId)
+          .eq('account_id', args.automation.account_id)
+      } else {
+        await db
+          .from('deals')
+          .update({
+            [cfg.field]: val,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', dealId)
+          .eq('account_id', args.automation.account_id)
+      }
+      return `deal ${dealId} field ${cfg.field} updated`
     }
 
     case 'send_webhook': {
@@ -636,16 +872,38 @@ async function resolveDealConversationId(args: ExecuteArgs): Promise<string | nu
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
-  if (automation.trigger_type !== 'keyword_match') return true
-  const cfg = automation.trigger_config as KeywordMatchTriggerConfig
-  if (!cfg?.keywords || cfg.keywords.length === 0) return false
-  const text = (ctx?.message_text ?? '').toString()
-  if (!text) return false
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase()
-  return cfg.keywords.some((raw) => {
-    const k = cfg.case_sensitive ? raw : raw.toLowerCase()
-    return cfg.match_type === 'exact' ? haystack === k : haystack.includes(k)
-  })
+  if (automation.trigger_type === 'keyword_match') {
+    const cfg = automation.trigger_config as KeywordMatchTriggerConfig
+    if (!cfg?.keywords || cfg.keywords.length === 0) return false
+    const text = (ctx?.message_text ?? '').toString()
+    if (!text) return false
+    const haystack = cfg.case_sensitive ? text : text.toLowerCase()
+    return cfg.keywords.some((raw) => {
+      const k = cfg.case_sensitive ? raw : raw.toLowerCase()
+      return cfg.match_type === 'exact' ? haystack === k : haystack.includes(k)
+    })
+  }
+
+  if (automation.trigger_type === 'tag_added') {
+    const cfg = automation.trigger_config as { tag_id?: string }
+    if (cfg?.tag_id && ctx?.tag_id) {
+      return cfg.tag_id === ctx.tag_id
+    }
+    return true
+  }
+
+  if (automation.trigger_type === 'deal_created' || automation.trigger_type === 'deal_stage_changed') {
+    const cfg = automation.trigger_config as { pipeline_id?: string; stage_id?: string }
+    if (cfg?.pipeline_id && ctx?.pipeline_id && cfg.pipeline_id !== ctx.pipeline_id) {
+      return false
+    }
+    if (cfg?.stage_id && ctx?.stage_id && cfg.stage_id !== ctx.stage_id) {
+      return false
+    }
+    return true
+  }
+
+  return true
 }
 
 async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {

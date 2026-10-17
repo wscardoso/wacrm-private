@@ -96,6 +96,8 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   assign_conversation: { label: "Assign Conversation", icon: UserCheck, border: "border-l-primary" },
   update_contact_field: { label: "Update Contact Field", icon: PencilLine, border: "border-l-primary" },
   create_deal: { label: "Create Deal", icon: Briefcase, border: "border-l-primary" },
+  move_deal_stage: { label: "Move Deal Stage", icon: GitBranch, border: "border-l-primary" },
+  update_deal_field: { label: "Update Deal Field", icon: PencilLine, border: "border-l-primary" },
   wait: { label: "Wait", icon: Hourglass, border: "border-l-border" },
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-primary" },
@@ -110,6 +112,8 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "assign_conversation",
   "update_contact_field",
   "create_deal",
+  "move_deal_stage",
+  "update_deal_field",
   "wait",
   "condition",
   "send_webhook",
@@ -125,6 +129,8 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
   },
   { value: "keyword_match", label: "Keyword Match", hint: "Message contains specific keyword(s)" },
   { value: "new_contact_created", label: "New Contact Created", hint: "When a contact is auto-created from an incoming message" },
+  { value: "deal_created", label: "Deal Created", hint: "When a deal is created in a pipeline" },
+  { value: "deal_stage_changed", label: "Deal Stage Changed", hint: "When a deal moves to another stage" },
   { value: "conversation_assigned", label: "Conversation Assigned", hint: "When assigned to an agent" },
   { value: "tag_added", label: "Tag Added", hint: "When a tag is added to a contact" },
   { value: "time_based", label: "Time-Based", hint: "On a recurring schedule" },
@@ -154,6 +160,10 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { field: "name", value: "" }
     case "create_deal":
       return { pipeline_id: "", stage_id: "", title: "", value: 0 }
+    case "move_deal_stage":
+      return { stage_id: "" }
+    case "update_deal_field":
+      return { field: "title", value: "" }
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":
@@ -1158,6 +1168,48 @@ function StepEditor({
           </FieldBlock>
         </>
       )
+    case "move_deal_stage":
+      return (
+        <>
+          <FieldBlock label="Pipeline ID (optional)">
+            <Input
+              placeholder="e.g. pipeline UUID"
+              value={(cfg.pipeline_id as string) ?? ""}
+              onChange={(e) => set({ pipeline_id: e.target.value })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Target Stage ID">
+            <Input
+              placeholder="Stage UUID"
+              value={(cfg.stage_id as string) ?? ""}
+              onChange={(e) => set({ stage_id: e.target.value })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+        </>
+      )
+    case "update_deal_field":
+      return (
+        <>
+          <FieldBlock label="Deal Field">
+            <Input
+              placeholder="title, value, notes, or custom:fieldName"
+              value={(cfg.field as string) ?? ""}
+              onChange={(e) => set({ field: e.target.value })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Value">
+            <Input
+              placeholder="New value (supports {{ vars.* }})"
+              value={(cfg.value as string) ?? ""}
+              onChange={(e) => set({ value: e.target.value })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+        </>
+      )
     case "wait":
       return (
         <div className="grid grid-cols-2 gap-2">
@@ -1274,8 +1326,12 @@ function previewFor(step: BuilderStep): string {
   switch (step.step_type) {
     case "send_message":
       return (step.step_config.text as string) || "no text yet"
-    case "send_template":
-      return (step.step_config.template_name as string) || "pick a template"
+    case "create_deal":
+      return (step.step_config.title as string) || "new deal"
+    case "move_deal_stage":
+      return `stage: ${(step.step_config.stage_id as string) || "?"}`
+    case "update_deal_field":
+      return `${(step.step_config.field as string) || "?"} = ${(step.step_config.value as string) || "?"}`
     case "wait":
       return `${step.step_config.amount ?? "?"} ${step.step_config.unit ?? ""}`
     case "condition":

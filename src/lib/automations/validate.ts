@@ -132,6 +132,19 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.url`, message: 'webhook URL is not a valid URL' })
       }
       break
+    case 'move_deal_stage':
+      if (!nonEmpty(c.stage_id)) {
+        issues.push({ path: `${path}.stage_id`, message: 'target stage is required' })
+      }
+      break
+    case 'update_deal_field':
+      if (!nonEmpty(c.field)) {
+        issues.push({ path: `${path}.field`, message: 'deal field is required' })
+      }
+      if (c.value === undefined || c.value === null || c.value === '') {
+        issues.push({ path: `${path}.value`, message: 'deal field value is required' })
+      }
+      break
     case 'close_conversation':
       // No config required.
       break

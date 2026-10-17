@@ -89,6 +89,7 @@ export class UazapiProvider implements WhatsAppProvider {
     return {
       'Content-Type': 'application/json',
       apikey: this.token,
+      token: this.token,
     }
   }
 
@@ -113,11 +114,101 @@ export class UazapiProvider implements WhatsAppProvider {
   }
 
   async checkStatus(): Promise<{ connected: boolean }> {
+    const statusResult = await this.getInstanceStatus().catch(() => null)
+    if (statusResult && statusResult.connected) return { connected: true }
+
     const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
-    const res = await fetch(url, { headers: this.headers() })
-    if (!res.ok) return { connected: false }
-    const data = (await res.json()) as { instance?: { state?: string } }
+    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    if (!res || !res.ok) return { connected: false }
+    const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
     return { connected: data.instance?.state === 'open' }
+  }
+
+  async connectAndGetQrCode(phone?: string): Promise<{
+    qrcode?: string
+    paircode?: string
+    status: string
+    connected: boolean
+  }> {
+    const body: Record<string, unknown> = { browser: 'auto' }
+    if (phone) body.phone = phone.replace(/\D/g, '')
+
+    try {
+      const connectRes = await fetch(`${this.baseUrl}/instance/connect`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      })
+      if (connectRes.ok) {
+        const data = (await connectRes.json().catch(() => ({}))) as {
+          instance?: { qrcode?: string; paircode?: string; status?: string }
+          status?: { connected?: boolean; loggedIn?: boolean }
+          qrcode?: string
+          paircode?: string
+          connected?: boolean
+        }
+        const qrcode = data.instance?.qrcode ?? data.qrcode
+        const paircode = data.instance?.paircode ?? data.paircode
+        const isConn = Boolean(data.status?.connected || data.connected)
+        if (qrcode || paircode || isConn) {
+          return {
+            qrcode,
+            paircode,
+            status: isConn ? 'connected' : (data.instance?.status ?? 'connecting'),
+            connected: isConn,
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[uazapi] /instance/connect threw, trying /instance/status fallback:', err)
+    }
+
+    return this.getInstanceStatus()
+  }
+
+  async getInstanceStatus(): Promise<{
+    qrcode?: string
+    paircode?: string
+    status: string
+    connected: boolean
+  }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/instance/status`, {
+        headers: this.headers(),
+      })
+      if (res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          instance?: {
+            status?: string
+            qrcode?: string
+            paircode?: string
+          }
+          status?: {
+            connected?: boolean
+            loggedIn?: boolean
+          }
+        }
+        const isConn = Boolean(data.status?.connected && data.status?.loggedIn) || data.instance?.status === 'connected'
+        return {
+          qrcode: data.instance?.qrcode,
+          paircode: data.instance?.paircode,
+          status: isConn ? 'connected' : (data.instance?.status ?? 'disconnected'),
+          connected: isConn,
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
+    const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
+    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    if (!res || !res.ok) return { status: 'disconnected', connected: false }
+    const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
+    const isConn = data.instance?.state === 'open'
+    return {
+      status: isConn ? 'connected' : 'disconnected',
+      connected: isConn,
+    }
   }
 
   /** ADR-E4B-003 §3.4 — see classifyUazapiSendFailure above. */

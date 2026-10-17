@@ -223,6 +223,7 @@ vi.mock('@/lib/contacts/dedupe', () => ({
 
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: vi.fn(),
+  cancelPendingCadencesForContact: vi.fn(async () => 0),
 }))
 vi.mock('@/lib/flows/engine', () => ({
   dispatchInboundToFlows: vi.fn(async () => ({ consumed: false })),

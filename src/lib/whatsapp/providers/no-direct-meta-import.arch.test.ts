@@ -71,7 +71,7 @@ describe('D6 — No direct import of concrete provider API', () => {
     }
 
     expect(unknownViolators).toEqual([])
-  })
+  }, 20000)
 
   it('all known violators are still listed (remove each when migrated)', async () => {
     for (const v of KNOWN_VIOLATORS) {

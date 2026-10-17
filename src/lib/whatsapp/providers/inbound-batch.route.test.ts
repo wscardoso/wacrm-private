@@ -107,6 +107,7 @@ vi.mock('@/lib/flows/engine', () => ({
 }))
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: vi.fn(),
+  cancelPendingCadencesForContact: vi.fn(async () => 0),
 }))
 
 // Spy on the real processInboundMessage so we can count how many times

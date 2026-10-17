@@ -13,6 +13,8 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  QrCode,
+  RefreshCw,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -21,6 +23,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { buildWebhookUrl } from '@/lib/whatsapp/webhook-url';
 import {
@@ -45,12 +54,12 @@ const PROVIDERS: { value: WhatsAppProviderKind; label: string; description: stri
   {
     value: 'zapi',
     label: 'Z-API',
-    description: 'Conecta via z-api.io. Instância baseada em QR code, sem aprovação da Meta.',
+    description: 'Provider depreciado. Mantido apenas para contas que já o utilizam — novas conexões devem usar uazapi.',
   },
   {
     value: 'uazapi',
     label: 'uazapi',
-    description: 'Compatible com Evolution API. Self-hosted ou cloud em uazapi.dev.',
+    description: 'API WhatsApp sem custos por mensagem. Suporta pareamento direto por QR Code.',
   },
 ];
 
@@ -126,6 +135,77 @@ export function WhatsAppConfig() {
   // Webhook URL — contract: /api/whatsapp/webhook/{provider}/{connectionId}/{webhookSecret}
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const webhookUrl = buildWebhookUrl({ origin, provider, connectionId, webhookSecret: revealedWebhookSecret });
+
+  // QR Code Modal State for uazapi
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrCodeData, setQrCodeData] = useState<string | null>(null);
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+
+  const fetchQrCode = useCallback(async () => {
+    setQrLoading(true);
+    setQrError(null);
+    try {
+      const res = await fetch('/api/whatsapp/uazapi/qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: baseUrl.trim() || undefined,
+          instanceId: instanceId.trim() || undefined,
+          token: tokenEdited ? accessToken.trim() : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Falha ao gerar QR Code');
+      }
+      setQrCodeData(data.qrcode || null);
+      setPairCode(data.paircode || null);
+      if (data.connected) {
+        setConnectionStatus('connected');
+        toast.success('Instância já está conectada!');
+      }
+    } catch (err) {
+      setQrError(err instanceof Error ? err.message : 'Erro ao carregar QR Code');
+    } finally {
+      setQrLoading(false);
+    }
+  }, [baseUrl, instanceId, tokenEdited, accessToken]);
+
+  function handleOpenQrModal() {
+    setQrModalOpen(true);
+    fetchQrCode();
+  }
+
+  // Poll for connection while QR modal is open
+  useEffect(() => {
+    if (!qrModalOpen || connectionStatus === 'connected') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const queryParams = new URLSearchParams();
+        if (baseUrl.trim()) queryParams.set('baseUrl', baseUrl.trim());
+        if (instanceId.trim()) queryParams.set('instanceId', instanceId.trim());
+        if (tokenEdited && accessToken.trim()) queryParams.set('token', accessToken.trim());
+
+        const res = await fetch(`/api/whatsapp/uazapi/status?${queryParams.toString()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.connected) {
+          setConnectionStatus('connected');
+          toast.success('WhatsApp conectado com sucesso!');
+          setTimeout(() => setQrModalOpen(false), 1200);
+        } else if (data.qrcode && data.qrcode !== qrCodeData) {
+          setQrCodeData(data.qrcode);
+        }
+      } catch {
+        // Polling failure is ignored
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [qrModalOpen, connectionStatus, baseUrl, instanceId, tokenEdited, accessToken, qrCodeData]);
 
   const fetchConfig = useCallback(async (acctId: string) => {
     setLoading(true);
@@ -540,6 +620,26 @@ export function WhatsAppConfig() {
             </Alert>
           )}
 
+          {/* Z-API deprecation banner — legacy configs only */}
+          {config?.provider === 'zapi' && (
+            <Alert className="bg-amber-950/40 border-amber-600/40">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="size-5 text-amber-400 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <AlertTitle className="text-amber-200 mb-1">
+                    Z-API é um provider depreciado
+                  </AlertTitle>
+                  <AlertDescription className="text-amber-100/80 text-sm">
+                    Sua conexão continua funcionando, mas novas conexões não podem
+                    ser criadas com Z-API. Recomendamos migrar para o uazapi:
+                    selecione &quot;uazapi&quot; acima, preencha as credenciais e
+                    reconecte via QR Code.
+                  </AlertDescription>
+                </div>
+              </div>
+            </Alert>
+          )}
+
           {/* Connection Status */}
           <Alert className="bg-card border-border">
             <div className="flex items-center gap-2">
@@ -803,6 +903,21 @@ export function WhatsAppConfig() {
                       disabled={!canEditSettings}
                       className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
                     />
+                  </div>
+
+                  <div className="pt-2">
+                    <Button
+                      type="button"
+                      onClick={handleOpenQrModal}
+                      disabled={!canEditSettings || (!baseUrl.trim() && !config?.base_url)}
+                      className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                      <QrCode className="size-4" />
+                      Conectar via QR Code no App
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1.5 text-center">
+                      Gera o QR Code na tela para parear o WhatsApp diretamente pelo celular.
+                    </p>
                   </div>
                 </>
               )}
@@ -1223,7 +1338,7 @@ export function WhatsAppConfig() {
                 )}
                 {provider === 'uazapi' && (
                   <a
-                    href="https://uazapi.dev/docs"
+                    href="https://docs.uazapi.com"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
@@ -1237,6 +1352,77 @@ export function WhatsAppConfig() {
           </Card>
         </div>
       </div>
+
+      {/* uazapi QR Code Modal */}
+      <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>
+        <DialogContent className="sm:max-w-md bg-card text-card-foreground border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="size-5 text-emerald-500" />
+              Conectar WhatsApp via QR Code
+            </DialogTitle>
+            <DialogDescription>
+              Abra o WhatsApp no seu celular, vá em Aparelhos Conectados &gt; Conectar um aparelho e aponte a câmera para o código abaixo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col items-center justify-center p-4 min-h-[300px]">
+            {qrLoading ? (
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="size-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Solicitando QR Code à instância...</p>
+              </div>
+            ) : qrError ? (
+              <div className="flex flex-col items-center gap-3 text-center">
+                <XCircle className="size-10 text-red-500" />
+                <p className="text-sm text-red-400">{qrError}</p>
+                <Button variant="outline" size="sm" onClick={fetchQrCode} className="gap-2 mt-2">
+                  <RefreshCw className="size-4" />
+                  Tentar Novamente
+                </Button>
+              </div>
+            ) : connectionStatus === 'connected' ? (
+              <div className="flex flex-col items-center gap-3 text-center py-6">
+                <CheckCircle2 className="size-14 text-emerald-500 animate-bounce" />
+                <h3 className="text-lg font-semibold text-emerald-400">WhatsApp Conectado!</h3>
+                <p className="text-sm text-muted-foreground">Sua sessão está ativa e pronta para enviar e receber mensagens.</p>
+              </div>
+            ) : qrCodeData ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="p-3 bg-white rounded-lg shadow-md border border-border">
+                  <img
+                    src={qrCodeData.startsWith('data:') ? qrCodeData : `data:image/png;base64,${qrCodeData}`}
+                    alt="WhatsApp QR Code"
+                    className="size-56 object-contain"
+                  />
+                </div>
+                {pairCode && (
+                  <div className="text-center p-2 rounded bg-muted/60 border border-border w-full">
+                    <p className="text-xs text-muted-foreground">Código de pareamento numérico:</p>
+                    <code className="text-base font-mono font-bold tracking-widest text-primary">{pairCode}</code>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin text-primary" />
+                  Aguardando leitura no WhatsApp...
+                </div>
+                <Button variant="ghost" size="sm" onClick={fetchQrCode} className="gap-1.5 text-xs">
+                  <RefreshCw className="size-3" />
+                  Atualizar código
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <p className="text-sm text-muted-foreground">Nenhum QR code disponível.</p>
+                <Button variant="outline" size="sm" onClick={fetchQrCode} className="gap-2">
+                  <RefreshCw className="size-4" />
+                  Gerar QR Code
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

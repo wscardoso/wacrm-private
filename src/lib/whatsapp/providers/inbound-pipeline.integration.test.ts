@@ -68,9 +68,11 @@ vi.mock('@/lib/flows/engine', () => ({
 }))
 
 const mockRunAutomations = vi.fn()
+const mockCancelPendingCadences = vi.fn(async () => 0)
 vi.mock('@/lib/automations/engine', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runAutomationsForTrigger: ((..._a: any[]) => (mockRunAutomations as any)(..._a)) as any,
+  cancelPendingCadencesForContact: ((..._a: any[]) => (mockCancelPendingCadences as any)(..._a)) as any,
 }))
 
 import { processInboundMessage } from '../inbound-processor'

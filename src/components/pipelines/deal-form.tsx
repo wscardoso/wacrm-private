@@ -65,6 +65,7 @@ export function DealForm({
   const [assignedTo, setAssignedTo] = useState("");
   const [expectedCloseDate, setExpectedCloseDate] = useState("");
   const [notes, setNotes] = useState("");
+  const [lossReason, setLossReason] = useState("");
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -86,7 +87,7 @@ export function DealForm({
     if (deal) {
       setTitle(deal.title);
       setValue(String(deal.value ?? ""));
-      setCurrency(deal.currency || defaultCurrency);
+      setCurrency(deal.currency || defaultCurrency || "BRL");
       // contact_id is nullable when the contact has been deleted
       // (migration 004: ON DELETE SET NULL). "" means "no selection".
       setContactId(deal.contact_id ?? "");
@@ -94,15 +95,17 @@ export function DealForm({
       setAssignedTo(deal.assigned_to ?? "");
       setExpectedCloseDate(deal.expected_close_date ?? "");
       setNotes(deal.notes ?? "");
+      setLossReason(deal.loss_reason ?? "");
     } else {
       setTitle("");
       setValue("");
-      setCurrency(defaultCurrency);
+      setCurrency(defaultCurrency || "BRL");
       setContactId("");
       setStageId(defaultStageId || stages[0]?.id || "");
       setAssignedTo("");
       setExpectedCloseDate("");
       setNotes("");
+      setLossReason("");
     }
   }, [open, deal, defaultStageId, stages, defaultCurrency]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -168,6 +171,7 @@ export function DealForm({
       assigned_to: assignedTo || null,
       notes: notes.trim() || null,
       expected_close_date: expectedCloseDate || null,
+      loss_reason: lossReason.trim() || null,
     };
 
     if (deal) {
@@ -195,20 +199,34 @@ export function DealForm({
         setSaving(false);
         return;
       }
-      const { error } = await supabase.from("deals").insert({
-        ...payload,
-        user_id: user.id,
-        account_id: accountId,
-        status: "open",
-        // Set only on creation — deals.conversation_id is immutable
-        // afterward, so this must never be added to the shared
-        // `payload` object above (also used by the update branch).
-        conversation_id: linkedConversation?.id ?? null,
-      });
+      const { data: newDeal, error } = await supabase
+        .from("deals")
+        .insert({
+          ...payload,
+          user_id: user.id,
+          account_id: accountId,
+          status: "open",
+          // Set only on creation — deals.conversation_id is immutable
+          // afterward, so this must never be added to the shared
+          // `payload` object above (also used by the update branch).
+          conversation_id: linkedConversation?.id ?? null,
+        })
+        .select()
+        .single();
       if (error) {
         toast.error("Failed to create deal");
         setSaving(false);
         return;
+      }
+      if (newDeal) {
+        fetch("/api/deals/events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "deal_created",
+            dealId: newDeal.id,
+          }),
+        }).catch((err) => console.error("Failed to notify deal_created event:", err));
       }
     }
 
@@ -221,9 +239,13 @@ export function DealForm({
   async function handleStatusChange(status: DealStatus) {
     if (!deal) return;
     setStatusAction(status);
+    const updateObj: Record<string, unknown> = { status };
+    if (status === "lost" && lossReason.trim()) {
+      updateObj.loss_reason = lossReason.trim();
+    }
     const { error } = await supabase
       .from("deals")
-      .update({ status })
+      .update(updateObj)
       .eq("id", deal.id);
     setStatusAction(null);
     if (error) {
@@ -420,6 +442,17 @@ export function DealForm({
                     )}
                   </Button>
                 </div>
+                {(deal.status === "lost" || lossReason) && (
+                  <div className="pt-2">
+                    <Label className="text-xs text-muted-foreground">Motivo da Perda</Label>
+                    <Input
+                      value={lossReason}
+                      onChange={(e) => setLossReason(e.target.value)}
+                      placeholder="Ex: Preço alto, optou por concorrente..."
+                      className="mt-1 border-border bg-muted text-foreground"
+                    />
+                  </div>
+                )}
                 {deal.status && deal.status !== "open" && (
                   <Button
                     type="button"

@@ -15,7 +15,7 @@ import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
-import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { runAutomationsForTrigger, cancelPendingCadencesForContact } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import {
   handleTemplateWebhookChange,
@@ -840,6 +840,17 @@ async function processMessage(
   // listens to only one trigger runs only when that trigger matches.
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
+
+  // Cancel any waiting cadence steps for this contact upon incoming
+  // customer reply. Must complete BEFORE dispatching the triggers below:
+  // this same reply may start a fresh cadence (a `wait` step), and a
+  // fire-and-forget cancel would race that insert and kill the new one.
+  try {
+    await cancelPendingCadencesForContact(accountId, contactRecord.id)
+  } catch (err) {
+    console.error('[webhook] cancelPendingCadencesForContact error:', err)
+  }
+
   for (const triggerType of automationTriggers) {
     // Retry with backoff: transient Supabase / network errors
     // should not silently lose the event (issue #13).

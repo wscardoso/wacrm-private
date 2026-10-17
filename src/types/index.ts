@@ -347,6 +347,8 @@ export interface Deal {
   notes?: string;
   expected_close_date?: string;
   status?: DealStatus;
+  loss_reason?: string | null;
+  custom_fields?: Record<string, unknown>;
   created_at: string;
   updated_at?: string;
   contact?: Contact;
@@ -412,7 +414,9 @@ export type AutomationTriggerType =
   | 'new_contact_created'
   | 'conversation_assigned'
   | 'tag_added'
-  | 'time_based';
+  | 'time_based'
+  | 'deal_created'
+  | 'deal_stage_changed';
 
 export type AutomationStepType =
   | 'send_message'
@@ -422,6 +426,8 @@ export type AutomationStepType =
   | 'assign_conversation'
   | 'update_contact_field'
   | 'create_deal'
+  | 'move_deal_stage'
+  | 'update_deal_field'
   | 'wait'
   | 'condition'
   | 'send_webhook'
@@ -445,11 +451,17 @@ export interface TimeBasedTriggerConfig {
   timezone?: string;
 }
 
+export interface DealTriggerConfig {
+  pipeline_id?: string;
+  stage_id?: string;
+}
+
 export type AutomationTriggerConfig =
   | Record<string, never>
   | KeywordMatchTriggerConfig
   | TagTriggerConfig
   | TimeBasedTriggerConfig
+  | DealTriggerConfig
   | Record<string, unknown>;
 
 export interface SendMessageStepConfig {
@@ -491,6 +503,16 @@ export interface CreateDealStepConfig {
   value?: number;
 }
 
+export interface MoveDealStageStepConfig {
+  pipeline_id?: string;
+  stage_id: string;
+}
+
+export interface UpdateDealFieldStepConfig {
+  field: string;
+  value: string;
+}
+
 export interface WaitStepConfig {
   amount: number;
   unit: 'minutes' | 'hours' | 'days';
@@ -523,6 +545,8 @@ export type AutomationStepConfig =
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
   | CreateDealStepConfig
+  | MoveDealStageStepConfig
+  | UpdateDealFieldStepConfig
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
@@ -543,6 +567,7 @@ export interface Automation {
   trigger_type: AutomationTriggerType;
   trigger_config: AutomationTriggerConfig;
   is_active: boolean;
+  cancel_on_reply?: boolean;
   execution_count: number;
   last_executed_at?: string | null;
   created_at: string;

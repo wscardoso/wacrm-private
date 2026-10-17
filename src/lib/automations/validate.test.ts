@@ -25,8 +25,22 @@ describe("validateStepsForActivation", () => {
       },
       { step_type: "add_tag", step_config: { tag_id: "tag-uuid" } },
       { step_type: "close_conversation", step_config: {} },
+      { step_type: "move_deal_stage", step_config: { stage_id: "stage-uuid" } },
+      { step_type: "update_deal_field", step_config: { field: "notes", value: "hello" } },
     ]);
     expect(issues).toEqual([]);
+  });
+
+  it("validates deal steps required fields", () => {
+    const issues = validateStepsForActivation([
+      { step_type: "move_deal_stage", step_config: { stage_id: "" } },
+      { step_type: "update_deal_field", step_config: { field: "", value: "" } },
+    ]);
+    expect(issues.map((i) => i.path)).toEqual([
+      "steps[0].stage_id",
+      "steps[1].field",
+      "steps[1].value",
+    ]);
   });
 
   it("flags every required field that is missing", () => {

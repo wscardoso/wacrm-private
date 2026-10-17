@@ -105,6 +105,7 @@ vi.mock('@/lib/flows/engine', () => ({
 }))
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: vi.fn(),
+  cancelPendingCadencesForContact: vi.fn(async () => 0),
 }))
 // Prevent real rate-limit noise from failing tests.
 vi.mock('@/lib/rate-limit', async () => {
