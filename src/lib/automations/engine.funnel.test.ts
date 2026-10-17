@@ -24,6 +24,8 @@ interface QueryState {
 
 type Resolver = (s: QueryState) => { data?: unknown; error?: unknown; count?: number | null }
 
+type RpcResolver = (name: string, args: unknown) => { data?: unknown; error?: unknown }
+
 const h = vi.hoisted(() => {
   const calls: QueryState[] = []
   const rpcCalls: { name: string; args: unknown }[] = []
@@ -113,19 +115,27 @@ const h = vi.hoisted(() => {
     return chain
   }
 
-  return {
+  const api = {
     calls,
     rpcCalls,
     makeBuilder,
+    // Swapped per test by setRpcResolver; the mocked rpc() calls
+    // api.rpcResolver at invoke time so the latest resolver wins.
+    rpcResolver: (() => ({ data: null, error: null })) as RpcResolver,
     setResolver(fn: Resolver) {
       resolver = fn
+    },
+    setRpcResolver(fn: RpcResolver) {
+      api.rpcResolver = fn
     },
     reset() {
       calls.length = 0
       rpcCalls.length = 0
       resolver = () => ({ data: null })
+      api.rpcResolver = () => ({ data: null, error: null })
     },
   }
+  return api
 })
 
 vi.mock('@/lib/automations/admin-client', () => ({
@@ -133,7 +143,7 @@ vi.mock('@/lib/automations/admin-client', () => ({
     from: (t: string) => h.makeBuilder(t),
     rpc: async (name: string, args: unknown) => {
       h.rpcCalls.push({ name, args })
-      return { data: null, error: null }
+      return h.rpcResolver(name, args)
     },
   }),
 }))
@@ -220,16 +230,13 @@ beforeEach(() => {
 describe('assign_conversation round_robin', () => {
   const rrStep = step('assign_conversation', { mode: 'round_robin' })
 
-  it('filters members by account_role and rotates to the next member', async () => {
+  it('resolves the agent through a single atomic RPC and assigns it', async () => {
     const a = auto()
     h.setResolver((s) => {
       if (s.table === 'contacts') return { data: { id: CONTACT } }
-      if (s.table === 'profiles') return { data: [{ user_id: 'u1' }, { user_id: 'u2' }] }
-      if (s.table === 'account_lead_routing' && s.op === 'select') {
-        return { data: { last_assigned_user_id: 'u1' } }
-      }
       return baseResolver(a, [rrStep])(s)
     })
+    h.setRpcResolver((name) => (name === 'assign_next_lead_agent' ? { data: 'u2' } : { data: null }))
 
     await runAutomationsForTrigger({
       accountId: ACCOUNT,
@@ -237,32 +244,107 @@ describe('assign_conversation round_robin', () => {
       contactId: CONTACT,
     })
 
-    // Regression lock: the profile query must key off `account_role`
-    // (the per-account enum), never the legacy global `role` TEXT column.
-    const profileCall = findCall('profiles', 'select')
-    expect(profileCall).toBeDefined()
-    const roleFilter = profileCall!.ins.find(([col]) => col === 'account_role')
-    expect(roleFilter).toBeDefined()
-    expect(roleFilter![1]).toEqual(['owner', 'admin', 'agent'])
-    expect(profileCall!.ins.some(([col]) => col === 'role')).toBe(false)
+    // Exactly one rotation call, scoped to the account.
+    const rr = h.rpcCalls.filter((c) => c.name === 'assign_next_lead_agent')
+    expect(rr).toHaveLength(1)
+    expect(rr[0].args).toEqual({ p_account_id: ACCOUNT })
 
-    // last_assigned was u1 → next must be u2, and it must be persisted.
-    const upsert = findCall('account_lead_routing', 'upsert')
-    expect(upsert).toBeDefined()
-    expect((upsert!.payload as any).last_assigned_user_id).toBe('u2')
-
+    // The chosen id is written to the conversation, account-scoped.
     const convUpdate = findCall('conversations', 'update')
     expect(convUpdate).toBeDefined()
     expect((convUpdate!.payload as any).assigned_agent_id).toBe('u2')
+    expect(convUpdate!.filters).toContainEqual(['account_id', ACCOUNT])
+    expect(convUpdate!.filters).toContainEqual(['contact_id', CONTACT])
   })
 
-  it('starts at the first member when there is no routing state yet', async () => {
+  it('never reproduces the non-atomic read-then-upsert (regression lock)', async () => {
     const a = auto()
     h.setResolver((s) => {
       if (s.table === 'contacts') return { data: { id: CONTACT } }
-      if (s.table === 'profiles') return { data: [{ user_id: 'u1' }, { user_id: 'u2' }] }
-      if (s.table === 'account_lead_routing' && s.op === 'select') return { data: null }
       return baseResolver(a, [rrStep])(s)
+    })
+    h.setRpcResolver(() => ({ data: 'u1' }))
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    // The rotation state must NOT be read or written from the app tier:
+    // a SELECT-then-UPSERT pair is exactly the race that was fixed, so
+    // any reappearance of these calls fails the lock. Membership is
+    // likewise resolved inside the RPC (keyed on account_role there).
+    expect(allCalls('account_lead_routing', 'select')).toHaveLength(0)
+    expect(allCalls('account_lead_routing', 'upsert')).toHaveLength(0)
+    expect(allCalls('account_lead_routing', 'insert')).toHaveLength(0)
+    expect(allCalls('profiles', 'select')).toHaveLength(0)
+  })
+
+  it("returns 'no agent resolved' when the RPC reports no eligible agent", async () => {
+    const a = auto()
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      return baseResolver(a, [rrStep])(s)
+    })
+    // NULL body = account has zero eligible members (owner/admin/agent).
+    h.setRpcResolver(() => ({ data: null }))
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    // No assignment write at all, and the run still succeeds recording
+    // the 'no agent resolved' detail.
+    const convWrites = allCalls('conversations', 'update')
+    expect(convWrites.some((c) => 'assigned_agent_id' in (c.payload as object))).toBe(false)
+
+    const logUpdate = allCalls('automation_logs', 'update').find(
+      (c) => (c.payload as any)?.status === 'success',
+    )
+    expect(logUpdate).toBeDefined()
+    const steps = (logUpdate!.payload as any).steps_executed as { detail: string }[]
+    expect(steps.at(-1)?.detail).toBe('no agent resolved')
+  })
+
+  it('fails the step when the atomic RPC errors', async () => {
+    const a = auto()
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      return baseResolver(a, [rrStep])(s)
+    })
+    h.setRpcResolver((name) =>
+      name === 'assign_next_lead_agent'
+        ? { data: null, error: { message: 'deadlock detected' } }
+        : { data: null },
+    )
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    // Failure is surfaced, not swallowed: the run is logged `failed`
+    // with the RPC message, and no conversation is assigned.
+    expect(allCalls('conversations', 'update')).toHaveLength(0)
+    const failedLog = allCalls('automation_logs', 'update').find(
+      (c) => (c.payload as any)?.status === 'failed',
+    )
+    expect(failedLog).toBeDefined()
+    expect(String((failedLog!.payload as any).error_message)).toContain(
+      'round-robin assignment failed',
+    )
+    expect(String((failedLog!.payload as any).error_message)).toContain('deadlock detected')
+  })
+
+  it('leaves the specific mode untouched (no rotation RPC)', async () => {
+    const a = auto()
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      return baseResolver(a, [step('assign_conversation', { mode: 'specific', agent_id: 'u9' })])(s)
     })
 
     await runAutomationsForTrigger({
@@ -271,8 +353,9 @@ describe('assign_conversation round_robin', () => {
       contactId: CONTACT,
     })
 
-    const upsert = findCall('account_lead_routing', 'upsert')
-    expect((upsert!.payload as any).last_assigned_user_id).toBe('u1')
+    expect(h.rpcCalls.some((c) => c.name === 'assign_next_lead_agent')).toBe(false)
+    const convUpdate = findCall('conversations', 'update')
+    expect((convUpdate!.payload as any).assigned_agent_id).toBe('u9')
   })
 })
 
