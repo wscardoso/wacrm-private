@@ -9,6 +9,8 @@ interface DealCardProps {
   deal: Deal;
   stage: PipelineStage | null;
   onEdit: (deal: Deal) => void;
+  /** Opens the loss-reason prompt; only offered for open deals. */
+  onMarkLost?: (deal: Deal) => void;
   isOverlay?: boolean;
 }
 
@@ -26,7 +28,7 @@ function initials(name?: string, fallback?: string) {
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
+export function DealCard({ deal, stage, onEdit, onMarkLost, isOverlay }: DealCardProps) {
   const t = useTranslations("pipelines");
   const contactLabel = deal.contact?.name || deal.contact?.phone || t("deal_no_contact");
   const assigneeLabel = deal.assignee?.full_name || null;
@@ -65,9 +67,37 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
           </span>
         )}
         {deal.status === "lost" && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400">
+          <span
+            title={deal.loss_reason ?? undefined}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400"
+          >
             <X className="h-3 w-3" />
             {t("lost")}
+          </span>
+        )}
+        {onMarkLost && !isOverlay && (!deal.status || deal.status === "open") && (
+          // A span, not a nested <button>. Pointer-down is stopped so the
+          // dnd-kit sensor on the wrapper does not start a drag from here.
+          <span
+            role="button"
+            tabIndex={0}
+            title={t("deal_lost")}
+            aria-label={t("deal_lost")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMarkLost(deal);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onMarkLost(deal);
+              }
+            }}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-red-500/15 hover:text-red-400 focus:opacity-100 group-hover:opacity-100"
+          >
+            <X className="h-3 w-3" />
           </span>
         )}
       </div>

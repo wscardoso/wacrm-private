@@ -33,6 +33,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { setDealStatus } from "@/lib/deals/set-status";
+import { MAX_LOSS_REASON_LENGTH, resolveStatusUpdate } from "@/lib/deals/status";
 
 interface DealFormProps {
   open: boolean;
@@ -159,6 +161,17 @@ export function DealForm({
       toast.error("Title, contact, and stage are required");
       return;
     }
+    // A lost deal must keep a reason; for any other status the column is
+    // cleared, so the typed text is never persisted on an open/won deal
+    // (the status buttons below are the only way to set it).
+    const isLost = deal?.status === "lost";
+    if (isLost) {
+      const check = resolveStatusUpdate("lost", lossReason);
+      if (!check.ok) {
+        toast.error(check.error);
+        return;
+      }
+    }
     setSaving(true);
 
     const payload = {
@@ -171,7 +184,7 @@ export function DealForm({
       assigned_to: assignedTo || null,
       notes: notes.trim() || null,
       expected_close_date: expectedCloseDate || null,
-      loss_reason: lossReason.trim() || null,
+      loss_reason: isLost ? lossReason.trim() : null,
     };
 
     if (deal) {
@@ -238,18 +251,18 @@ export function DealForm({
 
   async function handleStatusChange(status: DealStatus) {
     if (!deal) return;
-    setStatusAction(status);
-    const updateObj: Record<string, unknown> = { status };
-    if (status === "lost" && lossReason.trim()) {
-      updateObj.loss_reason = lossReason.trim();
+    // Same rule the server enforces; checked first so the user gets
+    // feedback without a round trip.
+    const check = resolveStatusUpdate(status, lossReason);
+    if (!check.ok) {
+      toast.error(check.error);
+      return;
     }
-    const { error } = await supabase
-      .from("deals")
-      .update(updateObj)
-      .eq("id", deal.id);
+    setStatusAction(status);
+    const err = await setDealStatus(deal.id, status, lossReason);
     setStatusAction(null);
-    if (error) {
-      toast.error("Failed to update deal status");
+    if (err) {
+      toast.error(err);
       return;
     }
     toast.success(
@@ -442,15 +455,16 @@ export function DealForm({
                     )}
                   </Button>
                 </div>
-                {/* Always visible: the reason has to be typed *before* pressing
-                    "Lost", otherwise it can only be added after the fact. */}
-                {(
+                {/* Visible before "Lost" is pressed: the reason is required to
+                    mark a deal as lost, so it has to be typed first. */}
+                {deal.status !== "won" && (
                   <div className="pt-2">
-                    <Label className="text-xs text-muted-foreground">Motivo da Perda</Label>
+                    <Label className="text-xs text-muted-foreground">{t("loss_reason_label")}</Label>
                     <Input
                       value={lossReason}
+                      maxLength={MAX_LOSS_REASON_LENGTH}
                       onChange={(e) => setLossReason(e.target.value)}
-                      placeholder="Ex: Preço alto, optou por concorrente..."
+                      placeholder={t("loss_reason_placeholder")}
                       className="mt-1 border-border bg-muted text-foreground"
                     />
                   </div>
