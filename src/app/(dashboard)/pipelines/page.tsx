@@ -7,6 +7,8 @@ import type { Pipeline, PipelineStage, Deal } from "@/types";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
+import { LossReasonDialog } from "@/components/pipelines/loss-reason-dialog";
+import { setDealStatus } from "@/lib/deals/set-status";
 import { PipelineAnalytics } from "@/components/pipelines/pipeline-analytics";
 import { Button } from "@/components/ui/button";
 import {
@@ -246,6 +248,28 @@ export default function PipelinesPage() {
     [supabase, refreshDeals, deals],
   );
 
+  // Board "mark as lost": the deal only changes after the reason is
+  // confirmed; cancelling (or a failed save) leaves it exactly as it was.
+  const [lossTarget, setLossTarget] = useState<Deal | null>(null);
+  const [lossSaving, setLossSaving] = useState(false);
+
+  const handleConfirmLoss = useCallback(
+    async (reason: string) => {
+      if (!lossTarget) return;
+      setLossSaving(true);
+      const err = await setDealStatus(lossTarget.id, "lost", reason);
+      setLossSaving(false);
+      if (err) {
+        toast.error(err);
+        return;
+      }
+      toast.success("Marked as lost");
+      setLossTarget(null);
+      refreshDeals();
+    },
+    [lossTarget, refreshDeals],
+  );
+
   const handleAddDeal = useCallback(
     (stageId?: string) => {
       setEditingDeal(null);
@@ -433,6 +457,7 @@ export default function PipelinesPage() {
             onDealMoved={handleDealMoved}
             onAddDeal={handleAddDeal}
             onEditDeal={handleEditDeal}
+            onMarkLost={setLossTarget}
           />
         </>
       )}
@@ -492,6 +517,14 @@ export default function PipelinesPage() {
           }}
         />
       )}
+
+      <LossReasonDialog
+        open={!!lossTarget}
+        dealTitle={lossTarget?.title}
+        saving={lossSaving}
+        onConfirm={handleConfirmLoss}
+        onCancel={() => setLossTarget(null)}
+      />
 
       {/* Deal Form (Sheet) */}
       <DealForm

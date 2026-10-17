@@ -18,6 +18,7 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import { isDealStatus } from '@/lib/deals/status'
 
 // ------------------------------------------------------------
 // Deal-step guards
@@ -779,10 +780,22 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           .eq('id', dealId)
           .eq('account_id', args.automation.account_id)
       } else {
+        // `status` and `loss_reason` are one invariant (see
+        // lib/deals/status.ts). An automation cannot ask for a reason, so
+        // it may mark a deal lost with whatever reason is already stored,
+        // but can never leave a stale reason on a deal it reopens or wins.
+        const extra: Record<string, unknown> = {}
+        if (cfg.field === 'status') {
+          if (!isDealStatus(val)) {
+            throw new Error(`update_deal_field: invalid deal status "${String(val)}"`)
+          }
+          if (val !== 'lost') extra.loss_reason = null
+        }
         await db
           .from('deals')
           .update({
             [cfg.field]: val,
+            ...extra,
             updated_at: new Date().toISOString(),
           })
           .eq('id', dealId)

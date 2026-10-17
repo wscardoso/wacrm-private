@@ -397,6 +397,43 @@ describe('update_deal_field', () => {
     expect((upd!.payload as any).value).toBe(10.5)
   })
 
+  it('clears loss_reason when status is set to a non-lost value', async () => {
+    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'open' })]))
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'deal_created',
+      contactId: null,
+      context: { deal_id: 'd1' },
+    })
+    const upd = findCall('deals', 'update')
+    expect((upd!.payload as any).status).toBe('open')
+    expect((upd!.payload as any).loss_reason).toBeNull()
+  })
+
+  it('keeps the stored loss_reason when status is set to lost', async () => {
+    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'lost' })]))
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'deal_created',
+      contactId: null,
+      context: { deal_id: 'd1' },
+    })
+    const upd = findCall('deals', 'update')
+    expect((upd!.payload as any).status).toBe('lost')
+    expect('loss_reason' in (upd!.payload as any)).toBe(false)
+  })
+
+  it('rejects an invalid status value and writes nothing', async () => {
+    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'archived' })]))
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'deal_created',
+      contactId: null,
+      context: { deal_id: 'd1' },
+    })
+    expect(allCalls('deals', 'update')).toHaveLength(0)
+  })
+
   it('rejects a non-allow-listed column and fails the step', async () => {
     h.setResolver(
       baseResolver(a, [step('update_deal_field', { field: 'account_id', value: 'evil' })]),
