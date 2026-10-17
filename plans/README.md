@@ -132,8 +132,18 @@ Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
 - **Não feito / decisão de produto:** "lost" é `deals.status`, não uma etapa;
   não existe "arrastar para perdido" no board. Capturar motivo ao arrastar
   exige definir esse conceito (etapa de perda?) — decisão do operador.
-- **Pendências conhecidas:** toggle de UI para `cancel_on_reply`; corrida no
-  round-robin (read-then-upsert sem lock); rotas `uazapi/qr|status` sem teste.
+- **Pendências conhecidas:** toggle de UI para `cancel_on_reply`; rotas
+  `uazapi/qr|status` sem teste.
+- **Corrida no round-robin — RESOLVIDA (Feature A, local, não aplicada):**
+  o cursor `account_lead_routing` era lido e regravado em duas idas ao
+  banco; duas atribuições concorrentes da mesma conta escolhiam o mesmo
+  agente. Passa a ser uma RPC atômica (`assign_next_lead_agent`,
+  `supabase/migrations/081_lead_round_robin_atomic.sql`) que rotaciona sob
+  `SELECT ... FOR UPDATE`, service-role apenas. Testes:
+  `engine.funnel.test.ts` (contrato do engine) +
+  `lead-round-robin-atomic.pglite.test.ts` (Postgres real). Detalhe:
+  `docs/checkpoints/CHECKPOINT-FEATURE-A-ROUND-ROBIN-RACE.md`. Migration
+  **preparada, não aplicada**.
 
 (Texto original da Fase B abaixo, mantido para referência.)
 

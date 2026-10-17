@@ -549,38 +549,39 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!args.contactId) throw new Error('assign_conversation needs a contact')
       let agentId = cfg.agent_id
       if (cfg.mode === 'round_robin') {
-        // The account-scoped role lives in `profiles.account_role`
-        // (enum owner/admin/agent/viewer, migration 017). The legacy
-        // `profiles.role` column is a global TEXT that defaults to
-        // 'user' — filtering on it matched nobody, so round-robin
-        // silently fell back to "no agent resolved".
-        const { data: members } = await db
-          .from('profiles')
-          .select('user_id')
-          .eq('account_id', args.automation.account_id)
-          .in('account_role', ['owner', 'admin', 'agent'])
-          .order('user_id', { ascending: true })
-
-        if (members && members.length > 0) {
-          const { data: routing } = await db
-            .from('account_lead_routing')
-            .select('last_assigned_user_id')
-            .eq('account_id', args.automation.account_id)
-            .maybeSingle()
-
-          const lastId = routing?.last_assigned_user_id
-          const lastIdx = members.findIndex((m) => m.user_id === lastId)
-          const nextIdx = (lastIdx + 1) % members.length
-          agentId = members[nextIdx].user_id
-
-          await db
-            .from('account_lead_routing')
-            .upsert({
-              account_id: args.automation.account_id,
-              last_assigned_user_id: agentId,
-              updated_at: new Date().toISOString(),
-            })
+        // Atomic rotation, never a read-then-upsert. The cursor lives in
+        // `account_lead_routing` (migration 080); the previous code read
+        // it, computed the next member app-side and then upserted it, so
+        // two concurrent leads for the same account read the SAME cursor,
+        // picked the SAME agent and the second upsert merely rewrote the
+        // first value — the rotation stalled and leads clumped.
+        // `assign_next_lead_agent` (migration 081) does the whole rotate
+        // inside one transaction: it locks the account's cursor row with
+        // SELECT ... FOR UPDATE, advances it and returns the chosen
+        // user_id. The same precedent as `increment_automation_execution_count`
+        // (migration 007) — a read-modify-write race fixed by making the
+        // increment an atomic SQL call.
+        //
+        // The eligible-member query now runs inside that function, still
+        // keyed on `profiles.account_role` (owner/admin/agent, migration
+        // 017) — the account-scoped enum, never the legacy global
+        // `profiles.role` TEXT column that defaulted to 'user' and
+        // matched nobody.
+        const { data: nextAgent, error: rrErr } = await db.rpc(
+          'assign_next_lead_agent',
+          { p_account_id: args.automation.account_id },
+        )
+        // Surface the failure instead of silently degrading: the step
+        // runner marks the run `failed` and records the message. A silent
+        // fallback here is exactly how the original rotation bug hid.
+        if (rrErr) {
+          throw new Error(`round-robin assignment failed: ${rrErr.message}`)
         }
+        // NULL means "no eligible agent in the account" — the function
+        // deliberately neither creates nor advances the cursor in that
+        // case. Falls through to the same 'no agent resolved' outcome as
+        // before.
+        agentId = typeof nextAgent === 'string' ? nextAgent : undefined
       }
       if (!agentId) return 'no agent resolved'
       await db
