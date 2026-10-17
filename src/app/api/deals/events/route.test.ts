@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mockGetUser = vi.fn()
 let profileResult: { data: unknown; error: unknown } = { data: null, error: null }
 let dealResult: { data: unknown; error: unknown } = { data: null, error: null }
+let stageResult: { data: unknown; error: unknown } = { data: null, error: null }
 
 const mockNotifyDealCreated = vi.fn(async () => {})
 const mockNotifyDealStageChanged = vi.fn(async () => {})
@@ -47,7 +48,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/supabase/admin-client', () => ({
   supabaseAdmin: () => ({
-    from: () => chain(dealResult),
+    from: (table: string) => chain(table === 'pipeline_stages' ? stageResult : dealResult),
   }),
 }))
 
@@ -74,6 +75,7 @@ beforeEach(() => {
   mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
   profileResult = { data: { account_id: 'acct-1' }, error: null }
   dealResult = { data: DEAL, error: null }
+  stageResult = { data: { id: 'st-1' }, error: null }
 })
 
 describe('POST /api/deals/events', () => {
@@ -120,7 +122,7 @@ describe('POST /api/deals/events', () => {
     })
   })
 
-  it('dispatches deal_stage_changed with the requested new stage', async () => {
+  it('dispatches deal_stage_changed using the persisted stage, not the body stageId', async () => {
     const { POST } = await import('./route')
     const res = await POST(
       req({ event: 'deal_stage_changed', dealId: 'deal-1', oldStageId: 'st-1', stageId: 'st-9' }),
@@ -132,7 +134,16 @@ describe('POST /api/deals/events', () => {
       contactId: 'contact-1',
       pipelineId: 'pl-1',
       oldStageId: 'st-1',
-      newStageId: 'st-9',
+      newStageId: 'st-2',
     })
+  })
+
+  it('drops an oldStageId that is not a stage of the deal pipeline', async () => {
+    stageResult = { data: null, error: null }
+    const { POST } = await import('./route')
+    await POST(req({ event: 'deal_stage_changed', dealId: 'deal-1', oldStageId: 'foreign' }))
+    expect(mockNotifyDealStageChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ oldStageId: undefined, newStageId: 'st-2' }),
+    )
   })
 })

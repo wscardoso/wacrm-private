@@ -50,6 +50,8 @@ import type {
   CustomField,
   KeywordMatchTriggerConfig,
   MessageTemplate,
+  Pipeline,
+  PipelineStage,
   Tag as TagRecord,
 } from "@/types"
 import { createClient } from "@/lib/supabase/client"
@@ -192,6 +194,8 @@ interface AutomationResources {
   members: AccountMember[]
   templates: MessageTemplate[]
   customFields: CustomField[]
+  pipelines: Pipeline[]
+  stages: PipelineStage[]
 }
 
 const ResourcesContext = createContext<AutomationResources>({
@@ -199,6 +203,8 @@ const ResourcesContext = createContext<AutomationResources>({
   members: [],
   templates: [],
   customFields: [],
+  pipelines: [],
+  stages: [],
 })
 
 function useResources(): AutomationResources {
@@ -210,6 +216,8 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<AccountMember[]>([])
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [customFields, setCustomFields] = useState<CustomField[]>([])
+  const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  const [stages, setStages] = useState<PipelineStage[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -220,7 +228,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
     // actually be sent (anything else 400s at send time), matching the
     // broadcast picker.
     void (async () => {
-      const [tagsRes, templatesRes, customFieldsRes] = await Promise.all([
+      const [tagsRes, templatesRes, customFieldsRes, pipelinesRes, stagesRes] = await Promise.all([
         supabase.from("tags").select("*").order("name"),
         supabase
           .from("message_templates")
@@ -228,8 +236,12 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
           .eq("status", "APPROVED")
           .order("name"),
         supabase.from("custom_fields").select("*").order("field_name"),
+        supabase.from("pipelines").select("*").order("created_at"),
+        supabase.from("pipeline_stages").select("*").order("position"),
       ])
       if (cancelled) return
+      setPipelines((pipelinesRes.data as Pipeline[] | null) ?? [])
+      setStages((stagesRes.data as PipelineStage[] | null) ?? [])
       setTags((tagsRes.data as TagRecord[] | null) ?? [])
       setTemplates((templatesRes.data as MessageTemplate[] | null) ?? [])
       setCustomFields((customFieldsRes.data as CustomField[] | null) ?? [])
@@ -255,7 +267,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <ResourcesContext.Provider value={{ tags, members, templates, customFields }}>
+    <ResourcesContext.Provider value={{ tags, members, templates, customFields, pipelines, stages }}>
       {children}
     </ResourcesContext.Provider>
   )
@@ -702,6 +714,23 @@ function TriggerCard({
                 />
               </div>
             )}
+            {(type === "deal_created" || type === "deal_stage_changed") && (
+              <DealTriggerFields config={config} onChange={onConfigChange} />
+            )}
+            {type === "conversation_assigned" && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Assigned agent (optional)
+                </label>
+                <AgentSelect
+                  value={(config.agent_id as string) ?? ""}
+                  onChange={(v) => onConfigChange({ ...config, agent_id: v })}
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Leave empty to fire for any assignment.
+                </p>
+              </div>
+            )}
             {type === "time_based" && (
               <Input
                 placeholder="Cron expression or HH:mm"
@@ -716,6 +745,60 @@ function TriggerCard({
         )}
       </div>
     </div>
+  )
+}
+
+/** Optional pipeline / stage filters for the deal triggers. Empty = any. */
+function DealTriggerFields({
+  config,
+  onChange,
+}: {
+  config: Record<string, unknown>
+  onChange: (c: Record<string, unknown>) => void
+}) {
+  const { pipelines, stages } = useResources()
+  const pipelineId = (config.pipeline_id as string) ?? ""
+  const stageId = (config.stage_id as string) ?? ""
+  const visibleStages = pipelineId
+    ? stages.filter((st) => st.pipeline_id === pipelineId)
+    : stages
+  return (
+    <>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Pipeline (optional)
+        </label>
+        <select
+          value={pipelineId}
+          onChange={(e) => onChange({ ...config, pipeline_id: e.target.value, stage_id: "" })}
+          className={SELECT_CLASS}
+        >
+          <option value="">Any pipeline</option>
+          {pipelines.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+          Stage (optional)
+        </label>
+        <select
+          value={stageId}
+          onChange={(e) => onChange({ ...config, stage_id: e.target.value })}
+          className={SELECT_CLASS}
+        >
+          <option value="">Any stage</option>
+          {visibleStages.map((st) => (
+            <option key={st.id} value={st.id}>
+              {st.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </>
   )
 }
 

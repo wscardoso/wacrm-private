@@ -442,7 +442,9 @@ export function DealForm({
                     )}
                   </Button>
                 </div>
-                {(deal.status === "lost" || lossReason) && (
+                {/* Always visible: the reason has to be typed *before* pressing
+                    "Lost", otherwise it can only be added after the fact. */}
+                {(
                   <div className="pt-2">
                     <Label className="text-xs text-muted-foreground">Motivo da Perda</Label>
                     <Input

@@ -114,7 +114,30 @@ completo na v1.7 do roadmap.
      `account_lead_routing`, `deals.loss_reason`/`custom_fields` e do status
      `'cancelled'`).
 
-### Fase B — Fechar #1 e #4 de verdade: PRÓXIMO CICLO
+### Fase B — Fechar #1 e #4 de verdade: IMPLEMENTADA LOCALMENTE (2026-10-17)
+
+Status: código + testes locais; **não publicada, não validada em produção**.
+Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
+(5 erros de eslint pré-existentes em testes de `inbound-*`, não tocados).
+
+- Config de gatilhos de funil: seletor de pipeline/etapa no `TriggerCard`
+  (`DealTriggerFields`); filtro por agente em `conversation_assigned`.
+- `conversation_assigned` agora tem dispatcher: `POST /api/conversations/events`
+  (assignee relido do banco), chamado após atribuição manual no inbox.
+  Atribuição feita pela *ação* `assign_conversation` não encadeia (evita laço).
+- `POST /api/deals/events` não confia mais em `stageId`/`oldStageId` do corpo:
+  destino = etapa persistida; etapa anterior só vale se for do mesmo pipeline.
+- Campo "Motivo da Perda" sempre visível no `deal-form` (antes só aparecia
+  depois de marcar como perdido, impedindo digitar o motivo antes).
+- **Não feito / decisão de produto:** "lost" é `deals.status`, não uma etapa;
+  não existe "arrastar para perdido" no board. Capturar motivo ao arrastar
+  exige definir esse conceito (etapa de perda?) — decisão do operador.
+- **Pendências conhecidas:** toggle de UI para `cancel_on_reply`; corrida no
+  round-robin (read-then-upsert sem lock); rotas `uazapi/qr|status` sem teste.
+
+(Texto original da Fase B abaixo, mantido para referência.)
+
+### Fase B (planejamento original)
 
 1. UI/validação de config dos gatilhos de funil (seletor de pipeline/etapa —
    hoje todo gatilho é "qualquer negócio"); cobre parte do **#10**.

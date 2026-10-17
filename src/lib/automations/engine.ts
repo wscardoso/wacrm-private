@@ -871,7 +871,7 @@ async function resolveDealConversationId(args: ExecuteArgs): Promise<string | nu
   return (data?.id as string | undefined) ?? null
 }
 
-function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
+export function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
   if (automation.trigger_type === 'keyword_match') {
     const cfg = automation.trigger_config as KeywordMatchTriggerConfig
     if (!cfg?.keywords || cfg.keywords.length === 0) return false
@@ -889,6 +889,12 @@ function triggerMatches(automation: Automation, ctx: AutomationContext | undefin
     if (cfg?.tag_id && ctx?.tag_id) {
       return cfg.tag_id === ctx.tag_id
     }
+    return true
+  }
+
+  if (automation.trigger_type === 'conversation_assigned') {
+    const cfg = automation.trigger_config as { agent_id?: string }
+    if (cfg?.agent_id) return cfg.agent_id === ctx?.agent_id
     return true
   }
 

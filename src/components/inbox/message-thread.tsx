@@ -781,6 +781,21 @@ export function MessageThread({
       }
 
       onAssignChange(conversation.id, agentId);
+
+      // Let `conversation_assigned` automations run. Fire-and-forget: the
+      // assignment itself already succeeded.
+      if (agentId) {
+        fetch("/api/conversations/events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "conversation_assigned",
+            conversationId: conversation.id,
+          }),
+        }).catch((err) =>
+          console.error("Failed to notify assignment event:", err),
+        );
+      }
     },
     [conversation, onAssignChange, isPlatformContext],
   );

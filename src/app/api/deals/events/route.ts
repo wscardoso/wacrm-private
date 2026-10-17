@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json()
-    const { event, dealId, stageId, oldStageId } = body
+    const { event, dealId, oldStageId } = body
 
     if (!event || !dealId) {
       return NextResponse.json({ error: 'Missing event or dealId' }, { status: 400 })
@@ -55,13 +55,28 @@ export async function POST(req: Request) {
         value: deal.value,
       })
     } else if (event === 'deal_stage_changed') {
+      // The client only reports that a move happened. The destination is
+      // always the deal's persisted stage (never the body's `stageId`), and
+      // the previous stage is kept only if it is a real stage of the same
+      // pipeline — otherwise a caller could fire stage-filtered automations
+      // for a transition that never occurred.
+      let verifiedOldStageId: string | undefined
+      if (typeof oldStageId === 'string' && oldStageId) {
+        const { data: oldStage } = await admin
+          .from('pipeline_stages')
+          .select('id')
+          .eq('id', oldStageId)
+          .eq('pipeline_id', deal.pipeline_id)
+          .maybeSingle()
+        if (oldStage) verifiedOldStageId = oldStage.id
+      }
       await notifyDealStageChanged({
         accountId: profile.account_id,
         dealId: deal.id,
         contactId: deal.contact_id,
         pipelineId: deal.pipeline_id,
-        oldStageId,
-        newStageId: stageId || deal.stage_id,
+        oldStageId: verifiedOldStageId,
+        newStageId: deal.stage_id,
       })
     }
 
