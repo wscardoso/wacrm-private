@@ -127,6 +127,14 @@ Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
   Atribuição feita pela *ação* `assign_conversation` não encadeia (evita laço).
 - `POST /api/deals/events` não confia mais em `stageId`/`oldStageId` do corpo:
   destino = etapa persistida; etapa anterior só vale se for do mesmo pipeline.
+- **Motivo da perda — IMPLEMENTADO (Feature B, local, não publicado):**
+  "perdido" segue sendo `deals.status` (não é etapa). Regra única em
+  `src/lib/deals/status.ts` (lost exige motivo ≤500; open/won o apagam),
+  `POST /api/deals/status` (autenticado, escopo por `account_id`, viewer
+  bloqueado), botão "perdido" por card no board com diálogo de motivo, e o
+  `deal-form` usa a mesma rota. `update_deal_field`: `status` mantém a
+  invariante (lost sem motivo gravado recebe "Automação: <nome>"),
+  `loss_reason` só é aceito em negócio já perdido e não vazio.
 - Campo "Motivo da Perda" sempre visível no `deal-form` (antes só aparecia
   depois de marcar como perdido, impedindo digitar o motivo antes).
 - **Não feito / decisão de produto:** "lost" é `deals.status`, não uma etapa;

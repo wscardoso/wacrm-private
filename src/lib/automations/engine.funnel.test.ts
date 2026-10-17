@@ -397,40 +397,88 @@ describe('update_deal_field', () => {
     expect((upd!.payload as any).value).toBe(10.5)
   })
 
-  it('clears loss_reason when status is set to a non-lost value', async () => {
-    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'open' })]))
+  // update_deal_field on `status` / `loss_reason` keeps the pair consistent
+  // (lib/deals/status.ts). The engine reads the deal first, so the resolver
+  // answers the account-scoped SELECT with the deal's current state.
+  function withDeal(
+    current: { status: string; loss_reason: string | null } | null,
+    field: string,
+    value: unknown,
+  ) {
+    const base = baseResolver(a, [step('update_deal_field', { field, value })])
+    h.setResolver((s) => {
+      if (s.table === 'deals' && s.op === 'select') return { data: current }
+      return base(s)
+    })
+  }
+  async function run() {
     await runAutomationsForTrigger({
       accountId: ACCOUNT,
       triggerType: 'deal_created',
       contactId: null,
       context: { deal_id: 'd1' },
     })
+  }
+
+  it('clears loss_reason when status is set to a non-lost value', async () => {
+    withDeal({ status: 'lost', loss_reason: 'Preço' }, 'status', 'open')
+    await run()
     const upd = findCall('deals', 'update')
     expect((upd!.payload as any).status).toBe('open')
     expect((upd!.payload as any).loss_reason).toBeNull()
+    expect(upd!.filters).toContainEqual(['account_id', ACCOUNT])
   })
 
   it('keeps the stored loss_reason when status is set to lost', async () => {
-    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'lost' })]))
-    await runAutomationsForTrigger({
-      accountId: ACCOUNT,
-      triggerType: 'deal_created',
-      contactId: null,
-      context: { deal_id: 'd1' },
-    })
+    withDeal({ status: 'open', loss_reason: 'Preço' }, 'status', 'lost')
+    await run()
     const upd = findCall('deals', 'update')
     expect((upd!.payload as any).status).toBe('lost')
     expect('loss_reason' in (upd!.payload as any)).toBe(false)
   })
 
+  it('records a fallback reason when an automation marks a deal lost with none stored', async () => {
+    withDeal({ status: 'open', loss_reason: null }, 'status', 'lost')
+    await run()
+    const upd = findCall('deals', 'update')
+    expect((upd!.payload as any).status).toBe('lost')
+    expect((upd!.payload as any).loss_reason).toBe('Automação: test')
+  })
+
   it('rejects an invalid status value and writes nothing', async () => {
-    h.setResolver(baseResolver(a, [step('update_deal_field', { field: 'status', value: 'archived' })]))
-    await runAutomationsForTrigger({
-      accountId: ACCOUNT,
-      triggerType: 'deal_created',
-      contactId: null,
-      context: { deal_id: 'd1' },
-    })
+    withDeal({ status: 'open', loss_reason: null }, 'status', 'archived')
+    await run()
+    expect(allCalls('deals', 'update')).toHaveLength(0)
+  })
+
+  it('refuses to write loss_reason on an open deal', async () => {
+    withDeal({ status: 'open', loss_reason: null }, 'loss_reason', 'Preço')
+    await run()
+    expect(allCalls('deals', 'update')).toHaveLength(0)
+  })
+
+  it('refuses to write loss_reason on a won deal', async () => {
+    withDeal({ status: 'won', loss_reason: null }, 'loss_reason', 'Preço')
+    await run()
+    expect(allCalls('deals', 'update')).toHaveLength(0)
+  })
+
+  it('writes a trimmed loss_reason on a lost deal', async () => {
+    withDeal({ status: 'lost', loss_reason: 'Antigo' }, 'loss_reason', '  Concorrente  ')
+    await run()
+    const upd = findCall('deals', 'update')
+    expect((upd!.payload as any).loss_reason).toBe('Concorrente')
+  })
+
+  it('refuses an empty loss_reason on a lost deal (would break the invariant)', async () => {
+    withDeal({ status: 'lost', loss_reason: 'Antigo' }, 'loss_reason', '   ')
+    await run()
+    expect(allCalls('deals', 'update')).toHaveLength(0)
+  })
+
+  it('fails when the deal is not in the account (status write)', async () => {
+    withDeal(null, 'status', 'lost')
+    await run()
     expect(allCalls('deals', 'update')).toHaveLength(0)
   })
 

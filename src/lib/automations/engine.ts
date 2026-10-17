@@ -18,7 +18,7 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
-import { isDealStatus } from '@/lib/deals/status'
+import { resolveAutomationDealWrite, type DealCurrent } from '@/lib/deals/status'
 
 // ------------------------------------------------------------
 // Deal-step guards
@@ -781,15 +781,24 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           .eq('account_id', args.automation.account_id)
       } else {
         // `status` and `loss_reason` are one invariant (see
-        // lib/deals/status.ts). An automation cannot ask for a reason, so
-        // it may mark a deal lost with whatever reason is already stored,
-        // but can never leave a stale reason on a deal it reopens or wins.
-        const extra: Record<string, unknown> = {}
-        if (cfg.field === 'status') {
-          if (!isDealStatus(val)) {
-            throw new Error(`update_deal_field: invalid deal status "${String(val)}"`)
-          }
-          if (val !== 'lost') extra.loss_reason = null
+        // lib/deals/status.ts); resolveAutomationDealWrite enforces it for
+        // single-column writes. The deal is read first (account-scoped)
+        // because the rule depends on its current status / reason.
+        let extra: Record<string, unknown> = {}
+        if (cfg.field === 'status' || cfg.field === 'loss_reason') {
+          const { data: current } = await db
+            .from('deals')
+            .select('status, loss_reason')
+            .eq('id', dealId)
+            .eq('account_id', args.automation.account_id)
+            .maybeSingle()
+          if (!current) throw new Error('update_deal_field: deal not found in account')
+          extra = resolveAutomationDealWrite(
+            cfg.field,
+            val,
+            current as DealCurrent,
+            `Automação: ${args.automation.name ?? 'sem nome'}`,
+          )
         }
         await db
           .from('deals')
