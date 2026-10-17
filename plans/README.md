@@ -5,6 +5,9 @@ Execute in the order below unless dependencies say otherwise. Each executor:
 read the plan fully before starting, honor its STOP conditions, and update
 your row when done.
 
+Since 2026-10-17 this file also tracks the operator-led **paridade de produto
+com o Clint** workstream (see the last section).
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Status |
@@ -72,3 +75,67 @@ your row when done.
   a plan; this was housekeeping done directly in the same session before
   these plans were written (commit `2e66c12`), not an implementation task
   for an executor.
+
+## Workstream — paridade de produto com o Clint (2026-10-17)
+
+Origem: análise de lacunas contra o Clint (15 itens) com duas correções do
+operador — **`send_webhook` já existe como ação de automação** (o ausente é
+webhook de *eventos por conta*, item #9), e **não havia pausa de cadência por
+resposta do lead** (só `paused_by_agent` nos flows). Registro canônico no
+`docs/MASTER-ROADMAP.md` **v1.7**. Este workstream não é uma das plans
+geradas pelo `improve` (001–003) — é conduzido pelo operador.
+
+### Fase A — Fundação: FEITA (commit `f7498d1`, 2026-10-17)
+
+Endereça **#1** (gatilhos/ações de funil), **#3** (pausa da cadência),
+**#4 parcial** (distribuição de leads), os **detalhes do funil** (moeda BRL,
+`loss_reason`, `custom_fields`) e o pareamento **uazapi por QR Code**. Detalhe
+completo na v1.7 do roadmap.
+
+- Bugs/guardas corrigidos na revisão de Fase A (sobre a implementação inicial):
+  - **P0 — round-robin nunca distribuía:** `engine.ts` filtrava
+    `profiles.role` (coluna legada `TEXT`); passou a `profiles.account_role`.
+  - **P1 — escrita arbitrária via `update_deal_field`:** allow-list de colunas
+    + `custom:<key>`; `move_deal_stage` valida posse da etapa pela conta.
+  - **P1 — corrida na pausa da cadência:** cancelamento agora é aguardado
+    *antes* do dispatch dos gatilhos de inbound; status `'cancelled'`.
+  - **P0 regressão — Z-API:** a remoção do WIP quebrava `PROVIDERS.find(...)!`
+    em conta legada; restaurada a lista-mestra e mantido o gate existente.
+  - **Incidente de processo:** um `write` sobrescreveu o `engine.test.ts`
+    pré-existente (318 linhas). Recuperado do git; os testes novos foram para
+    `engine.funnel.test.ts`. **Lição: nunca `write` sobre um arquivo existente
+    sem antes conferir `git status`/`git show HEAD:<path>`.**
+- Gate verde: `tsc` limpo · `eslint` sem erros · **114 arquivos / 1561 testes**
+  · `next build` verde.
+- **Pendência operacional (não feita):**
+  1. `git push` para `main` (3 commits locais: `f7498d1`, `bbf8ba4`, `d9e9f5c`).
+  2. Rodar `supabase/migrations/080_funnel_cadence_and_uazapi.sql` **depois**
+     do deploy do código (nunca antes — o código novo depende de
+     `account_lead_routing`, `deals.loss_reason`/`custom_fields` e do status
+     `'cancelled'`).
+
+### Fase B — Fechar #1 e #4 de verdade: PRÓXIMO CICLO
+
+1. UI/validação de config dos gatilhos de funil (seletor de pipeline/etapa —
+   hoje todo gatilho é "qualquer negócio"); cobre parte do **#10**.
+2. Dispatcher real de `conversation_assigned` (precursor de **E10**); hoje
+   validado em `validate.ts`, sem runtime — uma atribuição não encadeia automações.
+3. Captura de motivo de perda no board (arrastar para "perdido"), não só no form.
+
+### Fase C — Ordem acordada com o operador (depois de B)
+
+- Integração: **#8** (API pública de dados) → **#9** (webhooks de saída por conta).
+- Valor de anúncio: **#6** (links rastreáveis) → **#7** (relatórios/E12) →
+  **#5** (fontes: Lead Ads/formulário/RD Station).
+- IA: **#11** e **#12**, só depois de #1 e #2.
+- Canais: **E3** (multi-conexão) → Instagram.
+- **#14 (PWA)** é pequeno e independente — pode entrar a qualquer momento.
+
+### Dívida de base que limita a paridade (fora do workstream)
+
+- **E10** (convergência automations/flows): duplicar gatilhos de funil ou IA em
+  dois motores multiplica o trabalho.
+- **E3** (multi-conexão): bloqueia Instagram e mais de um número por conta.
+- **E2.1** (status não-Meta) e **D-C** (parser Z-API) permanecem abertos —
+  mensagens não-Meta continuam travadas em `sent`.
+- Limite de requisições em memória: não escala com múltiplas instâncias.
