@@ -19,6 +19,7 @@ import type {
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
 import { resolveAutomationDealWrite, type DealCurrent } from '@/lib/deals/status'
+import { DestinationNotAllowedError, SafeFetchError, safeFetch } from '@/lib/http/safe-fetch'
 
 // ------------------------------------------------------------
 // Deal-step guards
@@ -817,11 +818,22 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as SendWebhookStepConfig
       if (!cfg.url) throw new Error('send_webhook needs url')
       const body = cfg.body_template ? interpolate(cfg.body_template, args) : JSON.stringify(args.context)
-      const res = await fetch(cfg.url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(cfg.headers ?? {}) },
-        body,
-      })
+      // `cfg.url` and `cfg.headers` are tenant-authored and this runs with
+      // server credentials, so the request goes through safeFetch (public
+      // https destinations only, no redirects, bounded). The refusal message
+      // is generic on purpose: it lands in the tenant-visible automation log.
+      let res: Response
+      try {
+        res = await safeFetch(cfg.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(cfg.headers ?? {}) },
+          body,
+        })
+      } catch (err) {
+        if (err instanceof DestinationNotAllowedError) throw new Error('webhook destination not allowed')
+        if (err instanceof SafeFetchError) throw new Error(`webhook request failed: ${err.message}`)
+        throw err
+      }
       if (!res.ok) throw new Error(`webhook returned ${res.status}`)
       return `webhook ${res.status}`
     }
