@@ -18,6 +18,11 @@ import {
 } from '@/lib/whatsapp/config-binding'
 import { ZApiProvider } from '@/lib/whatsapp/providers/zapi'
 import { UazapiProvider } from '@/lib/whatsapp/providers/uazapi'
+import {
+  DestinationNotAllowedError,
+  SafeFetchError,
+  assertOutboundDestination,
+} from '@/lib/http/safe-fetch'
 import { bootstrapConnection, generateConnectionId } from '@/lib/whatsapp/webhook-auth'
 import type { WhatsAppProviderKind } from '@/types'
 
@@ -336,6 +341,24 @@ export async function POST(request: Request) {
           .maybeSingle()
         if (existingRow?.waba_id) {
           try { resolvedClientToken = decryptWithBindingContext(existingRow.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
+        }
+      }
+
+      // The uazapi server is tenant-supplied. Refuse anything that is not https on a
+      // public address before any request is made or anything is stored. The same
+      // policy is enforced again on every request (safeFetch), because DNS can
+      // change after this check. The reply never says which rule failed.
+      if (provider === 'uazapi') {
+        try {
+          await assertOutboundDestination(base_url!)
+        } catch (err) {
+          if (err instanceof DestinationNotAllowedError || err instanceof SafeFetchError) {
+            return NextResponse.json(
+              { error: 'The server URL is not allowed. Use a public https address (port 443).' },
+              { status: 400 },
+            )
+          }
+          throw err
         }
       }
 

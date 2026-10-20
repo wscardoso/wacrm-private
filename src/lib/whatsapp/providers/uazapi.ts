@@ -9,6 +9,7 @@
  * Docs: https://uazapi.dev/docs
  */
 
+import { DestinationNotAllowedError, SafeFetchError, safeFetch } from '@/lib/http/safe-fetch'
 import type {
   WhatsAppProvider,
   SendResult,
@@ -35,6 +36,10 @@ import type {
  * never produced a `Response` throws a different shape with no status.
  */
 function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
+  // The network policy refused the destination before any connection existed:
+  // nothing was sent, and it will keep being refused until the configuration changes.
+  if (error instanceof DestinationNotAllowedError) return 'deterministic-permanent'
+
   const message = error instanceof Error ? error.message : String(error)
   const match = /failed \((\d{3})\):/.exec(message)
   if (match) {
@@ -57,6 +62,9 @@ function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
   }
   return 'ambiguous'
 }
+
+/** A uazapi API response is small (a QR code is the largest); anything bigger is not one. */
+const UAZAPI_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 export class UazapiProvider implements WhatsAppProvider {
   readonly kind = 'uazapi'
@@ -100,19 +108,32 @@ export class UazapiProvider implements WhatsAppProvider {
   }
 
   /**
-   * Single outbound HTTP exit for this provider. Every call carries the
-   * instance token in custom headers (`apikey`, `token`). The fetch default
-   * (`redirect: 'follow'`) re-sends custom headers on a cross-origin redirect
-   * (only `Authorization` is dropped), so a redirect from the authorized
-   * server, or one injected into its path, would hand the token to another
-   * origin. Redirects are never followed: a 3xx is a failure. It reuses the
-   * `failed (<status>)` shape so classifyUazapiSendFailure treats it like any
-   * other non-listed status (ambiguous), unchanged.
+   * Single outbound HTTP exit for this provider. The server is tenant-supplied
+   * and every call carries the instance token in custom headers (`apikey`,
+   * `token`), so the request goes through safeFetch, which applies the network
+   * policy on the connection it makes: https on 443 only, every resolved
+   * address public (validated on each new connection, which also covers DNS
+   * rebinding) and no redirects. A redirect is a failure here; it reuses the
+   * `failed (<status>)` shape so classifyUazapiSendFailure keeps treating it as
+   * any other non-listed status (ambiguous). The fetch default would re-send
+   * custom headers across origins.
    */
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const res = await fetch(`${this.baseUrl}${path}`, { ...init, redirect: 'manual' })
+    let res: Response
+    try {
+      res = await safeFetch(`${this.baseUrl}${path}`, {
+        method: init.method,
+        headers: init.headers,
+        body: init.body as string | undefined,
+        maxResponseBytes: UAZAPI_MAX_RESPONSE_BYTES,
+      })
+    } catch (error) {
+      if (error instanceof SafeFetchError && error.code === 'redirect') {
+        throw new Error(`uazapi ${path} failed (${error.status}): redirect refused`)
+      }
+      throw error
+    }
     if (res.status >= 300 && res.status < 400) {
-      await res.body?.cancel().catch(() => undefined)
       throw new Error(`uazapi ${path} failed (${res.status}): redirect refused`)
     }
     return res

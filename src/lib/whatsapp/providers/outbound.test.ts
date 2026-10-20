@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ZApiProvider } from './zapi'
 import { UazapiProvider } from './uazapi'
 
+// uazapi's HTTP exit is safeFetch (network policy: https/443, public addresses,
+// no redirects; covered by src/lib/http/safe-fetch.test.ts). This file is about
+// the wire format, so safeFetch is pointed at the stubbed global fetch below.
+vi.mock('@/lib/http/safe-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/http/safe-fetch')>()),
+  safeFetch: (url: string | URL, init?: RequestInit) => fetch(url, init),
+}))
+
 // =============================================================
 // Outbound: sendText + sendMedia (image / document) for Z-API and uazapi.
 //
