@@ -401,3 +401,211 @@ describe("advanceFromNodeKey — send_media resolves a signed URL before dispatc
     );
   });
 });
+
+// ─── F3 — ownership guards on node config (service-role writes) ───────────
+
+interface OwnershipCall {
+  table: string;
+  op: "select" | "insert" | "update" | "upsert" | "delete";
+  payload?: unknown;
+  filters: [string, unknown][];
+}
+
+function makeOwnershipDb(
+  results: Record<string, { data?: unknown; error?: unknown }>,
+) {
+  const calls: OwnershipCall[] = [];
+
+  const db = {
+    from(table: string) {
+      let op: OwnershipCall["op"] = "select";
+      let payload: unknown;
+      const filters: [string, unknown][] = [];
+
+      const finish = () => {
+        calls.push({ table, op, payload, filters: [...filters] });
+        return results[table] ?? { data: null, error: null };
+      };
+
+      const builder: Record<string, unknown> = {};
+      Object.assign(builder, {
+        select: () => builder,
+        insert: (value: unknown) => {
+          op = "insert";
+          payload = value;
+          return builder;
+        },
+        update: (value: unknown) => {
+          op = "update";
+          payload = value;
+          return builder;
+        },
+        upsert: (value: unknown) => {
+          op = "upsert";
+          payload = value;
+          return builder;
+        },
+        delete: () => {
+          op = "delete";
+          return builder;
+        },
+        eq: (column: string, value: unknown) => {
+          filters.push([column, value]);
+          return builder;
+        },
+        maybeSingle: () => Promise.resolve(finish()),
+        single: () => Promise.resolve(finish()),
+        then: (
+          resolve: (value: unknown) => unknown,
+          reject?: (reason: unknown) => unknown,
+        ) => Promise.resolve(finish()).then(resolve, reject),
+      });
+      return builder;
+    },
+  };
+
+  return {
+    db: db as unknown as Parameters<typeof advanceFromNodeKey>[0],
+    calls,
+  };
+}
+
+const ownershipRun: FlowRunRow = {
+  id: "run-f3",
+  flow_id: "flow-1",
+  account_id: "account-1",
+  user_id: "user-1",
+  contact_id: "contact-1",
+  conversation_id: "conv-1",
+  status: "active",
+  current_node_key: "node-1",
+  last_prompt_message_id: null,
+  vars: {},
+  reprompt_count: 0,
+  started_at: new Date().toISOString(),
+  last_advanced_at: new Date().toISOString(),
+  ended_at: null,
+  end_reason: null,
+};
+
+function flowNode(
+  node_key: string,
+  node_type: FlowNodeRow["node_type"],
+  config: Record<string, unknown>,
+): FlowNodeRow {
+  return {
+    id: `id-${node_key}`,
+    flow_id: "flow-1",
+    node_key,
+    node_type,
+    config,
+    position_x: 0,
+    position_y: 0,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function graph(...nodes: FlowNodeRow[]): Map<string, FlowNodeRow> {
+  return new Map(nodes.map((node) => [node.node_key, node]));
+}
+
+describe("advanceFromNodeKey — set_tag ownership", () => {
+  it("writes contact_tags when the tag belongs to the run account", async () => {
+    const { db, calls } = makeOwnershipDb({
+      tags: { data: { id: "tag-own" } },
+    });
+    const nodes = graph(
+      flowNode("tag1", "set_tag", {
+        mode: "add",
+        tag_id: "tag-own",
+        next_node_key: "end",
+      }),
+      flowNode("end", "end", {}),
+    );
+
+    await advanceFromNodeKey(db, ownershipRun, "tag1", nodes);
+
+    const tagLookup = calls.find((c) => c.table === "tags" && c.op === "select");
+    expect(tagLookup!.filters).toContainEqual(["account_id", "account-1"]);
+    const upsert = calls.find((c) => c.table === "contact_tags" && c.op === "upsert");
+    expect(upsert).toBeDefined();
+    expect(upsert!.payload).toEqual({
+      contact_id: "contact-1",
+      tag_id: "tag-own",
+    });
+  });
+
+  it("refuses to attach a tag from another account", async () => {
+    const { db, calls } = makeOwnershipDb({ tags: { data: null } });
+    const nodes = graph(
+      flowNode("tag1", "set_tag", {
+        mode: "add",
+        tag_id: "tag-foreign",
+        next_node_key: "end",
+      }),
+      flowNode("end", "end", {}),
+    );
+
+    await advanceFromNodeKey(db, ownershipRun, "tag1", nodes);
+
+    expect(calls.some((c) => c.table === "contact_tags")).toBe(false);
+    const failed = calls.find(
+      (c) =>
+        c.table === "flow_run_events" &&
+        (c.payload as { payload?: { reason?: string } })?.payload?.reason ===
+          "set_tag_failed",
+    );
+    expect(failed).toBeDefined();
+    expect(
+      String(
+        (failed!.payload as { payload: { detail: string } }).payload.detail,
+      ),
+    ).toContain("not in account");
+  });
+});
+
+describe("advanceFromNodeKey — handoff agent ownership", () => {
+  it("assigns an agent who belongs to the run account", async () => {
+    const { db, calls } = makeOwnershipDb({
+      profiles: { data: { user_id: "u2" } },
+    });
+    const nodes = graph(
+      flowNode("handoff1", "handoff", { assign_to: "u2" }),
+    );
+
+    const result = await advanceFromNodeKey(db, ownershipRun, "handoff1", nodes);
+
+    expect(result.outcome).toBe("handed_off");
+    const profileLookup = calls.find(
+      (c) => c.table === "profiles" && c.op === "select",
+    );
+    expect(profileLookup!.filters).toContainEqual(["account_id", "account-1"]);
+    const convUpdate = calls.find(
+      (c) => c.table === "conversations" && c.op === "update",
+    );
+    expect(convUpdate!.payload).toMatchObject({ assigned_agent_id: "u2" });
+  });
+
+  it("hands off without assigning a foreign agent", async () => {
+    const { db, calls } = makeOwnershipDb({ profiles: { data: null } });
+    const nodes = graph(
+      flowNode("handoff1", "handoff", { assign_to: "u-foreign" }),
+    );
+
+    const result = await advanceFromNodeKey(db, ownershipRun, "handoff1", nodes);
+
+    expect(result.outcome).toBe("handed_off");
+    const convUpdate = calls.find(
+      (c) => c.table === "conversations" && c.op === "update",
+    );
+    expect(convUpdate).toBeDefined();
+    expect(convUpdate!.payload).not.toHaveProperty("assigned_agent_id");
+    const errorEvent = calls.find(
+      (c) =>
+        c.table === "flow_run_events" &&
+        (c.payload as { payload?: { reason?: string } })?.payload?.reason ===
+          "handoff_agent_not_in_account",
+    );
+    expect(errorEvent).toBeDefined();
+  });
+});

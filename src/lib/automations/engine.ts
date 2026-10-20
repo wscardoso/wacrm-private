@@ -521,9 +521,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'add_tag': {
       // contact_tags has no account_id column; cross-tenant protection for
       // the attacker-supplied contactId comes from the ownership guard in
-      // runAutomationsForTrigger.
+      // runAutomationsForTrigger. The tag side is stored in the automation
+      // step_config and is NOT covered by that guard, so validate it here
+      // before the service-role write.
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('add_tag needs contact + tag_id')
+      if (!(await tagBelongsToAccount(db, args.automation.account_id, cfg.tag_id))) {
+        throw new Error('add_tag: tag not in account')
+      }
       await db
         .from('contact_tags')
         .upsert(
@@ -534,10 +539,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     }
 
     case 'remove_tag': {
-      // See add_tag: tenant scoping relies on the runAutomationsForTrigger
-      // ownership guard, since contact_tags carries no account_id.
+      // See add_tag: the contact is guarded at dispatch, but the tag_id in
+      // step_config is not — validate it against the automation's account.
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('remove_tag needs contact + tag_id')
+      if (!(await tagBelongsToAccount(db, args.automation.account_id, cfg.tag_id))) {
+        throw new Error('remove_tag: tag not in account')
+      }
       await db
         .from('contact_tags')
         .delete()
@@ -586,6 +594,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         agentId = typeof nextAgent === 'string' ? nextAgent : undefined
       }
       if (!agentId) return 'no agent resolved'
+      // round_robin resolves the agent inside an account-scoped RPC, but a
+      // "specific" step stores an arbitrary user_id in step_config. The
+      // FK only requires a profiles row, not one from this account, so
+      // validate membership before persisting the assignment.
+      if (
+        cfg.mode !== 'round_robin' &&
+        !(await agentBelongsToAccount(db, args.automation.account_id, agentId))
+      ) {
+        throw new Error('assign_conversation: agent not in account')
+      }
       await db
         .from('conversations')
         .update({ assigned_agent_id: agentId })
@@ -649,6 +667,20 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'create_deal': {
       const cfg = step.step_config as CreateDealStepConfig
       if (!cfg.pipeline_id || !cfg.stage_id) throw new Error('create_deal needs pipeline + stage')
+
+      // Tenant integrity: the service-role client bypasses RLS, so a
+      // pipeline/stage pair stored in step_config could point at another
+      // account. Same guard as move_deal_stage, extended to require that
+      // the stage belongs to the requested pipeline.
+      if (!(await pipelineStageBelongsToAccount(
+        db,
+        args.automation.account_id,
+        cfg.pipeline_id,
+        cfg.stage_id,
+      ))) {
+        throw new Error('create_deal: pipeline/stage not in account')
+      }
+
       // Match the account's configured default currency rather than
       // the static `deals.currency` DB default — keeps automation-
       // created deals consistent with the one-currency-per-account
@@ -904,6 +936,57 @@ async function resolveDealConversationId(args: ExecuteArgs): Promise<string | nu
     .eq('contact_id', args.contactId)
     .maybeSingle()
   return (data?.id as string | undefined) ?? null
+}
+
+/**
+ * Account ownership checks for step_config references.
+ *
+ * Every step runs through `supabaseAdmin()`, which bypasses RLS. The
+ * dispatch entrypoint only validates `contactId`; ids embedded in the
+ * stored step configuration (tags, pipelines/stages, agents) still need
+ * an explicit account-scoped lookup before they are written or attached.
+ */
+async function tagBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  tagId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('tags')
+    .select('id')
+    .eq('id', tagId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  return !!data
+}
+
+async function pipelineStageBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  pipelineId: string,
+  stageId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('pipeline_stages')
+    .select('id, pipeline_id, pipelines!inner(account_id)')
+    .eq('id', stageId)
+    .eq('pipelines.account_id', accountId)
+    .maybeSingle()
+  return !!data && (data as { pipeline_id?: string }).pipeline_id === pipelineId
+}
+
+async function agentBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  userId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('profiles')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  return !!data
 }
 
 export function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {

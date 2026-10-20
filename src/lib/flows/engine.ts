@@ -441,7 +441,20 @@ async function executeHandoff(
     status: "pending",
     updated_at: new Date().toISOString(),
   };
-  if (cfg.assign_to) convUpdate.assigned_agent_id = cfg.assign_to;
+  if (cfg.assign_to) {
+    // The flow node config stores an arbitrary user_id. conversations.
+    // assigned_agent_id has an FK to profiles(user_id) but no account
+    // predicate (075), so a foreign agent id would be persisted as-is.
+    // Assign only when the profile belongs to the flow's account; the
+    // handoff itself still proceeds without an assignee.
+    if (await agentBelongsToAccount(db, run.account_id, cfg.assign_to)) {
+      convUpdate.assigned_agent_id = cfg.assign_to;
+    } else {
+      await logEvent(db, run.id, "error", node.node_key, {
+        reason: "handoff_agent_not_in_account",
+      });
+    }
+  }
   if (run.conversation_id) {
     await db
       .from("conversations")
@@ -453,6 +466,39 @@ async function executeHandoff(
     assigned_to: cfg.assign_to ?? null,
   });
   await endRun(db, run.id, "handed_off", "handoff_node");
+}
+
+/**
+ * Account ownership checks for ids stored in flow node config. The
+ * runner uses the service-role client, so RLS cannot validate these
+ * cross-table references for us.
+ */
+async function tagBelongsToAccount(
+  db: AdminClient,
+  accountId: string,
+  tagId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from("tags")
+    .select("id")
+    .eq("id", tagId)
+    .eq("account_id", accountId)
+    .maybeSingle();
+  return !!data;
+}
+
+async function agentBelongsToAccount(
+  db: AdminClient,
+  accountId: string,
+  userId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from("profiles")
+    .select("user_id")
+    .eq("user_id", userId)
+    .eq("account_id", accountId)
+    .maybeSingle();
+  return !!data;
 }
 
 /**
@@ -724,6 +770,12 @@ export async function advanceFromNodeKey(
     if (node.node_type === "set_tag") {
       const cfg = node.config as unknown as SetTagNodeConfig;
       try {
+        // contact_tags has no account_id and the runner writes with the
+        // service-role client, so the tag_id stored in node.config must be
+        // checked against the run's account before the cross-table write.
+        if (!(await tagBelongsToAccount(db, run.account_id, cfg.tag_id))) {
+          throw new Error("set_tag: tag not in account");
+        }
         if (cfg.mode === "add") {
           await db
             .from("contact_tags")

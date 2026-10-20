@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   state: {
     owned: null as { id: string } | null,
     ownedCustomField: null as { id: string } | null,
+    // Row returned by the pipeline_stages ownership lookup in create_deal.
+    ownedStage: null as { id: string; pipeline_id: string } | null,
     // Row returned by the conversations lookup in resolveDealConversationId
     // (account_id + contact_id + id all matched). null = "not found".
     conversationFound: null as { id: string } | null,
@@ -39,6 +41,10 @@ vi.mock("./admin-client", () => {
     if (table === "custom_fields") {
       // account-scoped ownership lookup for a custom field definition
       return { data: state.ownedCustomField, error: null };
+    }
+    if (table === "pipeline_stages") {
+      // account-scoped ownership lookup for create_deal
+      return { data: state.ownedStage, error: null };
     }
     if (table === "contact_custom_values") {
       if (type === "upsert") {
@@ -118,6 +124,7 @@ const ACCOUNT = "acct-1";
 beforeEach(() => {
   h.state.owned = null;
   h.state.ownedCustomField = null;
+  h.state.ownedStage = { id: "st1", pipeline_id: "p1" };
   h.state.conversationFound = null;
   h.state.automations = [];
   h.state.steps = [];
