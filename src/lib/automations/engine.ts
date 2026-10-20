@@ -891,14 +891,29 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
 /**
  * Pick the conversation a send-type step should use. Prefer the id the
- * webhook handed us (it's the one that just got the inbound message);
- * fall back to the contact's conversation for resumed/wait paths and
- * manual engine POSTs. Throws if none exists — send steps have
- * no meaningful target without a conversation.
+ * webhook handed us (it's the one that just got the inbound message), once
+ * verified against the account; fall back to the contact's conversation for
+ * resumed/wait paths and manual engine POSTs. Throws if none exists — send
+ * steps have no meaningful target without a conversation.
  */
 async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
-  if (fromCtx) return fromCtx
+  if (fromCtx) {
+    // `context` can be caller-supplied (the manual POST /api/automations/engine
+    // entrypoint passes `body.context` straight through) and the send writes a
+    // message row into this conversation with the service-role client. Only
+    // use the id when it belongs to this account (and to the triggering
+    // contact, when there is one); otherwise ignore it and fall back to the
+    // contact's own conversation, as when no id was given.
+    let owned = supabaseAdmin()
+      .from('conversations')
+      .select('id')
+      .eq('id', fromCtx)
+      .eq('account_id', args.automation.account_id)
+    if (args.contactId) owned = owned.eq('contact_id', args.contactId)
+    const { data: own } = await owned.maybeSingle()
+    if (own?.id) return own.id as string
+  }
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
   const { data, error } = await supabaseAdmin()
     .from('conversations')

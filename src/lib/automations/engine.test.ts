@@ -11,6 +11,11 @@ const h = vi.hoisted(() => ({
     // Row returned by the conversations lookup in resolveDealConversationId
     // (account_id + contact_id + id all matched). null = "not found".
     conversationFound: null as { id: string } | null,
+    // When set, replaces conversationFound: lets a test answer by the filters used.
+    conversationResolver: null as
+      | null
+      | ((filters: [string, string, unknown][]) => { id: string } | null),
+    conversationLookups: [] as [string, string, unknown][][],
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
     fromCalls: [] as string[],
@@ -54,7 +59,11 @@ vi.mock("./admin-client", () => {
       return { data: null, error: null };
     }
     if (table === "conversations") {
-      // resolveDealConversationId's ownership-scoped lookup.
+      // resolveDealConversationId's / resolveConversationId's lookups.
+      if (state.conversationResolver) {
+        state.conversationLookups.push(ops.filters);
+        return { data: state.conversationResolver(ops.filters), error: null };
+      }
       return { data: state.conversationFound, error: null };
     }
     if (table === "deals") {
@@ -113,11 +122,12 @@ vi.mock("./admin-client", () => {
 });
 
 vi.mock("./meta-send", () => ({
-  engineSendText: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
+  engineSendText: vi.fn(async (_args: unknown) => ({ whatsapp_message_id: "m1" })),
   engineSendTemplate: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
 }));
 
 import { runAutomationsForTrigger } from "./engine";
+import { engineSendText } from "./meta-send";
 
 const ACCOUNT = "acct-1";
 
@@ -126,6 +136,9 @@ beforeEach(() => {
   h.state.ownedCustomField = null;
   h.state.ownedStage = { id: "st1", pipeline_id: "p1" };
   h.state.conversationFound = null;
+  h.state.conversationResolver = null;
+  h.state.conversationLookups = [];
+  vi.mocked(engineSendText).mockClear();
   h.state.automations = [];
   h.state.steps = [];
   h.state.fromCalls = [];
@@ -246,6 +259,80 @@ describe("update_contact_field — custom fields", () => {
 
     expect(h.state.upsertCalls).toHaveLength(0);
     expect(h.state.updateCalls).toHaveLength(0);
+  });
+});
+
+describe("send_message — context.conversation_id is verified before it is used", () => {
+  const sendStep = () => ({
+    id: "s1",
+    automation_id: "a1",
+    parent_step_id: null,
+    branch: null,
+    position: 0,
+    step_type: "send_message",
+    step_config: { text: "oi" },
+  });
+  const trigger = (conversationId?: string) =>
+    runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: conversationId ? { conversation_id: conversationId } : {},
+    });
+  const has = (f: [string, string, unknown][], k: string, v: unknown) =>
+    f.some(([, key, val]) => key === k && val === v);
+  // The conversation table of this fake: one conversation, in this account, for contact c1.
+  const resolver = (f: [string, string, unknown][]) => {
+    const idFilter = f.find(([, k]) => k === "id")?.[2];
+    if (!has(f, "account_id", ACCOUNT) || !has(f, "contact_id", "c1")) return null;
+    if (idFilter !== undefined && idFilter !== "own-conv") return null;
+    return { id: "own-conv" };
+  };
+
+  it("uses a context id that belongs to the account and the contact", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [sendStep()];
+    h.state.conversationResolver = resolver;
+    await trigger("own-conv");
+    expect(vi.mocked(engineSendText)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(engineSendText).mock.calls[0][0]).toMatchObject({
+      accountId: ACCOUNT,
+      conversationId: "own-conv",
+    });
+  });
+
+  it("ignores a context id from another account and sends to the contact's own conversation", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [sendStep()];
+    h.state.conversationResolver = resolver;
+    await trigger("CONVERSATION-OF-ANOTHER-ACCOUNT");
+    expect(vi.mocked(engineSendText)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(engineSendText).mock.calls[0][0]).toMatchObject({ conversationId: "own-conv" });
+    // The caller-supplied id was looked up scoped by account and contact, then dropped.
+    const first = h.state.conversationLookups[0];
+    expect(has(first, "id", "CONVERSATION-OF-ANOTHER-ACCOUNT")).toBe(true);
+    expect(has(first, "account_id", ACCOUNT)).toBe(true);
+    expect(has(first, "contact_id", "c1")).toBe(true);
+  });
+
+  it("never sends into a foreign conversation when the contact has none of its own", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [sendStep()];
+    h.state.conversationResolver = () => null;
+    await trigger("CONVERSATION-OF-ANOTHER-ACCOUNT");
+    expect(vi.mocked(engineSendText)).not.toHaveBeenCalled();
+  });
+
+  it("without a context id it still resolves the contact's conversation", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [sendStep()];
+    h.state.conversationResolver = resolver;
+    await trigger();
+    expect(vi.mocked(engineSendText).mock.calls[0][0]).toMatchObject({ conversationId: "own-conv" });
   });
 });
 
