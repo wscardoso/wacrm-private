@@ -186,7 +186,7 @@ A lista de 15 itens da análise de lacunas não está versionada neste repositó
 
 ### L5 — `enqueue_webhook_dlq` (2026-10-18)
 
-Achado da auditoria do C6: a RPC `SECURITY DEFINER` da `031` era executável por `PUBLIC`/`anon`/`authenticated` e aceitava pares conta/config de contas diferentes. Corrigida pela migration `082_enqueue_webhook_dlq_hardening.sql` (arquivo, diagnóstico e testes PGlite ficam em a frente do PR #25 (branch `chore/l5-082-hardening`) e **não** estão neste commit), **aplicada manualmente pelo operador** no Supabase Cloud.
+Achado da auditoria do C6: a RPC `SECURITY DEFINER` da `031` era executável por `PUBLIC`/`anon`/`authenticated` e aceitava pares conta/config de contas diferentes. Corrigida pela migration `082_enqueue_webhook_dlq_hardening.sql` (arquivo, diagnóstico e testes PGlite mergeados em `main` pelo PR #25), **aplicada manualmente pelo operador** no Supabase Cloud.
 
 * **PASS técnico de hardening**, com base em consultas executadas pelo operador/Comandante no Cloud (não por Claude): `hardened=true`, `execute_grantees=["postgres","service_role"]`, `has_ownership_check=true`, `overloads_in_public=1`, RLS e política `whatsapp_webhook_dlq_select` preservadas, `dlq_rows_total=0`, `dlq_rows_account_config_mismatch=0`. Detalhe no roadmap v1.8 (bullet L5).
 * **Evidência local separada:** PostgreSQL 17.2 temporário + testes PGlite.

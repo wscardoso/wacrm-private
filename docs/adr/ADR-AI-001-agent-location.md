@@ -83,7 +83,7 @@ Esta decisão foi tomada por leitura de código nos dois repositórios, não por
 | Lacuna | Evidência |
 |---|---|
 | Superfície de IA/LLM | `[OBSERVADO]` zero ocorrências de `openrouter`, `openai`, `anthropic`, `langchain`, `ai-sdk`, `llm`, `agent_runs`, `agent_steps` em `src/`; `package.json:41-64` sem dependência de IA |
-| Persistência de execução de agente | `[OBSERVADO]` nenhuma tabela de run, passo, decisão ou outbox em `supabase/migrations/` (numeração até `084`; 80 arquivos no commit da release — a `082` fica em a frente do PR #25 (branch `chore/l5-082-hardening`)) |
+| Persistência de execução de agente | `[OBSERVADO]` nenhuma tabela de run, passo, decisão ou outbox em `supabase/migrations/` (numeração `001`–`084`; 81 arquivos, incluindo a `082`, que entrou em `main` pelo PR #25) |
 | **Substrato de execução durável** | `[OBSERVADO]` **não existe fila, worker, outbox ou dispatcher de turno.** O caminho Meta destaca `processWebhook(body)` como promessa em memória e responde `200` antes de qualquer persistência (`webhook/route.ts:247-252`); o caminho não-Meta aguarda todo o processamento dentro da requisição (`.../[provider]/.../route.ts:220`). Nenhum dos dois sobrevive à queda do processo. |
 | Garantia de recuperação após queda | `[OBSERVADO]` nenhuma. Não há retomada, replay ou claim persistido de turno. |
 | Contexto de agente | `[OBSERVADO]` nenhum módulo; os dados existem dispersos |

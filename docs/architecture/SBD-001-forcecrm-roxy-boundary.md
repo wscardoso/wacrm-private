@@ -11,7 +11,7 @@
 | **Baseline de código** | HEAD `2a6061e`; revisão 1.1 verificada contra ForceCRM `3301c77` e ROXY `845ebf7` (working tree) em 2026-10-20. Referências de linha a `ADR-AUT-001` seguem `3301c77` (a working tree acrescenta ali uma linha na linha 10 e desloca as demais em +1). Referências de linha a código do ForceCRM em `webhook/route.ts`, `[provider]/…/route.ts` e `inbound-processor.ts` seguem o código do commit da release de delivery binding e remoção da Z-API. |
 | **Convenção de caminho** | `docs/architecture/<CÓDIGO>-NNN-<slug>.md`, seguindo `DLB-001-delivery-layer-boundary.md`, `ODI-001-outbound-delivery-integrity.md`, `ARO-001-async-recovery-orchestration.md`. `SBD` = System Boundary Document. |
 
-> **Revisão 1.1 (2026-10-20).** O repositório da ROXY foi localizado em `C:\Users\weyne\Workspace\roxy agent` e lido diretamente. Foram corrigidos: §2.2 (escopo da busca), §4.4 (novo, evidência verificada), §7 (interface de entrada usada sem contrato), §7.4 (novo), D13 (premissa), BLOQ-1 (status) e as referências a migrations (`001`-`075` → `001`-`084`, no commit da release, sem a `082`, que fica no PR #25). Nenhuma decisão D1-D12 foi reaberta; D13 teve a premissa corrigida e a conclusão mantida. O texto original é preservado integralmente, com marcação onde necessário.
+> **Revisão 1.1 (2026-10-20).** O repositório da ROXY foi localizado em `C:\Users\weyne\Workspace\roxy agent` e lido diretamente. Foram corrigidos: §2.2 (escopo da busca), §4.4 (novo, evidência verificada), §7 (interface de entrada usada sem contrato), §7.4 (novo), D13 (premissa), BLOQ-1 (status) e as referências a migrations (`001`-`075` → `001`-`084`, incluindo a `082`, que entrou em `main` pelo PR #25). Nenhuma decisão D1-D12 foi reaberta; D13 teve a premissa corrigida e a conclusão mantida. O texto original é preservado integralmente, com marcação onde necessário.
 
 ---
 
@@ -245,7 +245,7 @@ Existe, portanto, uma intenção escrita de que o Supabase seja um hub compartil
 | **Estado conversacional de flow** | `flow_runs.current_node_key`, `flow_run_events` | **FORCECRM** | `[IMPLEMENTADO]` — `ADR-AUT-001 §2.2`; unicidade garantida por índice parcial `idx_one_active_run_per_contact` |
 | **Credenciais de provider** | `whatsapp_config` cifrado, versionamento de chave | **FORCECRM** | `[IMPLEMENTADO]` — `ADR-CRYPTO-001`, `ADR-E7-001` |
 | **Autorização / política** | RLS, escopos de chave de API | **FORCECRM** | `[IMPLEMENTADO]` — §8 |
-| **Memória cognitiva** | contexto de agente, histórico cognitivo, preferências inferidas, conhecimento recuperado, embeddings | **NÃO DECIDIDO** | `[QUESTÃO Q1]` — não existe em lugar nenhum hoje. `[OBSERVADO]`: zero tabelas de memória/embedding em `supabase/migrations/` (001-084 no commit da release, sem a `082`, que fica no PR #25); zero dependências de LLM em `package.json`. Depende de R3/R10. |
+| **Memória cognitiva** | contexto de agente, histórico cognitivo, preferências inferidas, conhecimento recuperado, embeddings | **NÃO DECIDIDO** | `[QUESTÃO Q1]` — não existe em lugar nenhum hoje. `[OBSERVADO]`: zero tabelas de memória/embedding em `supabase/migrations/` (001-084, incluindo a `082` do PR #25); zero dependências de LLM em `package.json`. Depende de R3/R10. |
 | **Política/persona do agente** | prompts, tom de voz, script | **NÃO DECIDIDO** | `[QUESTÃO Q2]` — precedente do ecossistema mantém isso **fora** do banco, em arquivo versionado (`ForgeSkill/heimdall/SOUL.md`). É precedente, não decisão. |
 | **Decisão do agente** | por que respondeu X, qual ação escolheu | **NÃO DECIDIDO** | `[QUESTÃO Q3]` — mas ver `[DECISÃO D5]` abaixo. |
 
@@ -491,7 +491,7 @@ Nenhuma destas é decidida aqui. Todas são pré-requisito dele.
 
 | # | Questão | Origem |
 |---|---|---|
-| **Q1** | Onde vive a memória cognitiva e quem é seu source of truth. Hoje não existe em lugar nenhum (zero tabelas em `001`-`084` no commit da release, sem a `082`, que fica no PR #25). **Decisão de 2026-10-20:** adiada; o agente opera primeiro com contexto transacional (`ADR-AI-001` Q1). | §6 |
+| **Q1** | Onde vive a memória cognitiva e quem é seu source of truth. Hoje não existe em lugar nenhum (zero tabelas em `001`-`084`, incluindo a `082` do PR #25). **Decisão de 2026-10-20:** adiada; o agente opera primeiro com contexto transacional (`ADR-AI-001` Q1). | §6 |
 | **Q2** | Onde vive a persona/política do agente. Precedente do ecossistema a mantém fora do banco. | §6 |
 | **Q3** | Se a decisão do agente (o raciocínio) é persistida, onde, e por quanto tempo. | §6 |
 | **Q4** | Se ações de estado operacional e de automação ganham escopo de API, e com que granularidade. | §9.1 |
@@ -570,7 +570,7 @@ Como `ADR-AUT-001` ainda não está commitado, este documento cita um artefato p
 - `docs/MASTER-ROADMAP.md:156` — AI *"sem evidência — pós-MVP"*
 - `docs/MASTER-ROADMAP.md:382` — AI entre os não-requisitos
 - `package.json` — zero dependências de LLM/agente (verificado nesta auditoria)
-- `supabase/migrations/` (001-084 no commit da release, sem a `082`, que fica no PR #25) — zero tabelas de memória cognitiva ou embedding
+- `supabase/migrations/` (001-084, incluindo a `082` do PR #25) — zero tabelas de memória cognitiva ou embedding
 
 **Origem da questão**
 - `docs/adr/ADR-AUT-001-...:10` — deferimento explícito da localização de IA a FORCECRM × ROXY

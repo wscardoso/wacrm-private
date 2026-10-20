@@ -38,7 +38,7 @@
 
 | Afirmação | Motivo |
 |---|---|
-| `tracking_links` como tabela existente | Não existe em nenhuma migration (001–084 no commit da release, sem a `082`, que fica no PR #25; à época, 001–075); só especificada como P2 não construída em `ADR-ATTR-001 §3.4` |
+| `tracking_links` como tabela existente | Não existe em nenhuma migration (001–084, incluindo a `082` do PR #25; à época, 001–075); só especificada como P2 não construída em `ADR-ATTR-001 §3.4` |
 | `account_members` como tabela existente | Não existe; tenancy real é `profiles` + `account_invitations` |
 | `whatsapp_templates` como tabela existente | Não existe; nome real é `message_templates` (`001_initial_schema.sql:211`) |
 | Webhook Meta com 1038 linhas | Contagem real à época: 1115 linhas. **Atualização (2026-10-20): 1239 linhas** (`src/app/api/whatsapp/webhook/route.ts`); o número é volátil e não deve ser citado como invariante |
