@@ -17,6 +17,7 @@ Branch `release/rc1-safefetch`. Base `3301c77` (main). **Nada foi publicado**: s
 | `c2cec1a` | F3 | guards de ownership nos engines de automations e flows |
 | `767757a` | F3 | proposta de RLS (documento) e teste PGlite que reproduz as lacunas |
 | `e3ba163` | F4 | testes de URL malformada/sem host/com credenciais no cabeçalho |
+| `78988b9` | Gate A | `send_message`/`send_template` só usam `context.conversation_id` se a conversa for da conta (e do contato); `update` de conversa no `meta-send` filtrado por `account_id` |
 
 F4A (`f4a/templates-sync-paging`) está **substituído** pelo H2: os 9 testes dele passam contra `assertSameGraphEndpoint`, que é mais estrito (exige o mesmo path). Worktree e arquivos preservados, nada integrado.
 
@@ -24,8 +25,8 @@ F4A (`f4a/templates-sync-paging`) está **substituído** pelo H2: os 9 testes de
 
 - `tsc --noEmit`: limpo.
 - ESLint nos arquivos alterados: 0 erros, 5 warnings.
-- `npx vitest run` (padrão): 19 arquivos falham, **todos** `Hook timed out in 10000ms` em `*.pglite.test.ts`; 1.841 passam, 293 pulados por causa dos hooks.
-- `npx vitest run --hookTimeout=180000 --testTimeout=180000 --maxWorkers=3`: **131 arquivos, 2.134/2.134**, nenhum pulado.
+- `npx vitest run` (padrão, medido antes da correção do Gate A): 19 arquivos falham, **todos** `Hook timed out in 10000ms` em `*.pglite.test.ts`; 1.841 passam, 293 pulados por causa dos hooks.
+- `npx vitest run --hookTimeout=180000 --testTimeout=180000 --maxWorkers=3` (após a correção do Gate A): **132 arquivos, 2.139/2.139**, nenhum pulado.
 - Sem migrations tocadas, sem `Cache-Control` alterado em código, sem segredos nas linhas adicionadas.
 
 ## 3. Segurança: o que está provado e o que não está
@@ -41,9 +42,13 @@ F4A (`f4a/templates-sync-paging`) está **substituído** pelo H2: os 9 testes de
 
 Os `fetch` restantes no servidor têm destino fixo (Graph, Z-API), ou ficam confinados (sync após `assertSameGraphEndpoint`; Storage re-assinado).
 
+### Revisão de isolamento (Gate A)
+
+Achado: `POST /api/automations/engine` repassava `body.context` ao engine e `send_message`/`send_template` usavam `context.conversation_id` sem verificar a conta, escrevendo uma linha de `messages` e um `update` em conversa de outra conta (exigia conhecer o UUID alheio). Presente na `main` `3301c77`; **corrigido neste RC** (`78988b9`). Os testes novos falham no código anterior (mutação confirmada).
+
 ## 4. Compatibilidade
 
-**Webhooks ativos: resultado NÃO disponível.** Exige `service_role` no banco remoto e nenhuma credencial foi fornecida a esta execução. A consulta está em `docs/release/rc1-webhook-compat.sql` (somente leitura, mascarada: só esquema/host/porta, nunca path, query, headers ou corpo; testada em PGlite local com dados sintéticos). Precisa de `SELECT` em `automations` e `automation_steps`. Ela não detecta host público que resolve para IP privado nem endpoints com redirect.
+**Webhooks ativos: consulta executada pelo responsável no projeto Supabase de produção, todas as contas, e retornou `Success. No rows returned`.** Ou seja, nenhuma automação ativa tem URL que as regras estáticas (http, porta ≠ 443, IP literal, localhost, host sem ponto, usuário/senha na URL, URL vazia) recusariam. A consulta (`docs/release/rc1-webhook-compat.sql`) é somente leitura e mascarada (só esquema/host/porta). Ela não detecta host público que resolve para IP privado nem endpoints que respondem com redirect: esses dois casos continuam sem prova e entram no smoke test 1.
 
 Regra de decisão sobre o resultado: 0 linhas = nada a fazer; linhas `not_https`/`port_not_443` = o dono troca a URL para https:443 (ou o endpoint passa a atender nela); `ip_literal`/`internal…`/`userinfo` = dependem de decisão do responsável, não flexibilizar a política.
 
@@ -55,7 +60,7 @@ Regra de decisão sobre o resultado: 0 linhas = nada a fazer; linhas `not_https`
 
 | Item | Categoria | Encerramento |
 |---|---|---|
-| Rodar a consulta de webhooks e decidir sobre as linhas | C (bloqueia o deploy até haver resultado) | saída mascarada revisada |
+| Consulta de webhooks | encerrada: 0 linhas | n/a |
 | RLS do banco não cobre as associações entre contas (contact_tags, deals, conversations, automation_steps): só os caminhos `service_role` têm guard | C (exige uma migration autorizada; ver `docs/security/F3-OWNERSHIP-ISOLATION-PROPOSAL.md`) | decisão sobre a migration 083, fora deste release |
 | Limite de 1 MiB no webhook | D | n/a |
 | TLS/DNS reais e F3 contra PostgREST real | C | smoke tests abaixo |
