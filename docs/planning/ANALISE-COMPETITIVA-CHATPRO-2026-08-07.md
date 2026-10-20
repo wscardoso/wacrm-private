@@ -109,6 +109,9 @@ Antes de qualquer chamada a um LLM externo, a pergunta que o repo já sabe fazer
 
 Recomendação de sequência, não de feature isolada:
 1. Um novo ADR (`ADR-AI-001`) definindo fronteira de dados enviados a LLM externo, retenção, e billing por tenant — antes de qualquer UI.
+
+> **Nota editorial (2026-10-20).** O identificador deste item é anterior à convenção fixada em `ADR-AI-001` §14. A fronteira ampla de dados, retenção, autoridade, tenant e billing é hoje `ADR-AI-002` (**reservado, não criado**); `ADR-AI-001` designa apenas a localização do agente nativo. A sequência recomendada permanece válida; o que muda é o identificador do ADR amplo.
+
 2. MVP de Copiloto (sugestão de resposta, não automação) — menor superfície de risco, maior valor percebido imediato, e testa a fronteira de dados em produção com humano no loop antes de soltar IA autônoma.
 3. Só depois, avaliar se o Chatbot com IA treinável entra como uma terceira opção dentro do Flows existente ou como motor novo — decisão que depende de #5.3.
 
@@ -142,6 +145,8 @@ Motivos de finalização (#4), jornada de trabalho (#11), analytics de atendimen
 
 **Longo prazo / visionário (cada um é um épico com ADR próprio)**
 9. `ADR-AI-001` + Copiloto de IA MVP (§5.2).
+
+> **Nota editorial (2026-10-20).** Ler o ADR deste item como `ADR-AI-002` (fronteira ampla de dados, ações, autoridade, tenant e billing, **reservado e não criado**) para a parte de dados/billing; `ADR-AI-001` cobre apenas a localização do agente nativo. Nenhum dos dois autoriza implementação — o gate de `ADR-AI-001` §12 permanece fechado.
 10. Resolução da dívida Automations vs. Flows + extensão para provider abstraction (§5.3) — pré-requisito para Chatbot IA treinável.
 11. Chatbot IA treinável com handoff humano↔IA — só após #9 e #10.
 

@@ -13,7 +13,7 @@
 - **`lead_attributions.source_channel` é um CHECK fechado de 4 valores, hoje só `ctwa_meta` é gravado.** Confirmado por mim: migração 033, linhas 45-47 têm `CHECK (source_channel IN ('ctwa_meta','tracked_link','organic','unknown'))`. Fonte B (link rastreável — `tracking_links`/`tracking_clicks`) está inteiramente especificada em `ADR-ATTR-001 §3.4` (fase P2, Aceito) mas nunca migrada — zero tabelas no schema real.
 - **Não deve existir um barramento único de eventos.** As duas reconciliações independentes chegaram à mesma conclusão por caminhos diferentes: o padrão real do repo (RPC `SECURITY DEFINER` core + fachadas + ledger com claim-as-lock + cron) já se repete 5× (035, 048/050, 051/052, 056, 057) e deve ser reaplicado por feature nova (webhook de saída, etc.), não centralizado numa instância compartilhada. **Isso muda o diagrama que discutimos antes** — a caixa única "EVENT MODEL" no seu diagrama deveria ser lida como "um padrão repetido", não como uma tabela/bus física compartilhada. Ver §4.
 - **DLQ (`whatsapp_webhook_dlq`, 031) está morta por decisão em aberto, não por esquecimento.** Confirmado por mim: `status-handler.ts:67-71` documenta explicitamente que o destino é uma decisão pendente de E2.1. Não deve ser reaproveitada como base de um webhook de saída sem reabrir essa decisão — o padrão (fila+retry) pode ser copiado, o código não.
-- **IA é folha em branco — zero infraestrutura, zero ADR.** Confirmado por grep negativo nas duas rodadas e por mim. `ADR-AI-001` é pré-requisito de qualquer código de IA, e deve vir depois de um `ADR-AUT-001` que decida como IA entra num motor existente (nó dentro de Flows, nunca motor #3).
+- **IA é folha em branco — zero infraestrutura, zero ADR.** Confirmado por grep negativo nas duas rodadas e por mim. `ADR-AI-001` é pré-requisito de qualquer código de IA, e deve vir depois de um `ADR-AUT-001` que decida como IA entra num motor existente (nó dentro de Flows, nunca motor #3). **Nota editorial (2026-10-20):** "zero ADR" valia para a fronteira ampla. `ADR-AI-001` passou a designar apenas a localização do agente nativo; a fronteira de dados/ação/autoridade/tenant/billing permanece reservada a `ADR-AI-002`, **não criado**.
 - **Multi-canal (Facebook/Instagram) permanece fora do North Star** — nenhuma das três análises recomenda perseguir.
 
 ---
@@ -87,7 +87,7 @@ O diagrama que você desenhou (ATTRIBUTION / CONVERSATION / AUTOMATION → EVENT
 8. `ADR-AUT-001` — não "qual motor vence", mas: extrair `engineSendBase` compartilhado, decidir onde IA entra como nó, dar destino às superfícies mortas (`http_fetch`, `manual`, `time_based`, `conversation_assigned`, `tag_added`).
 
 **Visionário, depende do passo 8:**
-9. `ADR-AI-001` (fronteiras data/ação/autoridade/tenant/billing) — **e agora precisa reconciliar com a Roxy-agent**, que já está em desenvolvimento paralelo, antes de ser escrito no vácuo.
+9. `ADR-AI-001` (fronteiras data/ação/autoridade/tenant/billing) — **e agora precisa reconciliar com a Roxy-agent**, que já está em desenvolvimento paralelo, antes de ser escrito no vácuo. **Nota editorial (2026-10-20):** este identificador corresponde hoje a `ADR-AI-002` (fronteira ampla, **reservado e não criado**); `ADR-AI-001` designa apenas a localização do agente nativo. A exigência de reconciliar com a ROXY continua válida para a fronteira ampla.
 10. Copiloto MVP (sugestão, humano no loop) → só depois, chatbot IA como nó dentro de Flows.
 
 **Fora do roadmap, sem mudança:**

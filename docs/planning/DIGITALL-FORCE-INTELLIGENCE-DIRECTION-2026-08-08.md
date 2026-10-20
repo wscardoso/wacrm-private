@@ -88,7 +88,7 @@ FORCECRM e Roxy são produtos/sistemas desenvolvidos em paralelo, capazes de ope
 
 - Onde a Roxy "mora" na casa inteira do ecossistema.
 - Se "Digitall Force Intelligence" é só marca comercial (arquitetura permanece FORCECRM + Roxy desacoplados) ou se implica unificação técnica real — Weyner sinalizou a primeira leitura, mas não fechou.
-- ADR-AI-001 formal (data/action/authority/tenant/billing boundaries) — não abandonado, só não transformado em contrato arquitetural até a maturidade dos dois produtos permitir.
+- ADR-AI-001 formal (data/action/authority/tenant/billing boundaries) — não abandonado, só não transformado em contrato arquitetural até a maturidade dos dois produtos permitir. **Nota editorial (2026-10-20):** pela convenção de identidade fixada em `ADR-AI-001` §14, esse identificador designa hoje apenas a localização do agente nativo; a fronteira ampla descrita neste item permanece reservada a `ADR-AI-002`, **não criado**. A decisão de adiamento continua vigente para a fronteira ampla.
 - Escopo de "saúde eletiva" como categoria (odonto + estética + médico + nutricionista) vs. foco estreito em odontologia — mesmo formato de funil confirmado, mas parâmetros diferem (ticket, regras de publicidade CFO/CFM/CFN, linguagem); decisão de ambição de marca ainda em aberto.
 
 ## 9. Quais decisões precisam esperar a maturidade dos dois produtos
@@ -97,7 +97,7 @@ Decidimos o acoplamento FORCECRM×Roxy quando, simultaneamente:
 
 1. FORCECRM tiver atribuição lead→receita fechada (FK `lead_attributions → deals` implementada e em uso real, não só schema).
 2. RISCO-3 estiver corrigido (Roxy como Agent Bot formal, não impostora de webhook).
-3. Roxy tiver identidade/tenant real (hoje é single-tenant; `organization_id` é spec, não implementação).
+3. Roxy tiver identidade/tenant real (hoje é single-tenant; `organization_id` é spec, não implementação). **Nota editorial (2026-10-20):** `ROXY_ORGANIZATION_ID` existe como variável de ambiente **por processo** (`config.ts:20-24,33`), não como tenant por requisição. A conclusão — single-tenant, sem tabela de contas — permanece; "spec, não implementação" deve ser lido como "não há tenancy por requisição".
 4. Automações nativas do FORCECRM (Lead Qualifier e afins) estiverem de fato em uso em produção, não só disponíveis.
 
 Sem essas quatro condições, qualquer decisão de acoplamento é prematura por falta de dado real para decidir sobre — não por falta de vontade.

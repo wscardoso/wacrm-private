@@ -5,6 +5,8 @@
 **Fonte secundária de achados (não autoridade):** `docs/architecture/FORCECRM-ROXY-BOUNDARY.md`.
 **Deriva de:** `docs/adr/ADR-AUT-001-automations-flows-reconciliation.md` D7 (deferiu a localização de IA a esta reconciliação) · auditoria comparativa read-only desta sessão (sem artefato próprio — resultado registrado no chat, não em arquivo).
 
+> **Atualização de 2026-10-20 — checkpoint parcialmente superado.** O repositório da ROXY foi localizado fora deste workspace (`C:\Users\weyne\Workspace\roxy agent`, `main` @ `845ebf7`, working tree com modificações locais) e lido diretamente. Isso levantou **parte** do gate: `R1`, `R3`, `R5`, `R6`, `R7`, `R8` e `R10` têm resposta com evidência de código; `R2`, `R4` e `R9` continuam `[NÃO VERIFICADO]`. O `ADR-AI-001` foi emitido em 2026-10-20, com status **Proposto** (aprovação arquitetural não registrada) e escopo **estreito** — localização do agente nativo de WhatsApp (`docs/adr/ADR-AI-001-agent-location.md`). A fronteira ampla de dados, ações, autoridade, tenant e billing permanece **bloqueada** e reservada a `ADR-AI-002`, **não criado**. As afirmações abaixo sobre ausência **neste repositório** continuam verdadeiras; as que concluíam ausência **no ecossistema** ou ausência de **qualquer** interface estão corrigidas em nota. Nenhum bloqueio de implementação foi levantado.
+
 ---
 
 ## 1. Estado atual
@@ -16,17 +18,17 @@
 ## 2. O que está confirmado
 
 - FORCECRM é o sistema transacional completo — contatos, conversas, mensagens, deals, contas, orquestração (Automations/Flows), credenciais de provider, attribution.
-- ROXY **não existe neste repositório** — zero código, schema, teste, rota ou documento arquitetural.
+- ROXY **não existe neste repositório** — zero código, schema, teste, rota ou documento arquitetural. **Nota (2026-10-20):** isso vale para *este* repositório. A ROXY existe em repositório próprio e tem documentação arquitetural; o que não existe é código ou documento dela aqui.
 - **Zero infraestrutura de IA/LLM** no FORCECRM — nenhuma dependência, nenhuma tabela de memória/embedding.
-- **Nenhuma interface FORCECRM ↔ ROXY existe hoje** — nem webhook, nem API de dados, nem fila, nem MCP, nem tool call.
+- **Nenhuma interface FORCECRM ↔ ROXY desenhada existe hoje** — nem webhook, nem API de dados, nem fila, nem MCP, nem tool call. **Correção (2026-10-20):** não há interface *desenhada*, mas há **uso observado e não contratado**: a ROXY consome o webhook de provider do FORCECRM (Z-API) como entrada e responde direto pelo provider, sem contrato, sem autorização por conta e sem auditoria no FORCECRM (`SBD-001` §7.4). Isso não é uma interface arquitetural; é o acoplamento que D6–D8 existem para evitar.
 - A única superfície externa utilizável hoje é `GET /api/v1/me` (identidade da conta + escopos da chave, nada de negócio).
 - Automations e Flows permanecem os dois motores do FORCECRM; IA não é motor #3 (`ADR-AUT-001` D1/D7, não reaberto).
 - A precedência de entrada Flows→Automations (`ADR-AUT-001` D4) não é reaberta.
 
 ### Deltas válidos de `FORCECRM-ROXY-BOUNDARY.md`, registrados (não incorporados ao baseline nesta etapa)
 
-1. Q10 — LLM próprio/self-hosted vs. provider externo (privacidade, custo, latência, compliance).
-2. Q12 — destino das cinco superfícies hoje mortas (`http_fetch`, `manual`, `conversation_assigned`, `tag_added`, `time_based`) quando/se IA entrar.
+1. `BOUNDARY` Q10 — LLM próprio/self-hosted vs. provider externo (privacidade, custo, latência, compliance). (Numeração de `FORCECRM-ROXY-BOUNDARY` §13; não confundir com `ADR-AI-001 Q10`, que é o substrato de execução durável.)
+2. `BOUNDARY` Q12 — destino das cinco superfícies hoje mortas (`http_fetch`, `manual`, `conversation_assigned`, `tag_added`, `time_based`) quando/se IA entrar.
 3. Enquadramento mais concreto do modelo de deploy (same-process / sidecar / serviço separado / edge function).
 4. `hermes-parser@0.25.1` como dependência dev-transitiva (`package-lock.json:6320,7164`) — ausente do baseline original.
 5. Três âncoras adicionais verificadas em `ADR-AUT-001` (`:113`, `:128`, `:167`), corretas.
@@ -36,15 +38,15 @@
 
 | Afirmação | Motivo |
 |---|---|
-| `tracking_links` como tabela existente | Não existe em nenhuma migration (001–075); só especificada como P2 não construída em `ADR-ATTR-001 §3.4` |
+| `tracking_links` como tabela existente | Não existe em nenhuma migration (001–084 no commit da release, sem a `082`, que fica no PR #25; à época, 001–075); só especificada como P2 não construída em `ADR-ATTR-001 §3.4` |
 | `account_members` como tabela existente | Não existe; tenancy real é `profiles` + `account_invitations` |
 | `whatsapp_templates` como tabela existente | Não existe; nome real é `message_templates` (`001_initial_schema.sql:211`) |
-| Webhook Meta com 1038 linhas | Contagem real: 1115 linhas (`wc -l src/app/api/whatsapp/webhook/route.ts`) |
+| Webhook Meta com 1038 linhas | Contagem real à época: 1115 linhas. **Atualização (2026-10-20): 1239 linhas** (`src/app/api/whatsapp/webhook/route.ts`); o número é volátil e não deve ser citado como invariante |
 | **ROXY = "camada cognitiva / agent runtime"** | Não sustentada pela evidência disponível. `ADR-AUT-001:128` (citado como evidência) diz que a localização de IA permanece **em aberto** — não atribui a ROXY um papel específico |
 
 ## 3. O que está desconhecido
 
-Nada sobre a arquitetura de ROXY é conhecido a partir deste repositório. `R1`–`R10` (questionário de `SBD-001` §4.3) permanecem sem resposta:
+`[OBSERVADO]` Em 2026-08-08, nada sobre a arquitetura da ROXY era conhecido a partir deste repositório. **Status em 2026-10-20:** a leitura direta do repositório da ROXY respondeu `R1`, `R3`, `R5`, `R6`, `R7`, `R8` e `R10` com evidência de código (`SBD-001` §4.4). `R2` (deploy), `R4` (credenciais no host) e `R9` (relação com Heimdall) permanecem `[NÃO VERIFICADO]`. O quadro abaixo é preservado como o questionário original; não é afirmação de que todas as respostas continuam abertas.
 
 | # | Pergunta |
 |---|---|
@@ -75,9 +77,11 @@ Nada sobre a arquitetura de ROXY é conhecido a partir deste repositório. `R1`�
 
 Isso define exclusivamente o que o FORCECRM concede e recusa — é a metade da fronteira que o FORCECRM tem autoridade para decidir sozinho (`SBD-001 BLOQ-1`). **A forma como ROXY consumirá essa fronteira permanece desconhecida até R4/R7 serem respondidas pela contraparte.** Este checkpoint não transforma essa distinção em nova arquitetura, não altera `SBD-001`, e não emite, revoga ou altera credencial alguma.
 
-## 6. Condição de saída — `ADR-AI-001` permanece BLOCKED
+## 6. Condição de saída — estado original (2026-08-08) e status em 2026-10-20
 
-Motivos, todos vigentes simultaneamente:
+> **Status em 2026-10-20.** Os motivos abaixo descreviam o gate da **fronteira ampla** e continuam válidos para ela. Para a pergunta **estreita** de localização do agente, o `ADR-AI-001` foi emitido com sete de `R1`–`R10` respondidas. O gate de **implementação** continua fechado (`ADR-AI-001` §12), e a fronteira ampla continua reservada a `ADR-AI-002`, não criado.
+
+Motivos, todos vigentes simultaneamente em 2026-08-08:
 
 - R1–R10 não respondidas.
 - Natureza de ROXY desconhecida (produto vs. camada).
@@ -90,10 +94,10 @@ Motivos, todos vigentes simultaneamente:
 - Modelo de billing de IA por tenant desconhecido (`SBD-001 Q8`).
 - Nenhuma interface de integração utilizável existe hoje além de `GET /api/v1/me`.
 
-**Nenhuma dessas questões é resolvida por inferência.** `ADR-AI-001` não pode ser escrito com rigor equivalente ao resto deste repositório (que exige ADR congelado antes de código — `ADR-MSG-001`, E0) enquanto a metade ROXY da fronteira permanecer vazia.
+**Nenhuma dessas questões é resolvida por inferência.** `ADR-AI-001` não pode ser escrito com rigor equivalente ao resto deste repositório (que exige ADR congelado antes de código — `ADR-MSG-001`, E0) enquanto a metade ROXY da fronteira permanecer vazia. **Nota (2026-10-20):** o ADR estreito foi escrito justamente porque a metade ROXY deixou de estar vazia para sete de `R1`–`R10`; `R2`, `R4` e `R9` continuam sem verificação e impedem afirmar maturidade de runtime. Para a fronteira ampla, a frase permanece válida.
 
 **Nenhuma implementação de IA, agent runtime, copilot, MCP, event bus ou motor de orquestração novo está autorizada antes do desbloqueio deste gate.**
 
 ## 7. Condição objetiva de desbloqueio
 
-Fornecer, para cada uma de R1–R10, uma resposta rastreável (documento de arquitetura de ROXY, ou declaração explícita de quem detém essa decisão) — não é necessário resolver todas de uma vez, mas `R4` e `R9` são as duas que a `SBD-001 §8.4` identifica como bloqueantes de qualquer emissão de credencial. A partir daí, `ADR-AI-001` pode ser iniciado usando `SBD-001` como base e os seis deltas de `FORCECRM-ROXY-BOUNDARY.md` (§2 acima) como material complementar já verificado.
+Fornecer, para cada uma de R1–R10, uma resposta rastreável (documento de arquitetura de ROXY, ou declaração explícita de quem detém essa decisão) — não é necessário resolver todas de uma vez, mas `R4` e `R9` são as duas que a `SBD-001 §8.4` identifica como bloqueantes de qualquer emissão de credencial. A partir daí, `ADR-AI-001` pode ser iniciado usando `SBD-001` como base e os seis deltas de `FORCECRM-ROXY-BOUNDARY.md` (§2 acima) como material complementar já verificado. **Status (2026-10-20):** o ADR estreito foi emitido; `R4` e `R9` continuam sem resposta e seguem bloqueando credencial e integração real. A condição de desbloqueio da fronteira ampla (`ADR-AI-002`) é a mesma, acrescida de decisão de produto sobre dados, ações, autoridade, tenant e billing.

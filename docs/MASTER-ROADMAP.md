@@ -1,6 +1,6 @@
 # WACRM/FORCECRM — MASTER ROADMAP
 
-**Versão:** v1.7 · **Snapshot auditado:** HEAD `26e5d39` (fechamentos documentais de 2026-07-29/30 aplicados sobre este snapshot; nenhuma alteração de código considerada — v1.6 registra hardening operacional e v1.7 o slice de funil/cadência, ver histórico, sem reauditar épicos)
+**Versão:** v1.8 · **Código observado na reconciliação v1.8:** HEAD `3301c77` · **Snapshot auditado:** HEAD `26e5d39` (fechamentos documentais de 2026-07-29/30 aplicados sobre este snapshot; nenhuma alteração de código considerada — v1.6 registra hardening operacional e v1.7 o slice de funil/cadência, ver histórico, sem reauditar épicos)
 **Fonte de verdade do escopo restante.** Documentos normativos derivados: `docs/adr/ADR-MSG-001.md`, `docs/architecture/EIS-001-external-identity-storage.md`, `docs/architecture/DN-001-eis001-implementation-preconditions.md`, `docs/architecture/DLB-001-delivery-layer-boundary.md`, `docs/architecture/ODI-001-outbound-delivery-integrity.md`, `docs/architecture/ARO-001-async-recovery-orchestration.md`, `docs/adr/ADR-E4B-001-retry-lifecycle-semantics.md`, `docs/adr/ADR-E4B-002-ambiguous-delivery-recovery.md`, `docs/adr/ADR-E4B-003-provider-capability-contract.md`, `docs/adr/ADR-CRYPTO-001.md`, `docs/adr/ADR-E7-001-encryption-key-versioning.md`, `docs/implementation/IMP-CRYPTO-001.md`, `docs/implementation/IMP-E7-001-encryption-key-versioning.md`, `docs/architecture/E5-workspace-commercial-identity.md`, `docs/architecture/E6.0-attribution-enrichment-marketing-api.md`, `docs/adr/ADR-ATTR-001-lead-attribution.md`, `docs/adr/ADR-ATTR-002-per-tenant-ad-account-credentials.md`. Reconciliação completa em `docs/checkpoints/CHECKPOINT-ROADMAP-RECONCILIATION.md`.
 
 **Legenda de confiança:** `[C]` confirmado no código · `[I]` inferido · `[P]` planejado em doc · `[R]` recomendação · `[?]` desconhecido.
@@ -22,8 +22,21 @@
   - **Pausa da cadência (#3):** coluna `automations.cancel_on_reply` (default `true`) + `cancelPendingCadencesForContact()`, chamada (aguardada, antes do dispatch de gatilhos) nos dois caminhos de inbound (`webhook/route.ts` e `inbound-processor.ts`). `automation_pending_executions.status` ganha `'cancelled'`.
   - **Distribuição de leads (#4, parcial):** `assign_conversation` em modo `round_robin` agora rotaciona de fato (tabela `account_lead_routing`, migration 080) — **corrige a dívida "round_robin é fake"** registrada em §2.3 (o filtro usava `profiles.role`, coluna legada; passou a usar `profiles.account_role`).
   - **Detalhes do funil:** moeda default do negócio `USD → BRL`; `deals.loss_reason` e `deals.custom_fields` (JSONB) + captura de motivo da perda na UI.
-  - **Conexões:** fluxo de pareamento uazapi por QR Code (`/api/whatsapp/uazapi/qr`, `/api/whatsapp/uazapi/status`, `connectAndGetQrCode`/`getInstanceStatus`). **Z-API formalmente depreciado para novas conexões** — some do seletor de provider (gate já existente `NEXT_PUBLIC_WHATSAPP_ENABLE_ZAPI`/`config.provider`), mantido apenas para contas legadas, com banner de migração.
+  - **Conexões:** fluxo de pareamento uazapi por QR Code (`/api/whatsapp/uazapi/qr`, `/api/whatsapp/uazapi/status`, `connectAndGetQrCode`/`getInstanceStatus`). **Z-API formalmente depreciado para novas conexões** — some do seletor de provider (gate já existente `NEXT_PUBLIC_WHATSAPP_ENABLE_ZAPI`/`config.provider`), mantido apenas para contas legadas, com banner de migração. **Atualização (2026-10-20): Z-API removido** (código, rotas, scripts e flags); contas legadas só podem migrar ou excluir a configuração — ver `docs/architecture/whatsapp-provider-architecture.md` §Remoção da Z-API.
   - **Gaps registrados, não fechados neste slice:** gatilhos de funil ainda sem UI de configuração (todo gatilho é "qualquer negócio", sem seletor de pipeline/etapa — parcialmente cobre #10); `deal_stage_changed` só dispara a partir do board (fechar ganho/perda pelos botões de status não notifica); `conversation_assigned` segue sem dispatcher em runtime (E10); E2.1 (status não-Meta) e D-C permanecem abertos.
+- **v1.8** (2026-10-17) — **reconciliação documental contra o código (somente leitura); não reescreve épicos, não reabre decisões e não marca o roadmap como implementado.** Código observado: HEAD `3301c77` (`main` = `origin/main`); o snapshot auditado dos épicos continua sendo `26e5d39`. Corrige afirmações que o próprio repositório contradiz. Cada item distingue implementação, teste local, migration, deploy e validação em produção; o que não foi confirmado está marcado **NOT VERIFIED**. Executada sob o Plan 002 (`plans/002-reconcile-roadmap-head.md`), reescrito nesta data porque a versão original partia de v1.5/`2e66c12`. As alterações ficam na árvore de trabalho, **sem commit**.
+  - **E1 (import de `meta-api`):** a afirmação absoluta «zero import direto de `meta-api` fora de `providers/`/`delivery/`» era falsa. `send/route.ts`, `broadcast/route.ts`, `flows/meta-send.ts` e `automations/meta-send.ts` não importam `meta-api` (grep). Importam diretamente, fora de `providers/` e `delivery/`: `api/whatsapp/config/route.ts`, `config/verify-registration/route.ts`, `media/[mediaId]/route.ts`, `templates/submit/route.ts`, `templates/[id]/route.ts`, `webhook/route.ts` (rota Meta), `lib/whatsapp/template-header-handle.ts` e `lib/flows/validate.ts` (só a constante `INTERACTIVE_LIMITS`). Limitação do teste `no-direct-meta-import.arch.test.ts`: tolera os módulos de `KNOWN_VIOLATORS` e só falha para violadores *desconhecidos*; só detecta o alias `@/lib/whatsapp/meta-api` escrito com aspas simples; `flows/validate.ts` usa o alias com aspas duplas e não seria detectado mesmo se não estivesse listado. Segundo o comentário do teste (parafraseado), rotas não-mensageria e arquivos de teste podem permanecer, pois a regra D6 visa os pontos de chamada de mensageria.
+  - **E2.1:** Fase 1 **implementada e conectada**: a rota de webhook não-Meta (`webhook/[provider]/[connectionId]/[webhookSecret]/route.ts`) chama `parseStatusEvent` e `handleCanonicalStatusEvent` (`status-handler.ts`); parsers em `providers/{meta,zapi,uazapi}.ts`; migration `063`; commits `319694f`, `c0af1f9`, `5a02996`, `4955da9`. **Não há checkpoint de fechamento do épico** (`CHECKPOINT-E2.1-RC1-CLOSED.md` fecha só o ciclo de correção RC1, e declara «sem ativação operacional»). **R1** (payloads reais), **R2** (formalização da evidência) e **D-C** seguem abertos e separados (§17). Funcionamento em produção com callbacks reais de Z-API/uazapi: **NOT VERIFIED**.
+  - **E4b / C6 / R10:** o caminho de **saída** está implementado: ledger (`049`), enqueue (`051`/`052`), drain (`delivery/cron`) e `orphan-sweep`, agendados via Coolify conforme a v1.6 (informação histórica, relato do operador, não verificada independentemente). A DLQ **inbound** (`whatsapp_webhook_dlq`, migration `031`) tem tabela e a RPC `enqueue_webhook_dlq`, mas **nenhum chamador em `src/`** (só comentários) e **nenhuma rota/função de sweep ou drain da DLQ inbound foi encontrada** — **C6 permanece aberto** e a marcação «DLQ ligada (E4b)» do §13 valia só para a saída. `docs/QUICK_REFERENCE.md` §3 ainda espera `pending_dlq` entre 0 e 5 (verdadeiro trivialmente); não foi alterado aqui. Chamada em produção da DLQ inbound: **não encontrada**; comportamento em produção **NOT VERIFIED**.
+  - **E7:** o mecanismo implementado é **KID no envelope + Key Ring** (`KeyRing.resolve(kid)` e `getWriteKey()` em `src/lib/crypto/keyring.ts`; `resolveKey` é a nomenclatura do `ADR-E7-001`, não o nome do método atual; `ADR-E7-001`), e não uma coluna ou campo `key_version`: `key_version` não aparece em `src/` nem em `supabase/`. Nomenclatura corrigida nas linhas vivas do roadmap (§6, §7). Menções históricas em `ADR-ATTR-002` e `AUD-001-consolidado.md` foram preservadas.
+  - **E8:** C21 **fechado** — migration `075_conversations_assigned_agent_fk.sql` (`2e66c12`), teste `src/test/c21-assigned-agent-fk.pglite.test.ts`. **C16 e C19 não foram investigados nesta rodada**: permanecem abertos conforme o roadmap anterior (**NOT VERIFIED**). C20 foi **parcialmente endereçado** pela `063` (CHECK de `messages.status` agora admite `pending` e `received`; `replied`, citado na AUD-001, não consta) — se ainda é requerido: **NOT VERIFIED**.
+  - **E9:** **parcial.** Há UI de operadores (`team-tab.tsx`, `invite-operator-dialog.tsx`, `platform-ops/operators.ts`; profundidade dessas implementações não reauditada). **Visualizador de `platform_audit_log` e suspensão de workspace não existem no código** (nenhuma tela ou ação encontrada; `E9 — CONCLUÍDO` era impreciso). Profundidade de grant/revoke/assign: não reauditada.
+  - **E10:** `ADR-AUT-001` está **Aceito** (documental, `2e66c12`); a **convergência não foi iniciada**. O gatilho `conversation_assigned` **tem dispatcher** desde `721c512` (`POST /api/conversations/events`, acionado pelo inbox após atribuição **manual**; a ação `assign_conversation` não encadeia). Os trechos da v1.7 e do §2.3 que diziam «sem dispatcher» descrevem o estado anterior (a nota da v1.7 é histórica e foi mantida). O `round_robin` rotaciona de fato desde a `080` e de forma atômica na `081`.
+  - **E11:** há **scaffold** — `GET /api/v1/me`, `requireApiKey(request, scope?)` (`src/lib/auth/api-context.ts`, com `hasScope`), `src/lib/api-keys/scopes.ts`, envelope `src/lib/api/v1/respond.ts`. `/me` não exige escopo, não existe endpoint de recurso e nenhuma rota consome escopo: a API pública **não** está concluída.
+  - **Estado operacional das migrations (origem da evidência):** **076** — relato do operador (aplicada depois; `plans/README.md` ainda dizia «não rodada»). **080 e 081** — relato do operador, que cita consultas SQL confirmando aspectos relevantes, inclusive a RPC `assign_next_lead_agent` e seus grants; as consultas não estão no repositório e não foram reexecutadas. **Nenhuma foi verificada de forma independente** contra o PostgreSQL de produção. Não é afirmado que estejam ausentes. Os arquivos SQL e o histórico de aplicação não foram alterados.
+  - **Testes locais (2026-10-17, sem acesso a produção):** `engine.funnel.test.ts`, `lead-round-robin-atomic.pglite.test.ts` e `src/lib/deals` — 52/52 passam. O PGlite não exerce concorrência real: a atomicidade do round-robin sob concorrência em PostgreSQL é **NOT TESTED**. O deploy Coolify `Success` do commit `3301c77` é relato do operador; os smoke tests de produção **não foram executados**.
+  - **L5 — `enqueue_webhook_dlq` executável por clientes (achado da auditoria do C6): PASS técnico de hardening no Supabase Cloud em 2026-10-18.** A função (`SECURITY DEFINER`, migration `031`) nunca teve o `EXECUTE` padrão revogado: `PUBLIC`, `anon` e `authenticated` podiam executá-la e, como a `031` tem duas FKs independentes, gravar linhas com a `whatsapp_config` de outra conta, ignorando a RLS. Correção: migration `082_enqueue_webhook_dlq_hardening.sql` (arquivo, diagnóstico e testes PGlite ficam em a frente do PR #25 (branch `chore/l5-082-hardening`) e **não** estão neste commit) — valida que a config pertence à conta (`42501` caso contrário), `REVOKE` de `PUBLIC`/`anon`/`authenticated`, `GRANT` somente a `service_role`; assinatura, dono, `SECURITY DEFINER` e `search_path` preservados. **Origem das evidências:** consultas executadas pelo operador/Comandante no Supabase Cloud (diagnóstico `scripts/diagnostics/l5-enqueue-webhook-dlq-exposure.sql` e consulta complementar), com os resultados repassados à sessão; **não foram executadas nem reexecutadas por Claude**. Antes da aplicação (relato do operador): `anon`, `authenticated` e `service_role` com `EXECUTE`. Depois (2026-10-18 21:35 UTC, banco `postgres`): `hardened=true`; `PUBLIC`, `anon` e `authenticated` sem `EXECUTE`; `service_role` com `EXECUTE`; `execute_grantees=["postgres","service_role"]`; `unexpected_execute_grantees=null`; função `public.enqueue_webhook_dlq(uuid,uuid,jsonb,text)`, retorno `uuid`, `plpgsql`, `security_definer=true`, `search_path=public`; `has_ownership_check=true`; `overloads_in_public=1`; RLS ligada em `whatsapp_webhook_dlq` com a política `whatsapp_webhook_dlq_select` preservada; `dlq_rows_total=0` e `dlq_rows_account_config_mismatch=0`. **Evidência local, separada:** PostgreSQL 17.2 temporário descartável (62 verificações, cenários `plain` e `supa`) e testes PGlite (`enqueue-webhook-dlq-hardening`, `l5-enqueue-webhook-dlq-exposure`) — validação funcional local, não do Cloud. **Limitações e acompanhamento:** (a) a revisão dos logs históricos de API por chamadas a `rpc/enqueue_webhook_dlq`, para investigar possível uso indevido, é um acompanhamento **separado** e continua aberta (zero linhas e zero divergências não provam ausência de uso: um par consistente não aparece, linhas podem ter sido apagadas e não há auditoria); (b) **não foi executado teste de gravação funcional no Cloud**; (c) a função continua sem chamador em `src/` e a DLQ inbound (**C6**) segue **não conectada** — este PASS não altera o status do C6, do E2.1 nem de outras frentes. O registro oficial do estado pertence ao Hermes (SoR); este texto é registro documental local.
+  - **Paridade com o Clint — itens #2, #13 e #15:** sem definição canônica suficiente no repositório; registrados em `plans/README.md` como pendência de documentação e decisão de produto. Nenhum requisito foi inferido. A separação entre MVP, paridade do funil, E2.1, E3, Fase C e pós-MVP foi preservada.
 
 ---
 
@@ -33,13 +46,13 @@ O projeto está num estado assimétrico:
 
 - **A camada de tenant (member-side) é madura** `[C]`. Contatos, inbox, pipelines, broadcasts, automations, flows, templates Meta, API keys e settings existem ponta a ponta, com RLS em 43 tabelas e ~60 arquivos de teste.
 - **A camada de Platform é recente e estreita** `[C]`. Fundação de autorização (037), contexto read-only (038), discovery (039), contatos e inbox read-only em `/act/[accountId]`, provisionamento de Workspace com Owner obrigatório (041–046, fechado em `c8f1585`). Não há tela de escrita platform-side além da criação de Workspace.
-- **A camada de messaging foi o débito dominante — hoje majoritariamente fechada** `[C]`. `E1` (Provider Boundary), `E2.0` (correção de identidade/R16), `E4a` (integridade de saída) e `E4b` (retry/DLQ) estão **concluídos**. Resta **E2.1** (Status Canônico) como único elo aberto da cadeia dura, e `E3` (Connections/multi-conexão) como item estrutural ainda não iniciado.
+- **A camada de messaging foi o débito dominante — hoje majoritariamente fechada** `[C]`. `E1` (Provider Boundary), `E2.0` (correção de identidade/R16), `E4a` (integridade de saída) e `E4b` (retry/DLQ) estão **concluídos**. Resta **E2.1** (Status Canônico — Fase 1 implementada e conectada, sem checkpoint de fechamento; R1/R2/D-C abertos) como único elo não fechado da cadeia dura, e `E3` (Connections/multi-conexão) como item estrutural ainda não iniciado.
 
-**O produto não é mais Meta-only no runtime para envio.** `send/route.ts`, `broadcast/route.ts`, `flows/meta-send.ts` e `automations/meta-send.ts` já despacham por `getProvider()` — nenhum importa `meta-api` diretamente (verificado por `no-direct-meta-import.arch.test.ts`). **O que ainda falta:** um workspace em Z-API/uazapi tem suas mensagens enviadas e retentadas corretamente (E1/E4a/E4b), mas o **status** delas (`delivered`/`read`) nunca é atualizado — não existe pipeline de status para providers não-Meta (E2.1, ver §7).
+**O produto não é mais Meta-only no runtime para envio.** `send/route.ts`, `broadcast/route.ts`, `flows/meta-send.ts` e `automations/meta-send.ts` já despacham por `getProvider()` — esses quatro não importam `meta-api` diretamente (grep). **Ressalva (v1.8):** oito módulos não-teste fora de `providers/`/`delivery/` ainda importam `meta-api` — tolerados em `KNOWN_VIOLATORS` do `no-direct-meta-import.arch.test.ts`, que só falha para violadores desconhecidos e só detecta o alias `@/…` com aspas simples (ver v1.8 e E1 em §7). **O que ainda falta:** um workspace em Z-API/uazapi tem suas mensagens enviadas e retentadas corretamente (E1/E4a/E4b), mas o **status** delas (`delivered`/`read`) dependia de um pipeline de status para providers não-Meta que a **Fase 1 de E2.1 implementou e conectou ao webhook** (`parseStatusEvent` → `handleCanonicalStatusEvent`). A validação ponta a ponta com callbacks reais de Z-API/uazapi está **NOT VERIFIED** (R1 aberta) e o épico não tem checkpoint de fechamento (E2.1, ver §7 e §17).
 
-**R16 — corrigido.** `zapi.ts` agora declara `messageId` como identidade primária e grava `wamid`/`provider_message_id` como `ExternalIdentity` via `message_external_ids` (migration 047). **Ressalva:** essas identidades são gravadas mas hoje não têm consumidor — o único parser de status existente (rota Meta) resolve por `message_id` legado, não pelo conjunto de identidades. E2.1 é o consumidor que falta.
+**R16 — corrigido.** `zapi.ts` agora declara `messageId` como identidade primária e grava `wamid`/`provider_message_id` como `ExternalIdentity` via `message_external_ids` (migration 047). **Ressalva (v1.4, histórica):** essas identidades eram gravadas sem consumidor — o único parser de status então existente (rota Meta) resolvia por `message_id` legado. **Atualização v1.8:** o consumidor de status canônico (`handleCanonicalStatusEvent`, E2.1 Fase 1) existe e está ligado ao webhook não-Meta; sua operação com payloads reais é **NOT VERIFIED** (R1).
 
-**Cadeia de precedência dura, registrada em `DN-001`:** `E1 ✅ → E2.0 ✅ → E2.1 🟡 (Fase 0 concluída — contrato aprovado; Fase 1 é a próxima entrega)`. E4a/E4b não dependiam de E2.1 (ramos paralelos a partir de E2.0) e por isso puderam ser concluídos antes. Detalhe do estado de E2.1 em §17.
+**Cadeia de precedência dura, registrada em `DN-001`:** `E1 ✅ → E2.0 ✅ → E2.1 🟡 (Fase 1 implementada e conectada ao webhook — sem checkpoint de fechamento; R1/R2/D-C abertos)`. E4a/E4b não dependiam de E2.1 (ramos paralelos a partir de E2.0) e por isso puderam ser concluídos antes. Detalhe do estado de E2.1 em §17.
 
 **Risco de fundo, resolvido (2026-07-30):** o North Star (atribuição CTWA) tem a captura em produção, o enriquecimento (E6.0) implementado e testado, e `ADR-ATTR-001`/`ADR-ATTR-002` agora **Aceitos** — fechamento em 2026-07-29 (ver §11 de `ADR-ATTR-001` e §14 de `ADR-ATTR-002`). E6 fechado como infraestrutura em 2026-07-30, ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`.
 
@@ -74,6 +87,8 @@ messages ( id, conversation_id,
 -- 034: UNIQUE (conversation_id, message_id) WHERE sender_type='customer'
 ```
 
+> **Atualização v1.8:** o CHECK de `status` acima é o de `001`. A migration `063_messages_status_canonical.sql` o substituiu por 7 valores (`pending`, `sending`, `sent`, `delivered`, `read`, `failed`, `received`). Definição em migration; aplicação em produção por relato do operador não consta para a 063 — **NOT VERIFIED**.
+
 **43 tabelas** com RLS `[C]`; **74 funções/RPCs** `[C]`.
 
 ### 2.3 Inventário por módulo
@@ -82,7 +97,7 @@ messages ( id, conversation_id,
 
 **Accounts / Workspaces / Membership** — funcional `[C]` (017–021, 041). Falta `legal_name`, `commercial_phone`, `commercial_email`, planejados em `docs/planning/P2.3` e **não implementados** `[C]`; CNPJ só setável na criação.
 
-**Platform (Superadmin)** — funcional parcial, read-heavy/write-thin `[C]`. Falta `/act/[accountId]/settings`, UI de operadores, visualizador de auditoria, suspensão de workspace, gestão de conexões.
+**Platform (Superadmin)** — funcional parcial, read-heavy/write-thin `[C]`. Ausentes (comprovados em `3301c77`): visualizador de auditoria, suspensão de workspace e gestão de conexões. A UI de operadores e `/act/[accountId]/settings` existem (E9 parcial; E5).
 
 **Contacts** — completo member + read-only platform `[C]`. Risco: `findExistingContact` usa `LIKE '%sufixo'` → full scan `[C]`. **Tags: feature completa, não lacuna `[C]`** — schema `tags`/`contact_tags` (001:58,73), RLS (017), RPC `filter_contacts_by_tags` (025/040), UI (`tag-manager.tsx`), uso em broadcast/automations/flows. Divergência da análise competitiva ChatPro corrigida (2026-08-07): a análise classificara Tags como "Não confirmado"; reconciliado em `docs/planning/RECONCILIACAO-FINAL-CHATPRO-2026-08-07.md`.
 
@@ -96,9 +111,9 @@ messages ( id, conversation_id,
 
 **Broadcasts** — funcional, provider-agnóstico via `getProvider()` `[C]` (`broadcast/route.ts:32,177`).
 
-**Automations & Flows** — dois motores paralelos, ambos funcionais, ambos provider-agnósticos via `getProvider()` `[C]` (envio por `automations/meta-send.ts` e `flows/meta-send.ts` — contradiziam o próprio §1 deste documento quando declarados "Meta-only"; corrigido 2026-08-07). Nenhum documento explica se são complementares ou se um substitui o outro `[I]`. **Dívida de `round_robin` corrigida na v1.7:** `assign_conversation` agora rotaciona de fato via `account_lead_routing` (o filtro de membros passou de `profiles.role` — coluna legada — para `profiles.account_role`). **Dívida remanescente:** `conversation_assigned` continua sem dispatcher em runtime (validado em `validate.ts`, sem disparo). Critério de saída documentado (formalização no ADR-AUT-001, ainda não autorizado): gatilho quando (a) existir um dispatcher real de `conversation_assigned` (hoje validado em `validate.ts:173-176`, sem runtime) e a atribuição deixar de ser autor-only, OU (b) um cliente operar 2+ agentes ativos e distribuição equitativa virar requisito de produto.
+**Automations & Flows** — dois motores paralelos, ambos funcionais, ambos provider-agnósticos via `getProvider()` `[C]` (envio por `automations/meta-send.ts` e `flows/meta-send.ts` — contradiziam o próprio §1 deste documento quando declarados "Meta-only"; corrigido 2026-08-07). Nenhum documento explica se são complementares ou se um substitui o outro `[I]`. **Dívida de `round_robin` corrigida na v1.7:** `assign_conversation` agora rotaciona de fato via `account_lead_routing` (o filtro de membros passou de `profiles.role` — coluna legada — para `profiles.account_role`). **Atualização v1.8:** `conversation_assigned` **tem dispatcher em runtime** — `POST /api/conversations/events` (`src/app/api/conversations/events/route.ts`, commit `721c512`), chamado pelo inbox após atribuição **manual** (`message-thread.tsx`); a ação `assign_conversation` não encadeia o gatilho. A rotação do `round_robin` passou a ser atômica na migration 081 (`assign_next_lead_agent`, `SELECT ... FOR UPDATE`, service-role); aplicação em produção por relato do operador; concorrência real em PostgreSQL **NOT TESTED**. O critério de saída (a) abaixo e o §2.6/D5/D6 do `ADR-AUT-001` descrevem o estado anterior e devem ser reavaliados; não alterados aqui. Critério de saída documentado (formalização no ADR-AUT-001, ainda não autorizado): gatilho quando (a) existir um dispatcher real de `conversation_assigned` (hoje validado em `validate.ts:173-176`, sem runtime) e a atribuição deixar de ser autor-only, OU (b) um cliente operar 2+ agentes ativos e distribuição equitativa virar requisito de produto.
 
-**Public API v1** — scaffold; um endpoint (`GET /api/v1/me`) `[C]`.
+**Public API v1** — scaffold `[C]`: um endpoint (`GET /api/v1/me`, sem escopo exigido), autenticação por chave (`requireApiKey`, `src/lib/auth/api-context.ts`) com enforcement de escopo disponível (`scope` opcional + `hasScope`, `src/lib/api-keys/scopes.ts`) e envelope de resposta (`src/lib/api/v1/respond.ts`). Nenhum endpoint de recurso e nenhuma rota que exija escopo (v1.8; E11 segue aberto).
 
 **Dashboard** — funcional; **Reporting inexistente** `[C]`.
 
@@ -116,6 +131,8 @@ Ressalva: testes e build não foram reexecutados no ambiente de auditoria. Estad
 
 ## 4. Arquitetura atual
 
+> **Nota v1.8:** o diagrama abaixo é um retrato anterior a E1/E2.0 e **não** reflete o estado atual: `send`, `react`, `broadcast`, `automations/meta-send` e `flows/meta-send` despacham por `getProvider()` (sem import de `meta-api`) e o R16 foi corrigido por E2.0. Mantido como registro histórico; o estado atual está em §1, §6 e §7.
+
 ```
 BROWSER
  ├─ (auth) · (dashboard) inbox · contacts · pipelines · broadcasts
@@ -132,7 +149,7 @@ API ROUTES
  └─ /api/v1/me
 
 MESSAGING (estado real)
- send/route.ts ──┬── provider !== 'meta' → getProvider() → zapi | uazapi   ✅
+ send/route.ts ──┬── provider !== 'meta' → getProvider() → uazapi   ✅ (zapi removido em 2026-10-20)
                  └── provider === 'meta' → meta-api direto                 ✅
  broadcast · react · automations/meta-send · flows/meta-send
                  └────────────────────── meta-api DIRETO ❌
@@ -177,19 +194,19 @@ IDENTIDADE DE MENSAGEM (estado real)
 | ~~Provider boundary~~ | `getProvider` em send/broadcast/engines/react | — | ADR-MSG-001 | **CONCLUÍDO — E1** |
 | ~~Fronteira de criação de saída~~ | dono único (`delivery/`) | — | ADR-MSG-001 D6 · DLB-001 | **CONCLUÍDO — E1** |
 | ~~Message identity~~ | `ExternalIdentity` + `message_external_ids` (047), R16 corrigido | consumidor (E2.1) | E1 · EIS-001 | **CONCLUÍDO — E2.0** |
-| Status não-Meta | contrato canônico (`ADR-MSG-STATUS-001`, Fase 0) | implementação: parsers, escada e rota (Fase 1) | E2.0 ✅ | **P0 — Fase 0 concluída; Fase 1 é a próxima entrega (E2.1)** |
+| Status não-Meta | contrato canônico (`ADR-MSG-STATUS-001`) + Fase 1 implementada e conectada (parsers, escada, rota; migration 063) | fechamento do épico; R1 (payloads reais), R2 (formalização), D-C; validação em produção **NOT VERIFIED** | E2.0 ✅ | **P0 — Fase 1 implementada (`319694f`, `c0af1f9`, `5a02996`); épico não fechado (E2.1)** |
 | ~~Outbound integrity~~ | intent→settle, `idempotency_key` | — | E1 | **CONCLUÍDO — E4a** |
-| ~~Reliability async~~ | retry ledger, scheduler, orphan sweeper | — | E4a | **CONCLUÍDO — E4b** |
+| Reliability async | retry ledger, scheduler, orphan sweeper (**saída**, E4b concluído) | DLQ **inbound** (`whatsapp_webhook_dlq`): `enqueue_webhook_dlq` sem chamador em `src/` (RPC endurecida pela `082`, ver L5 no v1.8), sem sweep/drain encontrado (C6) | E4a | **E4b (saída) CONCLUÍDO; C6 aberto** |
 | Modelo `messages` | RLS via JOIN | `account_id`, `connection_id` | E2.0 | P1 |
 | Multi-conexão | UNIQUE(account_id) | tabela `connections` | E2.0 | P1 |
-| ~~Encryption~~ | ~~chave global~~ | ~~`key_version` + re-encrypt~~ | — | **CONCLUÍDO — E7, ver §7** |
+| ~~Encryption~~ | ~~chave global~~ | ~~KID (`kid`) no envelope + Key Ring + re-encrypt~~ | — | **CONCLUÍDO — E7, ver §7** |
 | ~~Workspace identity~~ | 3 campos + RPC + UI (E5) | — | — | **CONCLUÍDO** |
 | Attribution | captura + tabela + enriquecimento + ADR-ATTR-001/002 (Aceitos) | CAPI (fora do MVP, P3/P4) | E1 ✅ | **CONCLUÍDO — infraestrutura (E6)** |
-| ~~Platform ops UI~~ | telas (E9) | — | — | **CONCLUÍDO** |
-| Automations × Flows | ambos | decisão de convergência | ADR-AUT-001 | P2 |
-| Public API | `/me` | recursos + enforcement | E3 | P2 |
+| Platform ops UI | UI de operadores (`team-tab.tsx`, `invite-operator-dialog.tsx`, `platform-ops/operators.ts`; profundidade não reauditada) | visualizador de `platform_audit_log`; suspensão de workspace (ausentes no código) | — | **PARCIAL — E9 (v1.8)** |
+| Automations × Flows | ambos; `ADR-AUT-001` **Aceito** (documental) | execução da convergência (E10) | ADR-AUT-001 | P2 |
+| Public API | scaffold: `/me`, `requireApiKey(scope?)`, `hasScope` | endpoints de recurso + escopos exigidos por rota | E3 | P2 |
 | Reporting | dashboard | relatórios + export + UI de attribution (herdada de E6, reescopo 2026-07-30) | E6 ✅ | P2 |
-| FKs / integridade | — | C16, C19, C20, C21 | E3 | P2 |
+| FKs / integridade | ~~C21~~ (FK `conversations.assigned_agent_id`, migration 075, `2e66c12`, teste PGlite) | C16, C19 abertos conforme o roadmap anterior (**NOT VERIFIED**; não investigados na v1.8); C20 parcialmente endereçado pela 063 (CHECK admite `pending`/`received`; `replied` não consta — **NOT VERIFIED** se ainda requerido) | E3 | P2 |
 | Testes | ~60 arquivos | cross-tenant, matriz provider, retry | — | P1 |
 | Observabilidade | `console.error` | correlation IDs, logs estruturados | E3 | P2 |
 
@@ -202,20 +219,20 @@ IDENTIDADE DE MENSAGEM (estado real)
 | ID | Nome | Objetivo | Contrato | Prio |
 |---|---|---|---|---|
 | **E0** | ADR Messaging Core | Congelar o modelo antes do código | `docs/adr/ADR-MSG-001.md` — **Aceito (2026-07-21)** | **CONCLUÍDO** |
-| **E1** | Delivery Layer & Provider Boundary | Fronteira única de envio e de criação de mensagem de saída | `docs/architecture/DLB-001-delivery-layer-boundary.md` | **CONCLUÍDO** — commits `78bd7cd`, `b0f5988`; zero import direto de `meta-api` fora de `providers/`/`delivery/` |
+| **E1** | Delivery Layer & Provider Boundary | Fronteira única de envio e de criação de mensagem de saída | `docs/architecture/DLB-001-delivery-layer-boundary.md` | **CONCLUÍDO para os caminhos de envio** — commits `78bd7cd`, `b0f5988`; `send`/`broadcast`/`flows`/`automations` despacham por `getProvider()`. **Ressalva (v1.8):** 8 módulos não-teste ainda importam `meta-api` fora de `providers/`/`delivery/` (`config`, `config/verify-registration`, `media/[mediaId]`, `templates/submit`, `templates/[id]`, `webhook/route.ts`, `template-header-handle.ts`, `flows/validate.ts`), tolerados em `KNOWN_VIOLATORS` do arch test (ver v1.8) |
 | **E2.0** | Message Identity Correction | Conjunto de identidades; correção de R16 | `docs/architecture/EIS-001-external-identity-storage.md` | **CONCLUÍDO, subutilizado** — `zapi.ts` corrigido, migration 047; identidades gravadas sem consumidor até E2.1 fechar |
-| **E2.1** | Status Canônico | Ciclo de vida da mensagem por resolução de identidade | `docs/adr/ADR-MSG-STATUS-001.md` + `docs/checkpoints/CHECKPOINT-E2.1-STATUS-CANONICAL.md` | **FASE 0 CONCLUÍDA** — contrato escrito e aprovado no gate de 2026-07-29 (`CHECKPOINT-E2.1` §9); Fase 1 (implementação) é a próxima entrega, sujeita às pré-condições de §17 |
+| **E2.1** | Status Canônico | Ciclo de vida da mensagem por resolução de identidade | `docs/adr/ADR-MSG-STATUS-001.md` + `docs/checkpoints/CHECKPOINT-E2.1-STATUS-CANONICAL.md` | **FASE 0 CONCLUÍDA** (gate de 2026-07-29, `CHECKPOINT-E2.1` §9) · **FASE 1 IMPLEMENTADA e conectada ao webhook não-Meta** (`319694f`, `c0af1f9`, `5a02996`; migration 063; pacote de evidência do gate de ativação (2026-08-03) em `docs/checkpoints/GATE-EVIDENCE-E2.1-ACTIVATION-2026-08-03.md`). **Épico não fechado**: sem checkpoint final (`CHECKPOINT-E2.1-RC1-CLOSED.md` fecha só o ciclo de correção RC1); R1, R2 (formalização) e D-C abertos (§17); operação em produção com callbacks reais **NOT VERIFIED** |
 | **E3** | Connections | Multi-conexão por workspace | a escrever | P1 — não iniciado |
 | **E4a** | Outbound Delivery Integrity | persist-before-send, idempotency-key, estado `failed` | `docs/architecture/ODI-001-outbound-delivery-integrity.md` | **CONCLUÍDO** — commit `ef7e4f9` |
-| **E4b** | Async Reliability | DLQ wiring + reprocesso | `ADR-E4B-001/002/003`, `ARO-001` | **CONCLUÍDO** — `docs/checkpoints/E4b-final-checkpoint.md`, commit `60b0565`, 691 testes verdes |
+| **E4b** | Async Reliability | DLQ wiring + reprocesso | `ADR-E4B-001/002/003`, `ARO-001` | **CONCLUÍDO (caminho de saída)** — `docs/checkpoints/E4b-final-checkpoint.md`, commit `60b0565`, 691 testes verdes; ledger/enqueue/drain e `orphan-sweep` agendados via Coolify (informação histórica da v1.6, relato do operador, não verificada independentemente). **DLQ inbound (C6) não está ligada** — ver v1.8 |
 | **E5** | Workspace Commercial Identity | 3 campos + RPC + `/act/[accountId]/settings` | `docs/architecture/E5-workspace-commercial-identity.md` | **CONCLUÍDO** — commit `485b1e6` |
 | **E6** | Attribution — Infraestrutura (reescopado 2026-07-30) | Captura + enriquecimento + ADR-ATTR-001/002 congelados | `docs/architecture/E6.0-attribution-enrichment-marketing-api.md`, `docs/checkpoints/CHECKPOINT-E6-FINAL.md` | **CONCLUÍDO** — UI de relatório reescopada para E12 (RPC `get_enrichment_report` e rota `/api/enrichment/report` já existem, zero consumidores de front-end); CAPI fora do MVP (P3/P4, decisão de Weyner 2026-07-29) |
 | **E6.0** | Enrichment via Marketing API (sub-escopo de E6) | Enriquecer `lead_attributions` via Graph API + relatório mínimo | idem, status **Implementado e fechado** no doc | **CONCLUÍDO** — commit `2c4daef`, 57 testes verdes (incl. isolamento D-8); fechado em `docs/checkpoints/E6.0-final-checkpoint.md` (2026-07-29) |
-| **E7** | Encryption Key Versioning | `key_version` + re-encrypt | `ADR-E7-001` + `IMP-E7-001` | **CONCLUÍDO (2026-07-27)** |
-| **E8** | Integridade Referencial | C16, C19, C21 | a escrever | P2 — não iniciado |
-| **E9** | Platform Operations UI | grant/revoke, assign, audit viewer, suspensão | a escrever | **CONCLUÍDO** — commit `2a2da71` |
-| **E10** | ADR-AUT-001 + Convergência | Automations × Flows | a escrever | P2 — não iniciado |
-| **E11** | Public API v1 Resources | Endpoints com escopos enforced | a escrever | P2 — não iniciado |
+| **E7** | Encryption Key Versioning | KID (`kid`) no envelope + Key Ring + re-encrypt | `ADR-E7-001` + `IMP-E7-001` | **CONCLUÍDO (2026-07-27)** |
+| **E8** | Integridade Referencial | C16, C19, C21 | a escrever | P2 — **PARCIAL**: C21 fechado (migration 075, `2e66c12`); C16 e C19 abertos conforme o roadmap anterior (NOT VERIFIED) |
+| **E9** | Platform Operations UI | grant/revoke, assign, audit viewer, suspensão | a escrever | **PARCIAL** — commit `2a2da71`: UI de operadores presente (`team-tab.tsx`, `invite-operator-dialog.tsx`, `platform-ops/operators.ts`); **visualizador de auditoria e suspensão de workspace ausentes** no código; profundidade de grant/revoke/assign não reauditada (**NOT VERIFIED**) |
+| **E10** | ADR-AUT-001 + Convergência | Automations × Flows | `docs/adr/ADR-AUT-001-automations-flows-reconciliation.md` (**Aceito**, documental) | P2 — ADR concluído; **convergência não iniciada**. Dispatcher `conversation_assigned` existe desde `721c512` (atribuição manual); §2.6/D5/D6 do ADR descrevem o estado anterior |
+| **E11** | Public API v1 Resources | Endpoints com escopos enforced | a escrever | P2 — **scaffold existente**, recursos não iniciados (`/api/v1/me`, `requireApiKey(scope?)`, `scopes.ts`); nenhum endpoint de recurso nem rota que exija escopo |
 | **E12** | Reporting & Export | Relatórios e export, incluindo UI de relatório de attribution (herdada de E6, reescopo 2026-07-30). **Nota de design (2026-08-07): nascer multi-origem desde a primeira query** — `source_channel` já suporta `ctwa_meta | tracked_link | organic | unknown` (033:45-47); Fonte B (`tracking_links`/`tracking_clicks`, `/r/[slug]`) já especificada e **Aceita** em `ADR-ATTR-001 §3.4/D2` (P2, não iniciada) — **sem novo ADR**, a decisão já está tomada. **Gap registrado no escopo de design:** `lead_attributions` não tem nenhuma FK/ligação com `deals` — se o objetivo de E12 for relatório comercial (receita por origem), a ligação attribution→deal entra no escopo agora, não como P3 futuro | a escrever | P2 — não iniciado, **desbloqueado** (E6 concluído em 2026-07-30) |
 | **E13** | Observabilidade | Correlation IDs, logs estruturados | a escrever | P2 — não iniciado |
 
@@ -288,11 +305,11 @@ E5, E7 e E9 não dependem de messaging e podem avançar em paralelo a E0/E1.
 
 **FASE 1 — Quick wins paralelos.** E5 e E7. Independentes do ADR, baixo risco. Validação: testes PGlite do RPC (4 cenários de autorização), partial update não apaga campos omitidos. **Estado: CONCLUÍDA — E5 (commit `485b1e6`) e E7 (5 fases, 2026-07-27) ambos fechados.**
 
-**FASE 2 — P0 de Messaging.** **E1 → E2.0 → E2.1 → E4a → E4b.** Ordem obrigatória nos três primeiros (§8.1). **Estado (2026-07-29): E1, E2.0, E4a e E4b CONCLUÍDOS. Só falta E2.1** — único elo em aberto, aprovado como próxima épica oficial. Sem ele, mensagens Z-API/uazapi continuam travadas em `sent` e as identidades gravadas por E2.0 seguem sem consumidor. Validação: matriz provider×operação verde, **teste de R16 verde**, smoke manual em conta Meta antes do push.
+**FASE 2 — P0 de Messaging.** **E1 → E2.0 → E2.1 → E4a → E4b.** Ordem obrigatória nos três primeiros (§8.1). **Estado (2026-07-29): E1, E2.0, E4a e E4b CONCLUÍDOS. Só falta E2.1** — único elo em aberto, aprovado como próxima épica oficial. Sem ele, mensagens Z-API/uazapi continuam travadas em `sent` e as identidades gravadas por E2.0 seguem sem consumidor. **Atualização v1.8:** E2.1 Fase 1 foi implementada e conectada ao webhook não-Meta (`319694f`, `c0af1f9`, `5a02996`); o épico segue sem checkpoint de fechamento e a operação em produção está **NOT VERIFIED** — o texto anterior é o estado de 2026-07-29. Validação: matriz provider×operação verde, **teste de R16 verde**, smoke manual em conta Meta antes do push.
 
 **FASE 3 — Modelo de dados.** E3 → E8. Só depois que boundary e identidade estão corretos. Risco máximo do roadmap; ensaio em cópia de produção e rollback escrito antes de começar.
 
-**FASE 4 — Produto.** E6 → E12, com E9 em paralelo. Validação: um lead de anúncio real rastreado do clique ao relatório. **Estado (2026-07-30): E9 CONCLUÍDO (commit `2a2da71`). E6 CONCLUÍDO como infraestrutura — enriquecimento (E6.0) fechado, ADR-ATTR-001/002 Aceitos (ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`). UI de relatório reescopada para E12; CAPI fora do MVP. E12 desbloqueado, não iniciado — sem dependência pendente.**
+**FASE 4 — Produto.** E6 → E12, com E9 em paralelo. Validação: um lead de anúncio real rastreado do clique ao relatório. **Estado (2026-07-30): E9 PARCIAL (commit `2a2da71`; audit viewer e suspensão ausentes — v1.8). E6 CONCLUÍDO como infraestrutura — enriquecimento (E6.0) fechado, ADR-ATTR-001/002 Aceitos (ver `docs/checkpoints/CHECKPOINT-E6-FINAL.md`). UI de relatório reescopada para E12; CAPI fora do MVP. E12 desbloqueado, não iniciado — sem dependência pendente.**
 
 **FASE 5 — Maturidade.** E11, E13, execução de E10.
 
@@ -318,7 +335,7 @@ E5, E7 e E9 não dependem de messaging e podem avançar em paralelo a E0/E1.
 | R7 | Delete de contato destrói conversas | Data | Média | Alto | 🟠 | E8 | Fase 3 |
 | R8 | Delete de usuário cascateia domínio | Data | Baixa | Crítico | 🟠 | E8 + runbook | Fase 3 |
 | R9 | Falha de envio invisível ao operador | Inbox | Alta | Médio | 🟠 | E4a | Fase 2 |
-| R10 | DLQ morta + monitor falso-positivo em `QUICK_REFERENCE` | Webhooks | Média | Alto | 🟠 | E4b + correção da doc | Fase 2 |
+| R10 | DLQ morta + monitor falso-positivo em `QUICK_REFERENCE` | Webhooks | Média | Alto | 🟠 | E4b (saída) + correção da doc — **ABERTO para a DLQ inbound** (C6: `enqueue_webhook_dlq` sem chamador em `src/`, RPC endurecida pela `082` — ver L5 no v1.8; `QUICK_REFERENCE` §3 espera `pending_dlq` 0–5, trivialmente verdadeiro) | Fase 2 |
 | R11 | Full scan em `findExistingContact` | Contacts | Média | Médio | 🟡 | Índice funcional | Fase 3 |
 | R12 | Dois motores de automação | Autom/Flows | Certa | Médio | 🟡 | E10 | Fase 5 |
 | R13 | ADR-ATTR-001 nunca congelado | Attribution | Média | Alto | 🟠 | D3 (§15) | Fase 4 |
@@ -351,11 +368,11 @@ E5, E7 e E9 não dependem de messaging e podem avançar em paralelo a E0/E1.
 
 ## 12. Estratégia de testes
 
-Ativo a preservar `[C]`: ~60 arquivos, com testes PGlite reais de RPC e RLS.
+Ativo a preservar `[C]`: ~60 arquivos, com testes PGlite reais de RPC e RLS (PGlite = Postgres em WASM, sequencial; não exercita concorrência real).
 
 | Lacuna | Como fechar | Épico |
 |---|---|---|
-| Matriz provider × operação | `{meta,zapi,uazapi} × {text,media,template,reaction}` | E1 |
+| Matriz provider × operação | `{meta,uazapi} × {text,media,template,reaction}` (zapi removido em 2026-10-20) | E1 |
 | **Correlação de identidade (R16)** | Regressão que **deve falhar** contra `c8f1585` | E2.0 |
 | Precedência identidade × fallback | `EIS-001` critério 14 | E2.0 |
 | Isolamento cross-tenant no fallback | `EIS-001` critério 15 | E2.0 |
@@ -377,11 +394,11 @@ Ativo a preservar `[C]`: ~60 arquivos, com testes PGlite reais de RPC e RLS.
 **Workspaces** — [x] criação · [x] currency · [x] CNPJ na criação · [x] edição pós-criação (E5)
 **Usuários** — [x] signup/login/reset · [x] convites · [x] papéis · [x] transferência de ownership
 **CRM** — [x] contatos + tags + custom fields + notas + import · [x] pipelines/deals · [ ] busca global `[R]`
-**Comunicação** — [x] inbox realtime · [x] mídia · [x] reactions (Meta) · [x] templates Meta · [x] **fronteira de entrega (E1)** · [x] **identidade correta (E2.0)** · [ ] **status não-Meta (E2.1) — próxima épica**
+**Comunicação** — [x] inbox realtime · [x] mídia · [x] reactions (Meta) · [x] templates Meta · [x] **fronteira de entrega (E1)** · [x] **identidade correta (E2.0)** · [ ] **status não-Meta (E2.1) — Fase 1 implementada e conectada; épico não fechado, validação com payload real pendente (R1)**
 **Automação** — [x] automations · [x] flows · [x] **envio provider-agnóstico (E1)**
-**Operação** — [x] falha de envio visível (E4a) · [x] DLQ ligada (E4b)
+**Operação** — [x] falha de envio visível (E4a) · [x] retry/drain de saída ligado (E4b) · [ ] DLQ inbound ligada (C6)
 **Segurança** — [x] RLS em 43 tabelas · [x] auth do webhook não-Meta · [x] rate-limit · [x] versionamento de chave (E7, concluído 2026-07-27)
-**Auditoria** — [x] `platform_audit_log` · [ ] visualizador (E9)
+**Auditoria** — [x] `platform_audit_log` · [ ] visualizador (E9) · [ ] suspensão de workspace (E9)
 **Testes** — [x] suíte + PGlite · [ ] matriz de provider (E1) · [ ] regressão R16 (E2.0) · [ ] cross-tenant (E3)
 **Deploy** — [x] CI · [?] pipeline de migration em produção — confirmar (D7)
 
@@ -466,7 +483,7 @@ PROTEGIDO — NÃO TOCAR
 - ✅ Fase 0 concluída
 - ✅ `ADR-MSG-STATUS-001` aprovado
 - ✅ `CHECKPOINT-E2.1-STATUS-CANONICAL` aprovado
-- ⏳ Fase 1 (Implementação) ainda não iniciada
+- ✅ Fase 1 (Implementação) implementada e conectada ao webhook não-Meta (atualização v1.8, detalhe ao final desta seção) — ⏳ épico sem checkpoint de fechamento
 
 **Pré-condições obrigatórias antes da implementação**
 
@@ -489,4 +506,13 @@ PROTEGIDO — NÃO TOCAR
 
   **Evidência atual: consulta operacional não versionada.** Foi executada em sessão, por script efêmero fora do repositório; não há artefato reproduzível commitado. Por isso R2 **permanece aberta apenas quanto à formalização** — o que falta é um artefato versionado e reexecutável que sustente o número, não investigação adicional.
 
-O roadmap continua correto ao dizer que a implementação da E2.1 não começou; este registro reflete que a fase arquitetural já foi encerrada.
+*(Registro histórico de 2026-07-29/30, mantido: a frase «a implementação da E2.1 não começou» era verdadeira naquela data e deixou de ser a partir de `319694f`.)*
+
+**Atualização v1.8 — Fase 1 de E2.1 (evidência no código em `3301c77`):**
+
+- **Implementado e conectado:** a rota `webhook/[provider]/[connectionId]/[webhookSecret]/route.ts` chama `parseStatusEvent` do provider e `handleCanonicalStatusEvent` (`src/lib/whatsapp/status-handler.ts`); parsers em `providers/meta.ts`, `zapi.ts`, `uazapi.ts`.
+- **Schema:** migration `063_messages_status_canonical.sql` — CHECK de `messages.status` com `pending`, `sending`, `sent`, `delivered`, `read`, `failed`, `received`.
+- **Commits:** `319694f`, `c0af1f9`, `5a02996`, `4955da9`; pacote de evidência do gate de ativação (2026-08-03) em `docs/checkpoints/GATE-EVIDENCE-E2.1-ACTIVATION-2026-08-03.md`.
+- **Testes:** existem `providers/parse-status.test.ts` e `providers/dc-discovery.test.ts`; não reexecutados na reconciliação v1.8.
+- **Continuam abertos, cada um separado:** **R1** (payloads reais de callback — acima), **R2** (formalização da evidência — acima) e **D-C** (parser de entrada Z-API sem discriminar `type`; estado atual do defeito: **NOT VERIFIED** nesta rodada).
+- **Deploy / produção:** o deploy Coolify `Success` é relato do operador; operação de status com Z-API/uazapi reais em produção: **NOT VERIFIED**. Não há checkpoint de fechamento do épico E2.1.

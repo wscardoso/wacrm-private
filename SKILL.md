@@ -143,7 +143,7 @@ Full setup: [wacrm.tech/docs](https://wacrm.tech/docs)
 |---|---|
 | Add a custom field to contacts | `supabase/migrations/` + `src/app/(dashboard)/contacts/` |
 | Add an automation action type | `src/lib/automations/` + automation builder UI |
-| Swap WhatsApp provider (e.g. Zapi) | `src/lib/whatsapp/` — replace the Meta API adapter |
+| Add or swap a WhatsApp provider | `src/lib/whatsapp/providers/` — implement `WhatsAppProvider` and register it in `getProvider` / `providerConfigFromRow` (`providers/index.ts`) |
 | Add a new pipeline stage | `src/app/(dashboard)/pipelines/` |
 | Expose a new public API endpoint | `src/app/api/v1/` |
 

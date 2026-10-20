@@ -12,11 +12,11 @@ com o Clint** workstream (see the last section).
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001  | Chat/flow media buckets stop leaking cross-tenant reads (S2) | P0 | L | — | **MERGED & PUSHED to main** (commit `90c94c9`, 2026-09-08) — deploy in flight via Hostinger. Step 6 (manual smoke test) still **not run** — no staging project exists; operator (Weyner) authorized proceeding directly against the production Supabase project (`uybjenopyvdmuixnhzqh`, real client data: Oral Unic Contagem, Oral Unic Almirante Tamandaré, Atomo Soluções, Digitall Force), **in the order: deploy code → run migration 076 → smoke test** — never migration before deploy, or every client's media 403s until the deploy lands. Migration 076 has NOT been run yet as of this row — operator to run it manually (the session's Supabase CLI has no access to this project, 403). |
-| 002  | Reconcile MASTER-ROADMAP.md with the real HEAD | P1 | S | — | TODO |
+| 001  | Chat/flow media buckets stop leaking cross-tenant reads (S2) | P0 | L | — | **MERGED & PUSHED to main** (commit `90c94c9`, 2026-09-08) — deploy in flight via Hostinger. Step 6 (manual smoke test) still **not run** — no staging project exists; operator (Weyner) authorized proceeding directly against the production Supabase project (`uybjenopyvdmuixnhzqh`, real client data: Oral Unic Contagem, Oral Unic Almirante Tamandaré, Atomo Soluções, Digitall Force), **in the order: deploy code → run migration 076 → smoke test** — never migration before deploy, or every client's media 403s until the deploy lands. Migration 076 has NOT been run yet as of this row — operator to run it manually (the session's Supabase CLI has no access to this project, 403). **Atualização (2026-10-17):** o operador informou que a 076 foi aplicada depois; relato do operador, **sem verificação independente**; o Passo 6 (smoke test) segue sem evidência registrada. |
+| 002  | Reconcile MASTER-ROADMAP.md and related docs with the real code | P1 | S | — | **CONCLUÍDO — aplicado na árvore de trabalho, NÃO commitado** (2026-10-17, base `3301c77`; roadmap v1.8). Documental apenas; pendências e itens NOT VERIFIED preservados no roadmap v1.8. |
 | 003  | Fix media-preview and template-header breakage left by Plan 001 (S2) | P1 | S–M | 001 | **MERGED & PUSHED to main** (commit `90c94c9`, 2026-09-08) together with Plan 001, same deploy. Commits `66905eb`,`8c46f6c`,`c845a33`,`2c3a9b7`. Full suite re-verified green post-merge on `main`: `npx tsc --noEmit` exit 0, `npx vitest run --pool=forks --no-file-parallelism` → 109/109 files, 1499/1499 tests. |
 
-**Post-merge TODO (not yet done):**
+**Post-merge TODO (registro de 2026-09-08; ver a atualização de 2026-10-17 na linha do Plan 001 — item 1 relatado como feito pelo operador, item 2 sem evidência registrada):**
 1. Run `supabase/migrations/076_private_media_buckets.sql` against the production project — only after confirming the Hostinger deploy of `90c94c9` is live.
 2. Run the Plan 001 Step 6 smoke test (6-item checklist prepared separately) against production, using a test/internal WhatsApp number for items 1/5/6, not a real customer conversation.
 
@@ -107,16 +107,13 @@ completo na v1.7 do roadmap.
     sem antes conferir `git status`/`git show HEAD:<path>`.**
 - Gate verde: `tsc` limpo · `eslint` sem erros · **114 arquivos / 1561 testes**
   · `next build` verde.
-- **Pendência operacional (não feita):**
-  1. `git push` para `main` (3 commits locais: `f7498d1`, `bbf8ba4`, `d9e9f5c`).
-  2. Rodar `supabase/migrations/080_funnel_cadence_and_uazapi.sql` **depois**
-     do deploy do código (nunca antes — o código novo depende de
-     `account_lead_routing`, `deals.loss_reason`/`custom_fields` e do status
-     `'cancelled'`).
+- **Pendência operacional (atualizada em 2026-10-17):**
+  1. ~~`git push` para `main`~~ — **feito**: `f7498d1`, `bbf8ba4` e `d9e9f5c` são ancestrais de `origin/main` (`git merge-base --is-ancestor`; `main` = `origin/main` = `3301c77`).
+  2. `supabase/migrations/080_funnel_cadence_and_uazapi.sql` — o operador informou que foi aplicada; **sem verificação independente**. A ordem original (rodar **depois** do deploy do código, nunca antes — o código novo depende de `account_lead_routing`, `deals.loss_reason`/`custom_fields` e do status `'cancelled'`) fica como registro.
 
 ### Fase B — Fechar #1 e #4 de verdade: IMPLEMENTADA LOCALMENTE (2026-10-17)
 
-Status: código + testes locais; **não publicada, não validada em produção**.
+Status (atualizado em 2026-10-17): código mergeado em `main` e presente em `origin/main` (`3301c77`); deploy Coolify `Success` informado pelo operador; **validação em produção não realizada** (smoke tests BLOCKED por falta de pré-condições). As marcações «local / não publicado / não aplicada» abaixo são o estado anterior.
 Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
 (5 erros de eslint pré-existentes em testes de `inbound-*`, não tocados).
 
@@ -127,7 +124,7 @@ Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
   Atribuição feita pela *ação* `assign_conversation` não encadeia (evita laço).
 - `POST /api/deals/events` não confia mais em `stageId`/`oldStageId` do corpo:
   destino = etapa persistida; etapa anterior só vale se for do mesmo pipeline.
-- **Motivo da perda — IMPLEMENTADO (Feature B, local, não publicado):**
+- **Motivo da perda — IMPLEMENTADO (Feature B; mergeado em `main`; validação em produção NÃO realizada):**
   "perdido" segue sendo `deals.status` (não é etapa). Regra única em
   `src/lib/deals/status.ts` (lost exige motivo ≤500; open/won o apagam),
   `POST /api/deals/status` (autenticado, escopo por `account_id`, viewer
@@ -142,16 +139,16 @@ Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
   exige definir esse conceito (etapa de perda?) — decisão do operador.
 - **Pendências conhecidas:** toggle de UI para `cancel_on_reply`; rotas
   `uazapi/qr|status` sem teste.
-- **Corrida no round-robin — RESOLVIDA (Feature A, local, não aplicada):**
+- **Corrida no round-robin — CORRIGIDA NO CÓDIGO (Feature A; mergeado em `main`; concorrência real NOT TESTED):**
   o cursor `account_lead_routing` era lido e regravado em duas idas ao
   banco; duas atribuições concorrentes da mesma conta escolhiam o mesmo
   agente. Passa a ser uma RPC atômica (`assign_next_lead_agent`,
   `supabase/migrations/081_lead_round_robin_atomic.sql`) que rotaciona sob
   `SELECT ... FOR UPDATE`, service-role apenas. Testes:
   `engine.funnel.test.ts` (contrato do engine) +
-  `lead-round-robin-atomic.pglite.test.ts` (Postgres real). Detalhe:
+  `lead-round-robin-atomic.pglite.test.ts` (PGlite — Postgres em WASM, sequencial; concorrência real NOT TESTED). Detalhe:
   `docs/checkpoints/CHECKPOINT-FEATURE-A-ROUND-ROBIN-RACE.md`. Migration
-  **preparada, não aplicada**.
+  **preparada, não aplicada** (registro anterior). **Atualização 2026-10-17:** o operador informou que a 081 foi aplicada e que consultas SQL confirmaram a RPC e seus grants; as consultas não estão anexadas nem foram reexecutadas, **sem verificação independente**. Testes locais 52/52 passam (`engine.funnel`, `lead-round-robin-atomic.pglite`, `lib/deals`); o PGlite não exerce concorrência real.
 
 (Texto original da Fase B abaixo, mantido para referência.)
 
@@ -177,6 +174,21 @@ Gate local: `tsc` limpo, 116 arquivos / 1572 testes, `next build` verde
 - **E10** (convergência automations/flows): duplicar gatilhos de funil ou IA em
   dois motores multiplica o trabalho.
 - **E3** (multi-conexão): bloqueia Instagram e mais de um número por conta.
-- **E2.1** (status não-Meta) e **D-C** (parser Z-API) permanecem abertos —
-  mensagens não-Meta continuam travadas em `sent`.
+- **E2.1** (status não-Meta): Fase 1 implementada e conectada ao webhook (roadmap v1.8); épico sem checkpoint de fechamento e operação em produção **NOT VERIFIED**. **D-C** (parser Z-API) e R1/R2 seguem abertos. A frase anterior «mensagens não-Meta continuam travadas em `sent`» é anterior a `319694f`/`c0af1f9` e não foi revalidada.
 - Limite de requisições em memória: não escala com múltiplas instâncias.
+
+### Itens da lista de paridade sem definição canônica (#2, #13, #15)
+
+A lista de 15 itens da análise de lacunas não está versionada neste repositório. Em `plans/` e `docs/` só aparecem descritos #1, #3–#12 e #14; **#2** aparece apenas como dependência («só depois de #1 e #2», IA) e **#13** e **#15** não são mencionados (grep em `3301c77`). A auditoria não encontrou definição canônica suficiente.
+
+**Pendência de documentação e decisão de produto:** registrar a definição desses três itens (ou a lista-fonte) antes de qualquer planejamento ou estimativa. Nenhum requisito é inferido aqui.
+
+
+### L5 — `enqueue_webhook_dlq` (2026-10-18)
+
+Achado da auditoria do C6: a RPC `SECURITY DEFINER` da `031` era executável por `PUBLIC`/`anon`/`authenticated` e aceitava pares conta/config de contas diferentes. Corrigida pela migration `082_enqueue_webhook_dlq_hardening.sql` (arquivo, diagnóstico e testes PGlite ficam em a frente do PR #25 (branch `chore/l5-082-hardening`) e **não** estão neste commit), **aplicada manualmente pelo operador** no Supabase Cloud.
+
+* **PASS técnico de hardening**, com base em consultas executadas pelo operador/Comandante no Cloud (não por Claude): `hardened=true`, `execute_grantees=["postgres","service_role"]`, `has_ownership_check=true`, `overloads_in_public=1`, RLS e política `whatsapp_webhook_dlq_select` preservadas, `dlq_rows_total=0`, `dlq_rows_account_config_mismatch=0`. Detalhe no roadmap v1.8 (bullet L5).
+* **Evidência local separada:** PostgreSQL 17.2 temporário + testes PGlite.
+* **Acompanhamento aberto:** revisão dos logs históricos de API (possível uso indevido); **sem** teste de gravação funcional no Cloud.
+* Não altera o C6 (DLQ inbound continua **não conectada**) nem outras frentes. O estado oficial é registrado pelo Hermes (SoR).

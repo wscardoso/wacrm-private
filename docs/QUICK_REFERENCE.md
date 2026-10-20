@@ -28,6 +28,8 @@ WHERE status = 'pending';
 ```
 Esperado: **0-5**
 
+> **Nota (reconciliação 2026-10-17):** esta verificação **não indica saúde da DLQ inbound**. Em `3301c77`, `enqueue_webhook_dlq` não tem chamador em `src/` e não há sweep/drain da DLQ inbound; a contagem fica em 0 mesmo com falhas de webhook (C6, ver `docs/MASTER-ROADMAP.md` v1.8). Comportamento em produção: **NOT VERIFIED**. A RPC `enqueue_webhook_dlq` foi endurecida pela migration `082` (L5): só `postgres` e `service_role` a executam (verificado pelo operador no Cloud em 2026-10-18; detalhes no v1.8 do roadmap).
+
 ### 4. Automations rodando
 ```sql
 SELECT COUNT(*) as recent_executions
