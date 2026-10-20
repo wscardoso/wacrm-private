@@ -93,6 +93,9 @@ describe('template header URL: refused destinations', () => {
     ['private literal', 'https://192.168.0.10/a.png'],
     ['internal single-label host', 'https://supabase-kong/a.png'],
     ['localhost', 'https://localhost/a.png'],
+    ['malformed', 'not a url'],
+    ['no host', 'https://'],
+    ['userinfo', 'https://user:pw@cdn.example.com/a.png'],
   ]
   it.each(byUrlPolicy)('%s: no connection, no upload, generic message', async (_label, url) => {
     const error = await ensureImageHeaderHandle(payload(url), 'tok', noStorage).catch((e) => e)
