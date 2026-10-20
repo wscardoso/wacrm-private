@@ -122,10 +122,11 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       }
       try {
         const u = new URL(String(c.url))
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        // Same rule safeFetch enforces at run time (https only).
+        if (u.protocol !== 'https:') {
           issues.push({
             path: `${path}.url`,
-            message: 'webhook URL must use http or https',
+            message: 'webhook URL must use https',
           })
         }
       } catch {

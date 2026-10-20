@@ -95,7 +95,7 @@ describe("validateStepsForActivation", () => {
       },
     ]);
     expect(wrongProtocol.map((i) => i.message)).toContain(
-      "webhook URL must use http or https",
+      "webhook URL must use https",
     );
 
     const garbage = validateStepsForActivation([
@@ -103,6 +103,16 @@ describe("validateStepsForActivation", () => {
     ]);
     expect(garbage.map((i) => i.message)).toContain(
       "webhook URL is not a valid URL",
+    );
+
+    const plainHttp = validateStepsForActivation([
+      {
+        step_type: "send_webhook",
+        step_config: { url: "http://hooks.example.com/in" },
+      },
+    ]);
+    expect(plainHttp.map((i) => i.message)).toContain(
+      "webhook URL must use https",
     );
   });
 
