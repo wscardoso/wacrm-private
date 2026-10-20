@@ -194,6 +194,9 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       updated_at: new Date().toISOString(),
     })
     .eq('id', input.conversationId)
+    // Defence in depth: the service-role client bypasses RLS, so never touch a
+    // conversation outside the account this send belongs to.
+    .eq('account_id', input.accountId)
 
   return { whatsapp_message_id: waMessageId }
 }

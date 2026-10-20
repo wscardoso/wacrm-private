@@ -9,6 +9,7 @@
  * Docs: https://uazapi.dev/docs
  */
 
+import { DestinationNotAllowedError, SafeFetchError, safeFetch } from '@/lib/http/safe-fetch'
 import type {
   WhatsAppProvider,
   SendResult,
@@ -35,6 +36,10 @@ import type {
  * never produced a `Response` throws a different shape with no status.
  */
 function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
+  // The network policy refused the destination before any connection existed:
+  // nothing was sent, and it will keep being refused until the configuration changes.
+  if (error instanceof DestinationNotAllowedError) return 'deterministic-permanent'
+
   const message = error instanceof Error ? error.message : String(error)
   const match = /failed \((\d{3})\):/.exec(message)
   if (match) {
@@ -57,6 +62,9 @@ function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
   }
   return 'ambiguous'
 }
+
+/** A uazapi API response is small (a QR code is the largest); anything bigger is not one. */
+const UAZAPI_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 export class UazapiProvider implements WhatsAppProvider {
   readonly kind = 'uazapi'
@@ -99,9 +107,40 @@ export class UazapiProvider implements WhatsAppProvider {
     return digits.endsWith('@s.whatsapp.net') ? digits : `${digits}@s.whatsapp.net`
   }
 
+  /**
+   * Single outbound HTTP exit for this provider. The server is tenant-supplied
+   * and every call carries the instance token in custom headers (`apikey`,
+   * `token`), so the request goes through safeFetch, which applies the network
+   * policy on the connection it makes: https on 443 only, every resolved
+   * address public (validated on each new connection, which also covers DNS
+   * rebinding) and no redirects. A redirect is a failure here; it reuses the
+   * `failed (<status>)` shape so classifyUazapiSendFailure keeps treating it as
+   * any other non-listed status (ambiguous). The fetch default would re-send
+   * custom headers across origins.
+   */
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+    let res: Response
+    try {
+      res = await safeFetch(`${this.baseUrl}${path}`, {
+        method: init.method,
+        headers: init.headers,
+        body: init.body as string | undefined,
+        maxResponseBytes: UAZAPI_MAX_RESPONSE_BYTES,
+      })
+    } catch (error) {
+      if (error instanceof SafeFetchError && error.code === 'redirect') {
+        throw new Error(`uazapi ${path} failed (${error.status}): redirect refused`)
+      }
+      throw error
+    }
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error(`uazapi ${path} failed (${res.status}): redirect refused`)
+    }
+    return res
+  }
+
   private async post(path: string, body: unknown): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`
-    const res = await fetch(url, {
+    const res = await this.request(path, {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -117,8 +156,9 @@ export class UazapiProvider implements WhatsAppProvider {
     const statusResult = await this.getInstanceStatus().catch(() => null)
     if (statusResult && statusResult.connected) return { connected: true }
 
-    const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
-    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    const res = await this.request(`/instance/connectionState/${this.instanceId}`, {
+      headers: this.headers(),
+    }).catch(() => null)
     if (!res || !res.ok) return { connected: false }
     const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
     return { connected: data.instance?.state === 'open' }
@@ -134,7 +174,7 @@ export class UazapiProvider implements WhatsAppProvider {
     if (phone) body.phone = phone.replace(/\D/g, '')
 
     try {
-      const connectRes = await fetch(`${this.baseUrl}/instance/connect`, {
+      const connectRes = await this.request('/instance/connect', {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body),
@@ -173,7 +213,7 @@ export class UazapiProvider implements WhatsAppProvider {
     connected: boolean
   }> {
     try {
-      const res = await fetch(`${this.baseUrl}/instance/status`, {
+      const res = await this.request('/instance/status', {
         headers: this.headers(),
       })
       if (res.ok) {
@@ -200,8 +240,9 @@ export class UazapiProvider implements WhatsAppProvider {
       // Fallback
     }
 
-    const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
-    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    const res = await this.request(`/instance/connectionState/${this.instanceId}`, {
+      headers: this.headers(),
+    }).catch(() => null)
     if (!res || !res.ok) return { status: 'disconnected', connected: false }
     const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
     const isConn = data.instance?.state === 'open'

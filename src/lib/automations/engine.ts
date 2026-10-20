@@ -19,6 +19,7 @@ import type {
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
 import { resolveAutomationDealWrite, type DealCurrent } from '@/lib/deals/status'
+import { DestinationNotAllowedError, SafeFetchError, safeFetch } from '@/lib/http/safe-fetch'
 
 // ------------------------------------------------------------
 // Deal-step guards
@@ -520,9 +521,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'add_tag': {
       // contact_tags has no account_id column; cross-tenant protection for
       // the attacker-supplied contactId comes from the ownership guard in
-      // runAutomationsForTrigger.
+      // runAutomationsForTrigger. The tag side is stored in the automation
+      // step_config and is NOT covered by that guard, so validate it here
+      // before the service-role write.
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('add_tag needs contact + tag_id')
+      if (!(await tagBelongsToAccount(db, args.automation.account_id, cfg.tag_id))) {
+        throw new Error('add_tag: tag not in account')
+      }
       await db
         .from('contact_tags')
         .upsert(
@@ -533,10 +539,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     }
 
     case 'remove_tag': {
-      // See add_tag: tenant scoping relies on the runAutomationsForTrigger
-      // ownership guard, since contact_tags carries no account_id.
+      // See add_tag: the contact is guarded at dispatch, but the tag_id in
+      // step_config is not — validate it against the automation's account.
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('remove_tag needs contact + tag_id')
+      if (!(await tagBelongsToAccount(db, args.automation.account_id, cfg.tag_id))) {
+        throw new Error('remove_tag: tag not in account')
+      }
       await db
         .from('contact_tags')
         .delete()
@@ -585,6 +594,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         agentId = typeof nextAgent === 'string' ? nextAgent : undefined
       }
       if (!agentId) return 'no agent resolved'
+      // round_robin resolves the agent inside an account-scoped RPC, but a
+      // "specific" step stores an arbitrary user_id in step_config. The
+      // FK only requires a profiles row, not one from this account, so
+      // validate membership before persisting the assignment.
+      if (
+        cfg.mode !== 'round_robin' &&
+        !(await agentBelongsToAccount(db, args.automation.account_id, agentId))
+      ) {
+        throw new Error('assign_conversation: agent not in account')
+      }
       await db
         .from('conversations')
         .update({ assigned_agent_id: agentId })
@@ -648,6 +667,20 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'create_deal': {
       const cfg = step.step_config as CreateDealStepConfig
       if (!cfg.pipeline_id || !cfg.stage_id) throw new Error('create_deal needs pipeline + stage')
+
+      // Tenant integrity: the service-role client bypasses RLS, so a
+      // pipeline/stage pair stored in step_config could point at another
+      // account. Same guard as move_deal_stage, extended to require that
+      // the stage belongs to the requested pipeline.
+      if (!(await pipelineStageBelongsToAccount(
+        db,
+        args.automation.account_id,
+        cfg.pipeline_id,
+        cfg.stage_id,
+      ))) {
+        throw new Error('create_deal: pipeline/stage not in account')
+      }
+
       // Match the account's configured default currency rather than
       // the static `deals.currency` DB default — keeps automation-
       // created deals consistent with the one-currency-per-account
@@ -817,11 +850,22 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as SendWebhookStepConfig
       if (!cfg.url) throw new Error('send_webhook needs url')
       const body = cfg.body_template ? interpolate(cfg.body_template, args) : JSON.stringify(args.context)
-      const res = await fetch(cfg.url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(cfg.headers ?? {}) },
-        body,
-      })
+      // `cfg.url` and `cfg.headers` are tenant-authored and this runs with
+      // server credentials, so the request goes through safeFetch (public
+      // https destinations only, no redirects, bounded). The refusal message
+      // is generic on purpose: it lands in the tenant-visible automation log.
+      let res: Response
+      try {
+        res = await safeFetch(cfg.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(cfg.headers ?? {}) },
+          body,
+        })
+      } catch (err) {
+        if (err instanceof DestinationNotAllowedError) throw new Error('webhook destination not allowed')
+        if (err instanceof SafeFetchError) throw new Error(`webhook request failed: ${err.message}`)
+        throw err
+      }
       if (!res.ok) throw new Error(`webhook returned ${res.status}`)
       return `webhook ${res.status}`
     }
@@ -847,14 +891,29 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
 /**
  * Pick the conversation a send-type step should use. Prefer the id the
- * webhook handed us (it's the one that just got the inbound message);
- * fall back to the contact's conversation for resumed/wait paths and
- * manual engine POSTs. Throws if none exists — send steps have
- * no meaningful target without a conversation.
+ * webhook handed us (it's the one that just got the inbound message), once
+ * verified against the account; fall back to the contact's conversation for
+ * resumed/wait paths and manual engine POSTs. Throws if none exists — send
+ * steps have no meaningful target without a conversation.
  */
 async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
-  if (fromCtx) return fromCtx
+  if (fromCtx) {
+    // `context` can be caller-supplied (the manual POST /api/automations/engine
+    // entrypoint passes `body.context` straight through) and the send writes a
+    // message row into this conversation with the service-role client. Only
+    // use the id when it belongs to this account (and to the triggering
+    // contact, when there is one); otherwise ignore it and fall back to the
+    // contact's own conversation, as when no id was given.
+    let owned = supabaseAdmin()
+      .from('conversations')
+      .select('id')
+      .eq('id', fromCtx)
+      .eq('account_id', args.automation.account_id)
+    if (args.contactId) owned = owned.eq('contact_id', args.contactId)
+    const { data: own } = await owned.maybeSingle()
+    if (own?.id) return own.id as string
+  }
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
   const { data, error } = await supabaseAdmin()
     .from('conversations')
@@ -892,6 +951,57 @@ async function resolveDealConversationId(args: ExecuteArgs): Promise<string | nu
     .eq('contact_id', args.contactId)
     .maybeSingle()
   return (data?.id as string | undefined) ?? null
+}
+
+/**
+ * Account ownership checks for step_config references.
+ *
+ * Every step runs through `supabaseAdmin()`, which bypasses RLS. The
+ * dispatch entrypoint only validates `contactId`; ids embedded in the
+ * stored step configuration (tags, pipelines/stages, agents) still need
+ * an explicit account-scoped lookup before they are written or attached.
+ */
+async function tagBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  tagId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('tags')
+    .select('id')
+    .eq('id', tagId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  return !!data
+}
+
+async function pipelineStageBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  pipelineId: string,
+  stageId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('pipeline_stages')
+    .select('id, pipeline_id, pipelines!inner(account_id)')
+    .eq('id', stageId)
+    .eq('pipelines.account_id', accountId)
+    .maybeSingle()
+  return !!data && (data as { pipeline_id?: string }).pipeline_id === pipelineId
+}
+
+async function agentBelongsToAccount(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  userId: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('profiles')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  return !!data
 }
 
 export function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {

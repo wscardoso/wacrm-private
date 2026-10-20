@@ -344,6 +344,9 @@ describe('assign_conversation round_robin', () => {
     const a = auto()
     h.setResolver((s) => {
       if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'profiles' && s.op === 'select') {
+        return { data: { user_id: 'u9' } }
+      }
       return baseResolver(a, [step('assign_conversation', { mode: 'specific', agent_id: 'u9' })])(s)
     })
 
@@ -578,6 +581,214 @@ describe('move_deal_stage', () => {
       (c) => (c.payload as any)?.status === 'failed',
     )
     expect(String((logUpdate!.payload as any).error_message)).toContain('not in account')
+  })
+})
+
+// ------------------------------------------------------------
+// F3 — step_config ownership guards (service-role writes)
+// ------------------------------------------------------------
+
+describe('add_tag / remove_tag — tag ownership', () => {
+  const a = auto()
+
+  it('adds a tag that belongs to the automation account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'tags' && s.op === 'select') return { data: { id: 'tag-own' } }
+      return baseResolver(a, [step('add_tag', { tag_id: 'tag-own' })])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    const tagLookup = h.calls.find((c) => c.table === 'tags' && c.op === 'select')
+    expect(tagLookup!.filters).toContainEqual(['account_id', ACCOUNT])
+    const upsert = findCall('contact_tags', 'upsert')
+    expect(upsert).toBeDefined()
+    expect(upsert!.payload).toEqual({ contact_id: CONTACT, tag_id: 'tag-own' })
+  })
+
+  it('refuses to add a tag from another account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'tags' && s.op === 'select') return { data: null }
+      return baseResolver(a, [step('add_tag', { tag_id: 'tag-foreign' })])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    expect(allCalls('contact_tags', 'upsert')).toHaveLength(0)
+    const failed = allCalls('automation_logs', 'update').find(
+      (c) => (c.payload as any)?.status === 'failed',
+    )
+    expect(String((failed!.payload as any).error_message)).toContain('not in account')
+  })
+
+  it('removes a tag that belongs to the automation account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'tags' && s.op === 'select') return { data: { id: 'tag-own' } }
+      return baseResolver(a, [step('remove_tag', { tag_id: 'tag-own' })])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    const del = findCall('contact_tags', 'delete')
+    expect(del).toBeDefined()
+    expect(del!.filters).toContainEqual(['contact_id', CONTACT])
+    expect(del!.filters).toContainEqual(['tag_id', 'tag-own'])
+  })
+
+  it('refuses to remove a tag from another account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'tags' && s.op === 'select') return { data: null }
+      return baseResolver(a, [step('remove_tag', { tag_id: 'tag-foreign' })])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    expect(allCalls('contact_tags', 'delete')).toHaveLength(0)
+  })
+})
+
+describe('create_deal — pipeline/stage ownership', () => {
+  const a = auto()
+  const dealStep = step('create_deal', {
+    pipeline_id: 'pl1',
+    stage_id: 'st1',
+    title: 'New deal',
+  })
+
+  it('creates the deal when the stage belongs to the requested account pipeline', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'pipeline_stages' && s.op === 'select') {
+        return { data: { id: 'st1', pipeline_id: 'pl1' } }
+      }
+      return baseResolver(a, [dealStep])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    const stageLookup = h.calls.find(
+      (c) => c.table === 'pipeline_stages' && c.op === 'select',
+    )
+    expect(stageLookup!.filters).toContainEqual(['pipelines.account_id', ACCOUNT])
+    const insert = findCall('deals', 'insert')
+    expect(insert).toBeDefined()
+    expect(insert!.payload).toMatchObject({
+      account_id: ACCOUNT,
+      contact_id: CONTACT,
+      pipeline_id: 'pl1',
+      stage_id: 'st1',
+    })
+  })
+
+  it('refuses a stage that does not exist in the account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'pipeline_stages' && s.op === 'select') return { data: null }
+      return baseResolver(a, [dealStep])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    expect(allCalls('deals', 'insert')).toHaveLength(0)
+    const failed = allCalls('automation_logs', 'update').find(
+      (c) => (c.payload as any)?.status === 'failed',
+    )
+    expect(String((failed!.payload as any).error_message)).toContain('not in account')
+  })
+
+  it('refuses a stage that belongs to a different pipeline', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'pipeline_stages' && s.op === 'select') {
+        return { data: { id: 'st1', pipeline_id: 'other-pipeline' } }
+      }
+      return baseResolver(a, [dealStep])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    expect(allCalls('deals', 'insert')).toHaveLength(0)
+  })
+})
+
+describe('assign_conversation — specific agent ownership', () => {
+  const a = auto()
+  const specificStep = step('assign_conversation', {
+    mode: 'specific',
+    agent_id: 'u2',
+  })
+
+  it('assigns an agent who belongs to the automation account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'profiles' && s.op === 'select') {
+        return { data: { user_id: 'u2' } }
+      }
+      return baseResolver(a, [specificStep])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    const profileLookup = h.calls.find((c) => c.table === 'profiles' && c.op === 'select')
+    expect(profileLookup!.filters).toContainEqual(['account_id', ACCOUNT])
+    const convUpdate = findCall('conversations', 'update')
+    expect((convUpdate!.payload as any).assigned_agent_id).toBe('u2')
+  })
+
+  it('refuses an agent from another account', async () => {
+    h.setResolver((s) => {
+      if (s.table === 'contacts') return { data: { id: CONTACT } }
+      if (s.table === 'profiles' && s.op === 'select') return { data: null }
+      return baseResolver(a, [specificStep])(s)
+    })
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: 'new_contact_created',
+      contactId: CONTACT,
+    })
+
+    expect(allCalls('conversations', 'update')).toHaveLength(0)
+    const failed = allCalls('automation_logs', 'update').find(
+      (c) => (c.payload as any)?.status === 'failed',
+    )
+    expect(String((failed!.payload as any).error_message)).toContain('not in account')
   })
 })
 

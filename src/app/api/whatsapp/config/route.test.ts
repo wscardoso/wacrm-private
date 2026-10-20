@@ -23,10 +23,11 @@ import { NextResponse } from 'next/server'
 //      and never call bootstrapConnection.
 // =============================================================
 
-const { mockRequireRole, mockZapiCheckStatus, mockUazapiCheckStatus } = vi.hoisted(() => ({
+const { mockRequireRole, mockZapiCheckStatus, mockUazapiCheckStatus, mockAssertDestination } = vi.hoisted(() => ({
   mockRequireRole: vi.fn(),
   mockZapiCheckStatus: vi.fn(),
   mockUazapiCheckStatus: vi.fn(),
+  mockAssertDestination: vi.fn(),
 }))
 
 vi.mock('@/lib/auth/account', () => ({
@@ -64,6 +65,13 @@ vi.mock('@/lib/whatsapp/providers/uazapi', () => ({
   },
 }))
 
+// The destination policy itself (public addresses, https/443, ...) is tested in
+// src/lib/http/safe-fetch.test.ts; here only the route's reaction to it is.
+vi.mock('@/lib/http/safe-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/http/safe-fetch')>()),
+  assertOutboundDestination: mockAssertDestination,
+}))
+
 // admin-client is shared by config/route.ts (Meta "claimed number" check)
 // AND, transitively, by bootstrapConnection() inside webhook-auth.ts —
 // mocking the module once covers both call sites. webhook-auth.ts itself
@@ -92,6 +100,7 @@ vi.mock('@/lib/supabase/admin-client', () => ({
 }))
 
 import { hashWebhookSecret } from '@/lib/whatsapp/webhook-auth'
+import { DestinationNotAllowedError, SafeFetchError } from '@/lib/http/safe-fetch'
 import { POST } from './route'
 
 function request(body: Record<string, unknown>): Request {
@@ -116,6 +125,7 @@ beforeEach(() => {
   mockRequireRole.mockResolvedValue({ supabase: sessionDb, userId: 'user-1', accountId: 'acc-1' })
   mockZapiCheckStatus.mockResolvedValue({ connected: true })
   mockUazapiCheckStatus.mockResolvedValue({ connected: true })
+  mockAssertDestination.mockResolvedValue(undefined) // destination accepted unless a test says otherwise
 })
 
 describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', () => {
@@ -291,5 +301,71 @@ describe('POST /api/whatsapp/config — Meta: connection_id satisfaz a coluna NO
     // even though Meta's own webhook route never reads it.
     expect((insertedRow as unknown as Record<string, unknown>).connection_id).toBeTruthy()
     expect(data.webhook_secret).toBeUndefined()
+  })
+})
+
+describe('POST /api/whatsapp/config: uazapi server URL policy at save time', () => {
+  const uazapiBody = { provider: 'uazapi', instance_id: 'inst-9', base_url: 'https://tenant-server.example', access_token: 'tok' }
+  const NOT_ALLOWED = 'The server URL is not allowed. Use a public https address (port 443).'
+
+  function insertSpy() {
+    const insert = vi.fn(() => ({ then: (r: (v: unknown) => void) => r({ data: null, error: null }) }))
+    ;(sessionDb.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
+      if (table !== 'whatsapp_config') return { then: (r: (v: unknown) => void) => r({ data: null, error: null }) }
+      const chain: Record<string, unknown> = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+        insert,
+        update: vi.fn(() => chain),
+      }
+      return chain
+    })
+    return insert
+  }
+
+  it('asks the policy about the exact server URL that was submitted', async () => {
+    insertSpy()
+    await POST(request(uazapiBody))
+    expect(mockAssertDestination).toHaveBeenCalledTimes(1)
+    expect(mockAssertDestination).toHaveBeenCalledWith('https://tenant-server.example')
+  })
+
+  it.each([
+    ['a refused destination', () => new DestinationNotAllowedError('address')],
+    ['an IP literal', () => new DestinationNotAllowedError('ip_literal')],
+    ['a name that does not resolve', () => new SafeFetchError('network', { cause: new Error('ENOTFOUND') })],
+  ])('%s: 400 with one generic message, no connectivity check, nothing stored', async (_label, makeError) => {
+    const insert = insertSpy()
+    mockAssertDestination.mockRejectedValue(makeError())
+    const res = await POST(request(uazapiBody))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body).toEqual({ error: NOT_ALLOWED })
+    expect(JSON.stringify(body)).not.toMatch(/tenant-server|private|literal|loopback|resolve|ENOTFOUND/i)
+    expect(mockUazapiCheckStatus).not.toHaveBeenCalled() // no request left for that server
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('an accepted destination continues to the connectivity check and is stored', async () => {
+    const insert = insertSpy()
+    const res = await POST(request(uazapiBody))
+    expect(mockUazapiCheckStatus).toHaveBeenCalledTimes(1)
+    expect(res.status).not.toBe(400)
+    expect(insert).toHaveBeenCalled()
+  })
+
+  it('an unexpected failure of the check is not disguised as a policy answer', async () => {
+    insertSpy()
+    mockAssertDestination.mockRejectedValue(new Error('boom'))
+    const res = await POST(request(uazapiBody))
+    expect(res.status).toBe(500)
+    expect(mockUazapiCheckStatus).not.toHaveBeenCalled()
+  })
+
+  it('Z-API does not go through the uazapi policy (its host is fixed)', async () => {
+    insertSpy()
+    await POST(request({ provider: 'zapi', instance_id: 'inst-1', access_token: 'tok' }))
+    expect(mockAssertDestination).not.toHaveBeenCalled()
   })
 })

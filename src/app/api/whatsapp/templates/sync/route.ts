@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
+import { assertSameGraphEndpoint } from '@/lib/whatsapp/graph-paging'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 
 /**
@@ -180,9 +181,8 @@ export async function POST() {
     const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(accountId))
 
     const metaTemplates: MetaTemplate[] = []
-    let nextUrl:
-      | string
-      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+    const firstUrl = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+    let nextUrl: string | null = firstUrl
     const PAGE_CAP = 20
     let pageCount = 0
 
@@ -209,6 +209,16 @@ export async function POST() {
       } = await metaRes.json()
       if (metaBody.data) metaTemplates.push(...metaBody.data)
       nextUrl = metaBody.paging?.next ?? null
+      if (nextUrl) {
+        // `paging.next` comes from the response body and is fetched with the
+        // account's token: only the same Graph endpoint (new cursor) is acceptable.
+        try {
+          nextUrl = assertSameGraphEndpoint(nextUrl, firstUrl)
+        } catch {
+          console.error('[templates/sync] refusing a pagination URL that is not the Graph templates endpoint')
+          return NextResponse.json({ error: 'Unexpected pagination response from Meta.' }, { status: 502 })
+        }
+      }
     }
 
     let inserted = 0
