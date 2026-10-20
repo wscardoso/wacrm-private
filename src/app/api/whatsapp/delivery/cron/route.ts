@@ -2,12 +2,13 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { getProvider, type WhatsAppProvider } from '@/lib/whatsapp/providers'
+import { getProvider, providerConfigFromRow, type WhatsAppProvider } from '@/lib/whatsapp/providers'
 import type { SendResult } from '@/lib/whatsapp/providers/types'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { settleMessageSystem, type SettlementResult } from '@/lib/whatsapp/delivery/settlement'
+import { evaluateBinding } from '@/lib/whatsapp/delivery/connection-binding'
 import { classifyFailure } from '@/lib/whatsapp/delivery/failure-classifier'
 import { decideRetryOutcome, DEFAULT_BACKOFF_CONFIG, DEFAULT_TTL_MS, MAX_ATTEMPT_COUNT } from '@/lib/whatsapp/delivery/retry-policy'
 import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
@@ -85,6 +86,65 @@ export async function GET(request: Request) {
 
 type DrainResult = 'processed' | 'dead' | 'skipped'
 
+type QueryError = { code?: string; message?: string }
+
+/** PostgREST `.single()` with zero rows. The only lookup error that means "absent". */
+function isNoRowsError(err: QueryError): boolean {
+  return err.code === 'PGRST116'
+}
+
+/**
+ * A lookup failed for a reason that says nothing about the message or the
+ * connection (incompatible schema, permissions, network…). The entry was
+ * claimed (`retrying`); give it back as `pending`, keeping its due
+ * `next_attempt_at`, with an explicit reason. Nothing is sent, settled or
+ * dead-lettered. The status guard keeps this from overwriting a row another
+ * worker already moved on; if this update itself fails, the stuck-`retrying`
+ * reclaim of the orphan sweep returns the entry to `pending` later.
+ */
+async function releaseAfterQueryError(
+  admin: ReturnType<typeof supabaseAdmin>,
+  row: { id: string },
+  what: string,
+  err: QueryError,
+): Promise<DrainResult> {
+  const detail = `${what} failed (${err.code ?? 'no code'}): ${(err.message ?? 'unknown').slice(0, 200)}`
+  console.error('[delivery-cron] entry %s %s — not dead-lettered, will be retried', row.id, detail)
+  const { error: releaseError } = await admin
+    .from('outbound_retry_ledger')
+    .update({ status: 'pending', last_error: `${detail} — not dead-lettered` })
+    .eq('id', row.id)
+    .eq('status', 'retrying')
+  if (releaseError) {
+    console.error('[delivery-cron] entry %s release failed (stuck-retrying reclaim will recover it): %s', row.id, releaseError.message)
+  }
+  return 'skipped'
+}
+
+/**
+ * The entry cannot be re-sent safely: keep it for a human / the TTL, with the
+ * reason in `last_error`. Same shape as ADR-E4B-002 §5 caminho D (`pending`,
+ * `next_attempt_at NULL`, never selected again). The message is not touched
+ * and nothing is sent. Never `dead`: an unprovable identity is not a verdict
+ * on the message.
+ */
+async function blockEntry(
+  admin: ReturnType<typeof supabaseAdmin>,
+  row: { id: string },
+  reason: string,
+  detail: string,
+): Promise<DrainResult> {
+  await admin
+    .from('outbound_retry_ledger')
+    .update({
+      status: 'pending',
+      next_attempt_at: null,
+      last_error: `blocked (${reason}): ${detail}`.slice(0, 500),
+    })
+    .eq('id', row.id)
+  return 'processed'
+}
+
 async function processDueEntry(
   admin: ReturnType<typeof supabaseAdmin>,
   row: { id: string; message_id: string; attempt_count: number; classification: string; created_at: string },
@@ -102,10 +162,17 @@ async function processDueEntry(
   // ── 2. Load message + conversation + contact + provider config ──
   const { data: msg, error: msgErr } = await admin
     .from('messages')
-    .select('id, conversation_id, content_type, content_text, media_url, template_name, reply_to_message_id, connection_ref, created_at')
+    .select('id, conversation_id, content_type, content_text, media_url, template_name, reply_to_message_id, connection_ref, delivery_provider, delivery_channel_fp, created_at')
     .eq('id', row.message_id)
     .single()
 
+  // Only "the row is not there" is a reason to dead-letter. Any other failure
+  // of the lookup (an incompatible schema such as a missing column, a
+  // permission problem, a network error) says nothing about the message, so
+  // the entry is released unchanged instead of being destroyed.
+  if (msgErr && !isNoRowsError(msgErr)) {
+    return releaseAfterQueryError(admin, row, 'message lookup', msgErr)
+  }
   if (msgErr || !msg) {
     await admin
       .from('outbound_retry_ledger')
@@ -114,11 +181,16 @@ async function processDueEntry(
     return 'dead'
   }
 
-  const { data: conv } = await admin
+  const { data: conv, error: convErr } = await admin
     .from('conversations')
-    .select('contact:contacts(phone)')
+    .select('account_id, contact:contacts(phone)')
     .eq('id', msg.conversation_id)
     .single()
+
+  // Same rule as the message lookup: a failed query is not "no recipient".
+  if (convErr && !isNoRowsError(convErr)) {
+    return releaseAfterQueryError(admin, row, 'conversation lookup', convErr)
+  }
 
   const phone = (conv as { contact: { phone: string } | null } | null)?.contact?.phone
   if (!phone) {
@@ -130,35 +202,62 @@ async function processDueEntry(
   }
   const to = sanitizePhoneForMeta(phone)
 
-  const connectionRef = msg.connection_ref as string
+  // ── 2b. Delivery identity gate ─────────────────────────────
+  // A message is re-sent only when the connection that exists NOW is provably
+  // the channel it was created for (provider + WhatsApp number / uazapi
+  // instance, recorded in the same INSERT that created it) and belongs to the
+  // conversation's own account. `whatsapp_config` rows are edited in place, so
+  // the id alone proves nothing. Anything unprovable is BLOCKED — ledger entry
+  // `pending`, `next_attempt_at NULL`, explicit reason, message untouched —
+  // never sent through another channel and never `dead`.
+  const stored = {
+    connection_ref: msg.connection_ref as string | null | undefined,
+    delivery_provider: msg.delivery_provider as string | null | undefined,
+    delivery_channel_fp: msg.delivery_channel_fp as string | null | undefined,
+  }
+  const conversationAccountId = (conv as { account_id?: string | null } | null)?.account_id ?? null
+
+  const unrecorded = evaluateBinding({ stored, conversationAccountId, connection: null })
+  if (!unrecorded.ok && (unrecorded.reason === 'binding_missing' || unrecorded.reason === 'binding_invalid')) {
+    return blockEntry(admin, row, unrecorded.reason, unrecorded.detail)
+  }
+
+  const connectionRef = stored.connection_ref as string
   const { data: wc, error: wcErr } = await admin
     .from('whatsapp_config')
     .select('*')
     .eq('id', connectionRef)
     .maybeSingle()
 
-  if (wcErr || !wc) {
-    await admin
-      .from('outbound_retry_ledger')
-      .update({ status: 'dead', last_error: `provider config not found: ${wcErr?.message ?? 'unknown'}` })
-      .eq('id', row.id)
-    return 'dead'
+  // A failed lookup says nothing about the connection (see releaseAfterQueryError);
+  // a row that is really absent is `connection_removed`, decided below.
+  if (wcErr) {
+    return releaseAfterQueryError(admin, row, 'provider config lookup', wcErr)
+  }
+
+  const verdict = evaluateBinding({ stored, conversationAccountId, connection: wc ?? null })
+  if (!verdict.ok) {
+    return blockEntry(admin, row, verdict.reason, verdict.detail)
   }
 
   const bc = whatsappConfigBindingContext(wc.account_id)
   const accessToken = decryptWithBindingContext(wc.access_token, bc)
-  let clientToken: string | undefined
-  if (wc.provider === 'zapi' && wc.waba_id) {
-    try { clientToken = decryptWithBindingContext(wc.waba_id, bc) } catch { /* ignore */ }
-  }
+  // The verdict already proved the provider is supported and unchanged.
+  const provider: WhatsAppProvider = getProvider(providerConfigFromRow(wc, accessToken))
 
-  const provider: WhatsAppProvider = getProvider(
-    wc.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: wc.instance_id, accessToken, clientToken }
-      : wc.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: wc.base_url, instanceId: wc.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: wc.phone_number_id, accessToken, verifyToken: '' },
-  )
+  // Evidence that re-sending is safe. `deterministic_transient` is recorded by
+  // the adapter of THE SAME provider (proved above) only when it is certain the
+  // attempt was not accepted; `nativeIdempotency` would make a duplicate
+  // harmless. Neither current provider declares the latter, and every
+  // ambiguous outcome stays blocked (ADR-E4B-002 §5 caminho D).
+  if (row.classification !== 'deterministic_transient' && !provider.capabilities.nativeIdempotency) {
+    return blockEntry(
+      admin,
+      row,
+      'no_evidence_of_non_delivery',
+      `ledger classification is "${row.classification}" and ${verdict.provider} declares no native idempotency`,
+    )
+  }
 
   // ── 3. Resolve context (reply-to) ──────────────────────────
   const replyToId = msg.reply_to_message_id

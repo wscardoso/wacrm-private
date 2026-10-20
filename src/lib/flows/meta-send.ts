@@ -5,8 +5,8 @@ import {
   isValidE164,
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
-import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { getProvider, providerConfigFromRow, type ExternalIdentity } from '@/lib/whatsapp/providers'
+import { createIntent, settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
 import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
@@ -90,34 +90,21 @@ export async function engineSendText(
   const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
-  let clientToken: string | undefined
-  if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
-  }
-  const provider = getProvider(
-    config.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-      : config.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-  )
+  const provider = getProvider(providerConfigFromRow(config, accessToken))
 
   // ── ODI-001 §4: create intent before provider call ──
   const messageId = crypto.randomUUID()
-  const { error: intentErr } = await db
-    .from('messages')
-    .insert({
-      id: messageId,
-      conversation_id: args.conversationId,
-      sender_type: 'bot',
-      content_type: 'text',
-      content_text: args.text,
-      status: 'sending',
-      idempotency_key: messageId,
+  try {
+    await createIntent(db, {
+      messageId,
+      conversationId: args.conversationId,
+      contentType: 'text',
+      connection: config,
+      senderType: 'bot',
+      contentText: args.text,
     })
-
-  if (intentErr) {
-    throw new Error(`failed to create message row: ${intentErr.message}`)
+  } catch (err) {
+    throw new Error(`failed to create message row: ${(err as { message?: string })?.message ?? 'unknown'}`)
   }
 
   // ── ODI-001 §5: send then settle ──
@@ -222,35 +209,22 @@ export async function engineSendMedia(
   const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
-  let clientToken: string | undefined
-  if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
-  }
-  const provider = getProvider(
-    config.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-      : config.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-  )
+  const provider = getProvider(providerConfigFromRow(config, accessToken))
 
   // ── ODI-001 §4: create intent before provider call ──
   const messageId = crypto.randomUUID()
   const preview = args.caption?.trim() || `[${args.kind}]`
-  const { error: intentErr } = await db
-    .from('messages')
-    .insert({
-      id: messageId,
-      conversation_id: args.conversationId,
-      sender_type: 'bot',
-      content_type: args.kind,
-      content_text: args.caption ?? null,
-      status: 'sending',
-      idempotency_key: messageId,
+  try {
+    await createIntent(db, {
+      messageId,
+      conversationId: args.conversationId,
+      contentType: args.kind,
+      connection: config,
+      senderType: 'bot',
+      contentText: args.caption ?? null,
     })
-
-  if (intentErr) {
-    throw new Error(`failed to create message row: ${intentErr.message}`)
+  } catch (err) {
+    throw new Error(`failed to create message row: ${(err as { message?: string })?.message ?? 'unknown'}`)
   }
 
   // ── ODI-001 §5: send then settle ──
@@ -393,34 +367,21 @@ async function sendInteractiveViaMeta(
   const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
-  let clientToken: string | undefined
-  if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
-  }
-  const provider = getProvider(
-    config.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-      : config.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-  )
+  const provider = getProvider(providerConfigFromRow(config, accessToken))
 
   // ── ODI-001 §4: create intent before provider call ──
   const messageId = crypto.randomUUID()
-  const { error: intentErr } = await db
-    .from('messages')
-    .insert({
-      id: messageId,
-      conversation_id: input.conversationId,
-      sender_type: 'bot',
-      content_type: 'interactive',
-      content_text: input.bodyText,
-      status: 'sending',
-      idempotency_key: messageId,
+  try {
+    await createIntent(db, {
+      messageId,
+      conversationId: input.conversationId,
+      contentType: 'interactive',
+      connection: config,
+      senderType: 'bot',
+      contentText: input.bodyText,
     })
-
-  if (intentErr) {
-    throw new Error(`failed to create message row: ${intentErr.message}`)
+  } catch (err) {
+    throw new Error(`failed to create message row: ${(err as { message?: string })?.message ?? 'unknown'}`)
   }
 
   // ── ODI-001 §5: send then settle ──

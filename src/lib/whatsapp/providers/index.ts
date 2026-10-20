@@ -10,11 +10,10 @@
  */
 
 import { MetaProvider } from './meta'
-import { ZApiProvider } from './zapi'
 import { UazapiProvider } from './uazapi'
 import { ProviderUnsupportedError } from './types'
 
-export { MetaProvider, ZApiProvider, UazapiProvider, ProviderUnsupportedError }
+export { MetaProvider, UazapiProvider, ProviderUnsupportedError }
 export type {
   WhatsAppProvider,
   SendResult,
@@ -32,7 +31,6 @@ export type {
 
 export type ProviderConfig =
   | { provider: 'meta'; phoneNumberId: string; accessToken: string; verifyToken: string }
-  | { provider: 'zapi'; instanceId: string; accessToken: string; clientToken?: string }
   | { provider: 'uazapi'; baseUrl: string; instanceId: string; accessToken: string }
 
 export function getProvider(config: ProviderConfig) {
@@ -42,12 +40,6 @@ export function getProvider(config: ProviderConfig) {
         phoneNumberId: config.phoneNumberId,
         accessToken: config.accessToken,
         verifyToken: config.verifyToken,
-      })
-    case 'zapi':
-      return new ZApiProvider({
-        instanceId: config.instanceId,
-        token: config.accessToken,
-        clientToken: config.clientToken,
       })
     case 'uazapi':
       return new UazapiProvider({
@@ -59,5 +51,47 @@ export function getProvider(config: ProviderConfig) {
       const p = (config as { provider: string }).provider
       throw new ProviderUnsupportedError(p)
     }
+  }
+}
+
+/**
+ * The columns of a `whatsapp_config` row that decide which adapter handles
+ * the connection. Every call site that builds a provider from a stored row
+ * goes through `providerConfigFromRow`, so the row → adapter mapping lives
+ * next to `getProvider` instead of being repeated as a ternary chain.
+ */
+export interface ProviderConfigRow {
+  provider?: string | null
+  instance_id?: string | null
+  base_url?: string | null
+  phone_number_id?: string | null
+}
+
+/**
+ * Maps a stored `whatsapp_config` row (access token already decrypted) to a
+ * `ProviderConfig`. Selection is EXPLICIT: only `meta` (or a missing value,
+ * the column default) and `uazapi` are supported. Any other value — including
+ * the discontinued `zapi` still present in rows saved before its removal —
+ * throws `ProviderUnsupportedError`. It must never fall through to Meta: that
+ * would run a non-Meta credential against the Meta API.
+ */
+export function providerConfigFromRow(row: ProviderConfigRow, accessToken: string): ProviderConfig {
+  switch (row.provider ?? 'meta') {
+    case 'meta':
+      return {
+        provider: 'meta',
+        phoneNumberId: row.phone_number_id as string,
+        accessToken,
+        verifyToken: '',
+      }
+    case 'uazapi':
+      return {
+        provider: 'uazapi',
+        baseUrl: row.base_url as string,
+        instanceId: row.instance_id as string,
+        accessToken,
+      }
+    default:
+      throw new ProviderUnsupportedError(String(row.provider))
   }
 }

@@ -28,7 +28,7 @@ import {
 } from '@/lib/rate-limit'
 import type { MessageTemplate } from '@/types'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
-import { getProvider, type WhatsAppProvider, type ExternalIdentity, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+import { getProvider, providerConfigFromRow, type WhatsAppProvider, type ExternalIdentity, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
 import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
 
 type MediaKind = 'image' | 'video' | 'document' | 'audio'
@@ -297,17 +297,7 @@ export async function POST(request: Request) {
     // Unified creation via getProvider — sole dispatch authority.
     let provider: WhatsAppProvider
     try {
-      let clientToken: string | undefined
-      if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
-      }
-      provider = getProvider(
-        config.provider === 'zapi'
-          ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-          : config.provider === 'uazapi'
-            ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-            : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-      )
+      provider = getProvider(providerConfigFromRow(config, accessToken))
     } catch (err) {
       if (err instanceof ProviderUnsupportedError) {
         return NextResponse.json({ error: err.message }, { status: 400 })
@@ -332,7 +322,7 @@ export async function POST(request: Request) {
           messageId,
           conversationId: conversation_id,
           contentType: message_type,
-          connectionRef: config.id,
+          connection: config,
           contentText: content_text,
           mediaUrl: media_url,
           replyToMessageId: reply_to_message_id,
@@ -398,6 +388,8 @@ export async function POST(request: Request) {
             updated_at: new Date().toISOString(),
           })
           .eq('id', conversation_id)
+
+        await pauseFlowRunsOnAgentSend(accountId, contact.id)
       }
 
       return NextResponse.json({
@@ -455,7 +447,7 @@ export async function POST(request: Request) {
         messageId,
         conversationId: conversation_id,
         contentType: message_type,
-        connectionRef: config.id,
+        connection: config,
         contentText: content_text,
         mediaUrl: media_url,
         templateName: template_name,
@@ -566,26 +558,7 @@ export async function POST(request: Request) {
         })
         .eq('id', conversation_id)
 
-      try {
-        const { error: pauseErr } = await supabaseAdmin()
-          .from('flow_runs')
-          .update({
-            status: 'paused_by_agent',
-            ended_at: new Date().toISOString(),
-            end_reason: 'agent_replied',
-          })
-          .eq('account_id', accountId)
-          .eq('contact_id', contact.id)
-          .eq('status', 'active')
-        if (pauseErr) {
-          console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
-        }
-      } catch (err) {
-        console.error(
-          '[flows] pause-on-agent-send threw:',
-          err instanceof Error ? err.message : err,
-        )
-      }
+      await pauseFlowRunsOnAgentSend(accountId, contact.id)
     }
 
     return NextResponse.json({
@@ -598,6 +571,41 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: 'Failed to send message' },
       { status: 500 }
+    )
+  }
+}
+
+/**
+ * A human agent's confirmed outbound send ends any active flow run for
+ * the same (account, contact), so the flow stops answering over the
+ * agent. Terminal, not resumable: `ended_at` is set and no code path
+ * reactivates the run. Best-effort — a failure is logged and never
+ * fails the send, which already reached the provider.
+ *
+ * Shared by the Meta and non-Meta provider paths; the caller invokes it
+ * only once the send settled as `sent` (ODI-001 §7, gate N-3). Scope is
+ * `flow_runs` only: it neither assigns the conversation nor records a
+ * handoff, so it is not an AI-agent handoff signal (ADR-AI-001, Q11).
+ */
+async function pauseFlowRunsOnAgentSend(accountId: string, contactId: string): Promise<void> {
+  try {
+    const { error: pauseErr } = await supabaseAdmin()
+      .from('flow_runs')
+      .update({
+        status: 'paused_by_agent',
+        ended_at: new Date().toISOString(),
+        end_reason: 'agent_replied',
+      })
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+      .eq('status', 'active')
+    if (pauseErr) {
+      console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+    }
+  } catch (err) {
+    console.error(
+      '[flows] pause-on-agent-send threw:',
+      err instanceof Error ? err.message : err,
     )
   }
 }

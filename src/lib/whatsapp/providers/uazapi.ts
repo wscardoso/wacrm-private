@@ -29,7 +29,7 @@ import type {
 /**
  * ADR-E4B-003 §3.4 — uazapi-specific interpretation, confined to this file.
  *
- * Same shape as Z-API: `post()` throws `Error('uazapi <path> failed
+ * `post()` throws `Error('uazapi <path> failed
  * (<status>): <text>')` whenever a response was received but not ok,
  * so the status is always recoverable there. A `fetch()` failure that
  * never produced a `Response` throws a different shape with no status.

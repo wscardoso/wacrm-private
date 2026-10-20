@@ -15,39 +15,14 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { ZApiProvider } from './zapi'
 import { UazapiProvider } from './uazapi'
 import { MetaProvider } from './meta'
 
-const zapi = new ZApiProvider({ instanceId: 'inst-123', token: 'tok-456' })
 const uazapi = new UazapiProvider({ baseUrl: 'https://my.uazapi.dev', instanceId: 'inst', token: 'key' })
 const meta = new MetaProvider({
   phoneNumberId: '123456789',
   accessToken: 'tok',
   verifyToken: 'vt',
-})
-
-describe('D-C invariant: Z-API', () => {
-  // Z-API MessageStatusCallback — parseStatusEvent recognises it,
-  // parseInboundMessage returns a phantom 'unknown'.
-  const statusPayload = {
-    phone: '5511999887766',
-    ids: ['wamid.abc123'],
-    type: 'MessageStatusCallback',
-    ack: 'RECEIVED',
-    momment: 1710000000123,
-  }
-
-  it('parseStatusEvent recognises the status callback', () => {
-    expect(zapi.parseStatusEvent(statusPayload).length).toBeGreaterThan(0)
-  })
-
-  it('parseInboundMessage DOES NOT filter the status callback (phantom)', () => {
-    const parsed = zapi.parseInboundMessage(statusPayload)
-    expect(parsed).not.toBeNull()
-    expect(parsed?.type).toBe('unknown')
-    expect(parsed?.messageId).toBe('') // no messageId in status callback
-  })
 })
 
 describe('D-C invariant: UAZAPI', () => {

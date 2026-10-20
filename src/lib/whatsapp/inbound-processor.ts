@@ -5,7 +5,7 @@
  * its own inline implementation to preserve full backward compatibility.
  * This module serves the new multi-provider webhook route
  * (src/app/api/whatsapp/webhook/[provider]/[webhookSecret]/route.ts),
- * which handles Z-API, uazapi, and Evolution inbound events via the
+ * which handles uazapi and Evolution inbound events via the
  * normalized InboundMessage interface.
  *
  * When the Meta webhook is eventually unified, this is the shared base
@@ -253,7 +253,7 @@ export async function processInboundMessage(
   const contentType = toContentType(inbound.type)
 
   // For media:
-  //   - mediaRefIsUrl=true  → direct URL (Z-API / uazapi / Evolution)
+  //   - mediaRefIsUrl=true  → direct URL (uazapi / Evolution)
   //   - mediaRefIsUrl=false → Meta media ID → proxy URL (not used here,
   //     but guard defensively so we never accidentally store an opaque ID)
   let mediaUrl: string | null = null
@@ -284,7 +284,7 @@ export async function processInboundMessage(
   const isFirstInboundMessage = (priorCount ?? 0) === 0
 
   // 7) Parse timestamp
-  // Z-API sends momment in milliseconds; Meta sends in seconds.
+  // Some non-Meta providers send milliseconds; Meta sends seconds.
   // Detect by magnitude: if > 1e12 it's already ms, otherwise treat as seconds.
   const tsNum = Number(inbound.timestamp)
   const createdAt = isNaN(tsNum)

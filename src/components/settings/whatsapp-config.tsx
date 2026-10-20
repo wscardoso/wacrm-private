@@ -38,7 +38,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
-import type { WhatsAppConfig as WhatsAppConfigType, WhatsAppProviderKind } from '@/types';
+import type { WhatsAppConfig as WhatsAppConfigType, WhatsAppProviderKind, PersistedWhatsAppProviderKind } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
 
@@ -50,11 +50,6 @@ const PROVIDERS: { value: WhatsAppProviderKind; label: string; description: stri
     value: 'meta',
     label: 'Meta (API Oficial)',
     description: 'WhatsApp Business API oficial da Meta. Requer conta verificada no Meta Business.',
-  },
-  {
-    value: 'zapi',
-    label: 'Z-API',
-    description: 'Provider depreciado. Mantido apenas para contas que já o utilizam — novas conexões devem usar uazapi.',
   },
   {
     value: 'uazapi',
@@ -86,6 +81,11 @@ export function WhatsAppConfig() {
   const PROVIDER_DRAFT_KEY = 'wa-provider-draft';
   const [provider, setProvider] = useState<WhatsAppProviderKind>('meta');
 
+  // A persisted `zapi` value (discontinued provider) is never selectable and
+  // never restored from a stale session draft: the form falls back to uazapi
+  // so the operator can re-enter credentials and migrate the connection.
+  const isSupportedProvider = (v: unknown): v is WhatsAppProviderKind => v === 'meta' || v === 'uazapi';
+
   function changeProvider(val: WhatsAppProviderKind) {
     setProvider(val);
     try { sessionStorage.setItem(PROVIDER_DRAFT_KEY, val); } catch {}
@@ -106,9 +106,6 @@ export function WhatsAppConfig() {
   // Non-Meta fields
   const [instanceId, setInstanceId] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
-  const [clientToken, setClientToken] = useState('');       // Z-API Security Token
-  const [clientTokenEdited, setClientTokenEdited] = useState(false);
-  const [showClientToken, setShowClientToken] = useState(false);
 
   const isRegistered = Boolean(config?.registered_at);
   const lastRegistrationError = config?.last_registration_error ?? null;
@@ -222,13 +219,15 @@ export function WhatsAppConfig() {
 
       if (data) {
         setConfig(data);
-        const savedProvider = (data.provider as WhatsAppProviderKind) ?? 'meta';
+        const savedProvider = (data.provider as PersistedWhatsAppProviderKind) ?? 'meta';
         // Prefer an unsaved user draft over whatever's in the DB, so navigating
         // away and back doesn't discard a pending provider switch.
         const draft = typeof window !== 'undefined'
-          ? (sessionStorage.getItem(PROVIDER_DRAFT_KEY) as WhatsAppProviderKind | null)
+          ? sessionStorage.getItem(PROVIDER_DRAFT_KEY)
           : null;
-        const effectiveProvider = draft ?? savedProvider;
+        const effectiveProvider: WhatsAppProviderKind = isSupportedProvider(draft)
+          ? draft
+          : savedProvider === 'zapi' ? 'uazapi' : savedProvider;
         setProvider(effectiveProvider);
 
         if (savedProvider === 'meta') {
@@ -240,15 +239,22 @@ export function WhatsAppConfig() {
           setTokenEdited(false);
           setInstanceId('');
           setBaseUrl('');
-          setClientToken('');
+        } else if (savedProvider === 'zapi') {
+          // Discontinued provider: its credentials are useless for uazapi/Meta,
+          // so none of them is pre-filled and the operator must enter new ones.
+          setInstanceId('');
+          setBaseUrl('');
+          setAccessToken('');
+          setVerifyToken('');
+          setTokenEdited(false);
+          setPhoneNumberId('');
+          setWabaId('');
+          setPin('');
         } else {
           setInstanceId(data.instance_id || '');
           setBaseUrl(data.base_url || '');
           setAccessToken(MASKED_TOKEN);
           setVerifyToken('');
-          // waba_id stores the encrypted Security Token for Z-API; mask it if present
-          setClientToken(savedProvider === 'zapi' && data.waba_id ? MASKED_TOKEN : '');
-          setClientTokenEdited(false);
           setTokenEdited(false);
           setPhoneNumberId('');
           setWabaId('');
@@ -258,9 +264,9 @@ export function WhatsAppConfig() {
         setConfig(null);
         // Restore draft even when there's no saved config
         const draft = typeof window !== 'undefined'
-          ? (sessionStorage.getItem(PROVIDER_DRAFT_KEY) as WhatsAppProviderKind | null)
+          ? sessionStorage.getItem(PROVIDER_DRAFT_KEY)
           : null;
-        setProvider(draft ?? 'meta');
+        setProvider(isSupportedProvider(draft) ? draft : 'meta');
         setPhoneNumberId('');
         setWabaId('');
         setAccessToken('');
@@ -269,8 +275,6 @@ export function WhatsAppConfig() {
         setTokenEdited(false);
         setInstanceId('');
         setBaseUrl('');
-        setClientToken('');
-        setClientTokenEdited(false);
       }
       // connection_id is safe to reload from the DB row; the plaintext
       // webhook secret never is (it's only ever known right after the
@@ -374,11 +378,6 @@ export function WhatsAppConfig() {
       payload.instance_id = instanceId.trim();
       payload.base_url = provider === 'uazapi' ? baseUrl.trim() : null;
       payload.verify_token = verifyToken.trim() || null;
-
-      // Only send client_token for Z-API; only include it if the field was touched
-      if (provider === 'zapi' && clientTokenEdited) {
-        payload.client_token = clientToken !== MASKED_TOKEN ? (clientToken.trim() || null) : undefined;
-      }
     }
 
     try {
@@ -528,8 +527,6 @@ export function WhatsAppConfig() {
       setTokenEdited(false);
       setInstanceId('');
       setBaseUrl('');
-      setClientToken('');
-      setClientTokenEdited(false);
       setConnectionStatus('disconnected');
       setResetReason(null);
       setStatusMessage('');
@@ -561,18 +558,9 @@ export function WhatsAppConfig() {
   }
 
   const showResetBanner = resetReason === 'token_corrupted';
-  // `PROVIDERS` (the master list, includes zapi) stays untouched so this
-  // lookup never returns undefined — that would crash the page for any
-  // account with a legacy Z-API config.
+  // `provider` is always a supported kind (see isSupportedProvider), so this
+  // lookup never returns undefined — a legacy Z-API row is mapped to uazapi.
   const selectedProviderInfo = PROVIDERS.find((p) => p.value === provider)!;
-
-  // Z-API is an internal/testing-only provider — hidden from new
-  // selections by default. Never hidden for an account that already has
-  // it saved (config?.provider), so a legacy Z-API config keeps its
-  // matching <option> and doesn't silently fall back to another provider.
-  const zapiVisible =
-    process.env.NEXT_PUBLIC_WHATSAPP_ENABLE_ZAPI === 'true' || config?.provider === 'zapi';
-  const visibleProviders = PROVIDERS.filter((p) => p.value !== 'zapi' || zapiVisible);
 
   return (
     <section className="animate-in fade-in-50 duration-200">
@@ -620,20 +608,20 @@ export function WhatsAppConfig() {
             </Alert>
           )}
 
-          {/* Z-API deprecation banner — legacy configs only */}
+          {/* Z-API discontinued banner — legacy configs only */}
           {config?.provider === 'zapi' && (
             <Alert className="bg-amber-950/40 border-amber-600/40">
               <div className="flex items-start gap-3">
                 <AlertTriangle className="size-5 text-amber-400 mt-0.5 shrink-0" />
                 <div className="flex-1">
                   <AlertTitle className="text-amber-200 mb-1">
-                    Z-API é um provider depreciado
+                    Z-API não é mais suportado
                   </AlertTitle>
                   <AlertDescription className="text-amber-100/80 text-sm">
-                    Sua conexão continua funcionando, mas novas conexões não podem
-                    ser criadas com Z-API. Recomendamos migrar para o uazapi:
-                    selecione &quot;uazapi&quot; acima, preencha as credenciais e
-                    reconecte via QR Code.
+                    Esta conexão não envia nem recebe mensagens. Reconecte com o
+                    uazapi (ou com a API oficial da Meta): preencha as credenciais
+                    abaixo e salve — ou use &quot;Reset Configuration&quot; para
+                    remover a configuração atual.
                   </AlertDescription>
                 </div>
               </div>
@@ -776,7 +764,7 @@ export function WhatsAppConfig() {
                 disabled={!canEditSettings}
                 className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {visibleProviders.map((p) => (
+                {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
                   </option>
@@ -792,7 +780,6 @@ export function WhatsAppConfig() {
               <CardTitle className="text-foreground">Credenciais da API</CardTitle>
               <CardDescription className="text-muted-foreground">
                 {provider === 'meta' && 'Credenciais da Meta WhatsApp Business API.'}
-                {provider === 'zapi' && 'Credenciais da instância Z-API (z-api.io).'}
                 {provider === 'uazapi' && 'Credenciais da instância uazapi.'}
               </CardDescription>
               {!canEditSettings && (
@@ -825,57 +812,6 @@ export function WhatsAppConfig() {
                       disabled={!canEditSettings}
                       className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
                     />
-                  </div>
-                </>
-              )}
-
-              {/* ── ZAPI FIELDS ── */}
-              {provider === 'zapi' && (
-                <>
-                  <div className="space-y-2">
-                    <Label className="text-muted-foreground">Instance ID</Label>
-                    <Input
-                      placeholder="ex: 3D3F0E4E1B1C1D1E1F1A1B1C"
-                      value={instanceId}
-                      onChange={(e) => setInstanceId(e.target.value)}
-                      disabled={!canEditSettings}
-                      className="bg-muted border-border text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Encontrado no painel Z-API → sua instância → Instance ID.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-muted-foreground">
-                      Security Token (Client-Token)
-                      <span className="ml-1 text-xs text-muted-foreground">(opcional)</span>
-                    </Label>
-                    <div className="relative">
-                      <Input
-                        type={showClientToken ? 'text' : 'password'}
-                        placeholder="Security Token da instância Z-API"
-                        value={clientToken}
-                        onChange={(e) => { setClientToken(e.target.value); setClientTokenEdited(true); }}
-                        onFocus={() => {
-                          if (clientToken === MASKED_TOKEN) {
-                            setClientToken('');
-                            setClientTokenEdited(true);
-                          }
-                        }}
-                        disabled={!canEditSettings}
-                        className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowClientToken(!showClientToken)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showClientToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                      </button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Necessário para integrações externas (Make, n8n, etc.). No painel Z-API → ⚙️ Segurança → Security Token. Deixe em branco para remover.
-                    </p>
                   </div>
                 </>
               )}
@@ -933,9 +869,7 @@ export function WhatsAppConfig() {
                     placeholder={
                       provider === 'meta'
                         ? 'Cole seu access token'
-                        : provider === 'zapi'
-                          ? 'Token da instância Z-API'
-                          : 'API Key do uazapi'
+                        : 'API Key do uazapi'
                     }
                     value={accessToken}
                     onChange={(e) => {
@@ -1027,7 +961,7 @@ export function WhatsAppConfig() {
               <CardDescription className="text-muted-foreground">
                 {provider === 'meta'
                   ? 'Use esta URL como callback no painel do Meta App.'
-                  : `Configure esta URL como webhook no painel do ${provider === 'zapi' ? 'Z-API' : 'uazapi'}.`}
+                  : 'Configure esta URL como webhook no painel do uazapi.'}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1061,7 +995,7 @@ export function WhatsAppConfig() {
                 {provider !== 'meta' && connectionId && !revealedWebhookSecret && (
                   <p className="text-xs text-muted-foreground">
                     Webhook já configurado anteriormente. Por segurança, o segredo não é exibido novamente —
-                    use a URL que você já configurou no painel do {provider === 'zapi' ? 'Z-API' : 'uazapi'}.
+                    use a URL que você já configurou no painel do uazapi.
                     Se ela foi perdida, contate o suporte para rotacionar o segredo.
                   </p>
                 )}
@@ -1134,7 +1068,6 @@ export function WhatsAppConfig() {
             <CardHeader>
               <CardTitle className="text-foreground text-base">
                 {provider === 'meta' && 'Configuração Meta API'}
-                {provider === 'zapi' && 'Configuração Z-API'}
                 {provider === 'uazapi' && 'Configuração uazapi'}
               </CardTitle>
               <CardDescription className="text-muted-foreground">
@@ -1211,57 +1144,6 @@ export function WhatsAppConfig() {
                 </Accordion>
               )}
 
-              {provider === 'zapi' && (
-                <Accordion>
-                  <AccordionItem className="border-border">
-                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                      <span className="flex items-center gap-2">
-                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">1</span>
-                        Criar instância no Z-API
-                      </span>
-                    </AccordionTrigger>
-                    <AccordionContent className="text-muted-foreground">
-                      <ol className="list-decimal list-inside space-y-1 text-sm">
-                        <li>Acesse <span className="text-primary">app.z-api.io</span></li>
-                        <li>Crie uma nova instância</li>
-                        <li>Copie o <strong className="text-foreground">Instance ID</strong> e o <strong className="text-foreground">Token</strong></li>
-                      </ol>
-                    </AccordionContent>
-                  </AccordionItem>
-                  <AccordionItem className="border-border">
-                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                      <span className="flex items-center gap-2">
-                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">2</span>
-                        Conectar via QR Code
-                      </span>
-                    </AccordionTrigger>
-                    <AccordionContent className="text-muted-foreground">
-                      <ol className="list-decimal list-inside space-y-1 text-sm">
-                        <li>No painel Z-API, abra sua instância</li>
-                        <li>Clique em &quot;Conectar&quot; e escaneie o QR Code com o WhatsApp</li>
-                        <li>Aguarde o status mostrar &quot;Connected&quot;</li>
-                      </ol>
-                    </AccordionContent>
-                  </AccordionItem>
-                  <AccordionItem className="border-border">
-                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                      <span className="flex items-center gap-2">
-                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">3</span>
-                        Configurar webhook de entrada
-                      </span>
-                    </AccordionTrigger>
-                    <AccordionContent className="text-muted-foreground">
-                      <ol className="list-decimal list-inside space-y-1 text-sm">
-                        <li>Defina um <strong className="text-foreground">Verify Token</strong> no formulário</li>
-                        <li>Salve a configuração aqui</li>
-                        <li>No Z-API, vá em Webhook e cole a <strong className="text-foreground">URL do Webhook</strong> gerada acima</li>
-                        <li>Ative os eventos de mensagem recebida</li>
-                      </ol>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              )}
-
               {provider === 'uazapi' && (
                 <Accordion>
                   <AccordionItem className="border-border">
@@ -1323,17 +1205,6 @@ export function WhatsAppConfig() {
                   >
                     <ExternalLink className="size-3.5" />
                     Documentação Meta WhatsApp API
-                  </a>
-                )}
-                {provider === 'zapi' && (
-                  <a
-                    href="https://developer.z-api.io"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
-                  >
-                    <ExternalLink className="size-3.5" />
-                    Documentação Z-API
                   </a>
                 )}
                 {provider === 'uazapi' && (

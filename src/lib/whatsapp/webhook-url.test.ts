@@ -12,24 +12,24 @@ describe('buildWebhookUrl', () => {
     ).toBe('https://app.example.com/api/whatsapp/webhook')
   })
 
-  it('Z-API/uazapi before save: three placeholder segments, none of them {seu-verify-token}', () => {
-    const url = buildWebhookUrl({ origin: 'https://app.example.com', provider: 'zapi', connectionId: null, webhookSecret: null })
-    expect(url).toBe('https://app.example.com/api/whatsapp/webhook/zapi/{connectionId}/{webhookSecret}')
+  it('uazapi before save: three placeholder segments, none of them {seu-verify-token}', () => {
+    const url = buildWebhookUrl({ origin: 'https://app.example.com', provider: 'uazapi', connectionId: null, webhookSecret: null })
+    expect(url).toBe('https://app.example.com/api/whatsapp/webhook/uazapi/{connectionId}/{webhookSecret}')
     expect(url.split('/').length).toBe(url.split('/').length) // sanity: no throw
   })
 
-  it('Z-API right after bootstrap: real connectionId + real plaintext secret, exactly 3 path segments after /webhook', () => {
+  it('uazapi right after bootstrap: real connectionId + real plaintext secret, exactly 3 path segments after /webhook', () => {
     const url = buildWebhookUrl({
       origin: 'https://app.example.com',
-      provider: 'zapi',
+      provider: 'uazapi',
       connectionId: 'conn-abc-123',
       webhookSecret: 'S3cr3t-plaintext',
     })
-    expect(url).toBe('https://app.example.com/api/whatsapp/webhook/zapi/conn-abc-123/S3cr3t-plaintext')
+    expect(url).toBe('https://app.example.com/api/whatsapp/webhook/uazapi/conn-abc-123/S3cr3t-plaintext')
 
     const path = new URL(url).pathname
     const segments = path.replace(/^\/api\/whatsapp\/webhook\//, '').split('/')
-    expect(segments).toEqual(['zapi', 'conn-abc-123', 'S3cr3t-plaintext']) // matches [provider]/[connectionId]/[webhookSecret]
+    expect(segments).toEqual(['uazapi', 'conn-abc-123', 'S3cr3t-plaintext']) // matches [provider]/[connectionId]/[webhookSecret]
   })
 
   it('uazapi with connectionId known but secret never revealed (already configured previously): placeholder secret, real connectionId', () => {
@@ -43,7 +43,7 @@ describe('buildWebhookUrl', () => {
   })
 
   it('never emits the old 2-segment shape (provider/token) — regression guard for the fixed bug', () => {
-    const url = buildWebhookUrl({ origin: 'https://app.example.com', provider: 'zapi', connectionId: 'c1', webhookSecret: 's1' })
+    const url = buildWebhookUrl({ origin: 'https://app.example.com', provider: 'uazapi', connectionId: 'c1', webhookSecret: 's1' })
     const afterWebhook = url.split('/api/whatsapp/webhook/')[1]
     expect(afterWebhook.split('/')).toHaveLength(3)
   })

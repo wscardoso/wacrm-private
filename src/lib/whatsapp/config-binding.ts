@@ -12,9 +12,8 @@
  * call sites move to `decryptWithBindingContext` unconditionally (it reads
  * both legacy and canonical ciphertext), while `encrypt` call sites stay
  * gated behind this flag so canonical writes only begin once the decrypt
- * path is confirmed live everywhere. Mirrors the existing
- * `WHATSAPP_ENABLE_ZAPI` env-flag idiom already used in this codebase
- * (`config/route.ts`).
+ * path is confirmed live everywhere. Same env-flag idiom as the other
+ * rollout gates in this codebase.
  */
 
 export function whatsappConfigBindingContext(accountId: string): string {

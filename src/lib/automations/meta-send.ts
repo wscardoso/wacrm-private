@@ -5,8 +5,8 @@ import {
   isValidE164,
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
-import { getProvider, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { getProvider, providerConfigFromRow, type ExternalIdentity } from '@/lib/whatsapp/providers'
+import { createIntent, settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
 import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
@@ -97,17 +97,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
-  let clientToken: string | undefined
-  if (config.provider === 'zapi' && config.waba_id) {
-    try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(config.account_id)) } catch { /* ignore */ }
-  }
-  const provider = getProvider(
-    config.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-      : config.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-  )
+  const provider = getProvider(providerConfigFromRow(config, accessToken))
 
   // ── ODI-001 §4: create intent before provider call ──
   const messageId = crypto.randomUUID()
@@ -115,21 +105,18 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   const content_text = input.kind === 'text' ? input.text : null
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { error: intentErr } = await db
-    .from('messages')
-    .insert({
-      id: messageId,
-      conversation_id: input.conversationId,
-      sender_type: 'bot',
-      content_type,
-      content_text,
-      template_name,
-      status: 'sending',
-      idempotency_key: messageId,
+  try {
+    await createIntent(db, {
+      messageId,
+      conversationId: input.conversationId,
+      contentType: content_type,
+      connection: config,
+      senderType: 'bot',
+      contentText: content_text,
+      templateName: template_name,
     })
-
-  if (intentErr) {
-    throw new Error(`failed to create message row: ${intentErr.message}`)
+  } catch (err) {
+    throw new Error(`failed to create message row: ${(err as { message?: string })?.message ?? 'unknown'}`)
   }
 
   // ── ODI-001 §5: send then settle ──

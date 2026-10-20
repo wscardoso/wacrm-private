@@ -1,62 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExternalIdentity } from '../providers/types'
-
-// ── Mode-1 (E2.0) — create message already settled with identities ──
-
-export interface CreateOutboundMessageArgs {
-  conversationId: string
-  contentType: string
-  providerMessageId: string
-  connectionRef: string
-  externalIdentities: ExternalIdentity[]
-  contentText?: string | null
-  mediaUrl?: string | null
-  templateName?: string | null
-  replyToMessageId?: string | null
-}
-
-export interface CreatedMessage {
-  id: string
-}
-
-export async function createOutboundMessage(
-  supabase: SupabaseClient,
-  args: CreateOutboundMessageArgs,
-): Promise<CreatedMessage> {
-  const externalIdentities = args.externalIdentities ?? []
-  const { data, error } = await supabase
-    .from('messages')
-    .insert({
-      conversation_id: args.conversationId,
-      sender_type: 'agent',
-      content_type: args.contentType,
-      content_text: args.contentText ?? null,
-      media_url: args.mediaUrl ?? null,
-      template_name: args.templateName ?? null,
-      message_id: args.providerMessageId,
-      status: 'sent',
-      reply_to_message_id: args.replyToMessageId ?? null,
-    })
-    .select('id')
-    .single()
-
-  if (error) throw error
-
-  if (externalIdentities.length > 0) {
-    const rows = externalIdentities.map(ei => ({
-      message_id: data.id,
-      connection_ref: args.connectionRef,
-      kind: ei.kind,
-      value: ei.value,
-    }))
-    const { error: idErr } = await supabase.rpc('insert_message_external_ids', {
-      p_identities: rows,
-    })
-    if (idErr) throw idErr
-  }
-
-  return { id: data.id }
-}
+import { bindingFromConnection, type ConnectionIdentityRow } from './connection-binding'
 
 // ── Mode-2 (E4a / ODI-001) — create intent → send → settle ──
 
@@ -87,23 +31,42 @@ export interface CreateIntentArgs {
   messageId: string
   conversationId: string
   contentType: string
-  connectionRef: string
+  /**
+   * The `whatsapp_config` row the message will be sent through. The delivery
+   * binding (connection_ref, delivery_provider, delivery_channel_fp) is derived
+   * from it HERE, so that it is written in the same INSERT as the message and
+   * no caller composes it by hand. Throws `DeliveryBindingError` — before
+   * anything is inserted — when the row cannot identify a channel.
+   */
+  connection: ConnectionIdentityRow
+  /** `agent` (a person, via the inbox) or `bot` (Flows / Automations). */
+  senderType?: 'agent' | 'bot'
   contentText?: string | null
   mediaUrl?: string | null
   templateName?: string | null
   replyToMessageId?: string | null
 }
 
+/**
+ * THE one place that creates an outbound message (DLB-001 §3, ODI-001 §4):
+ * the intent exists, with its idempotency key and its delivery binding, before
+ * any provider call. `src/test/outbound-message-creation.arch.test.ts` fails
+ * the build if another direct INSERT into `messages` appears.
+ */
 export async function createIntent(
   supabase: SupabaseClient,
   args: CreateIntentArgs,
 ): Promise<{ id: string }> {
+  const binding = bindingFromConnection(args.connection)
   const { data, error } = await supabase
     .from('messages')
     .insert({
       id: args.messageId,
       conversation_id: args.conversationId,
-      sender_type: 'agent',
+      sender_type: args.senderType ?? 'agent',
+      connection_ref: binding.connection_ref,
+      delivery_provider: binding.delivery_provider,
+      delivery_channel_fp: binding.delivery_channel_fp,
       content_type: args.contentType,
       content_text: args.contentText ?? null,
       media_url: args.mediaUrl ?? null,
@@ -158,11 +121,20 @@ export async function settleMessageSystem(
   supabase: SupabaseClient,
   messageId: string,
   status: 'sent' | 'failed',
-  connectionRef: string,
+  /**
+   * The connection the identities belong to, or `null` when there is none
+   * (e.g. the TTL sweep settling `failed` has no identities to attach).
+   * `p_connection_ref` is a UUID: it must never receive `''` — PostgreSQL
+   * rejects it, which used to make every TTL settlement fail.
+   */
+  connectionRef: string | null,
   externalIdentities: ExternalIdentity[],
   providerMessageId?: string,
 ): Promise<SettlementResult> {
   const identities = externalIdentities ?? []
+  if (identities.length > 0 && !connectionRef) {
+    throw new Error('settleMessageSystem: identities require a connectionRef')
+  }
   const rows = identities.map(ei => ({
     message_id: messageId,
     connection_ref: connectionRef,
@@ -173,7 +145,7 @@ export async function settleMessageSystem(
   const { data, error } = await supabase.rpc('settle_outbound_message_system', {
     p_message_id: messageId,
     p_status: status,
-    p_connection_ref: connectionRef,
+    p_connection_ref: connectionRef || null,
     p_provider_message_id: providerMessageId ?? null,
     p_identities: rows,
   })

@@ -76,10 +76,8 @@ vi.mock('@/lib/automations/engine', () => ({
 }))
 
 import { processInboundMessage } from '../inbound-processor'
-import { ZApiProvider } from './zapi'
 import { UazapiProvider } from './uazapi'
 
-const zapi = new ZApiProvider({ instanceId: 'inst', token: 'tok' })
 const uazapi = new UazapiProvider({ baseUrl: 'https://u.uazapi.dev', instanceId: 'inst', token: 'key' })
 
 beforeEach(() => {
@@ -89,51 +87,36 @@ beforeEach(() => {
 })
 
 describe('non-Meta inbound pipeline → idempotency RPC', () => {
-  it('Z-API text: inserts via RPC and runs downstream effects on first delivery', async () => {
-    const parsed = zapi.parseInboundMessage({
-      phone: '5511999887766',
-      messageId: 'zaap-1',
-      momment: 1710000000123,
-      text: { message: 'Primeira' },
-    })
-    expect(parsed).not.toBeNull()
-
-    await processInboundMessage(parsed!, 'acc-1', 'user-1')
+  // The processor decides seconds vs milliseconds by magnitude (tsNum > 1e12
+  // → used as-is), independent of which provider produced the message. This
+  // used to be covered through the removed Z-API adapter (which emitted ms);
+  // it is now exercised with a provider-agnostic InboundMessage.
+  it('text: inserts via RPC, keeps a millisecond timestamp as-is and runs downstream effects on first delivery', async () => {
+    await processInboundMessage(
+      { messageId: 'ms-1', from: '5511999887766', type: 'text', text: 'Primeira', timestamp: '1710000000123' },
+      'acc-1',
+      'user-1',
+    )
 
     const rpc = rpcCalls.find((c) => c.fn === 'insert_inbound_message')
     expect(rpc).toBeDefined()
-    expect(rpc!.params.p_message_id).toBe('zaap-1')
+    expect(rpc!.params.p_message_id).toBe('ms-1')
     expect(rpc!.params.p_sender_type).toBe('customer')
-    // Z-API sends momment in MS (1710000000123). The costura preserves
-    // the millisecond value as-is (tsNum > 1e12 → usado direto, sem
-    // multiplicar por 1000), então p_created_at reflete 1710000000123 ms.
+    // tsNum > 1e12 → used directly, not multiplied by 1000.
     expect(rpc!.params.p_created_at).toBe(new Date(1710000000123).toISOString())
     expect(mockDispatchFlows).toHaveBeenCalledTimes(1)
     expect(mockRunAutomations).toHaveBeenCalled()
   })
 
-  it('Z-API text: redelivery returns NULL from RPC and short-circuits downstream', async () => {
-    const parsed = zapi.parseInboundMessage({
-      phone: '5511999887766',
-      messageId: 'zaap-redeliver',
-      momment: 1710000000000,
-      text: { message: 'Duplicado' },
-    })!
-
-    rpcInserts = true
-    await processInboundMessage(parsed, 'acc-1', 'user-1')
-    expect(mockDispatchFlows).toHaveBeenCalledTimes(1)
-
-    vi.clearAllMocks()
-    rpcCalls.length = 0
-    rpcInserts = false
-    await processInboundMessage(parsed, 'acc-1', 'user-1')
+  it('text: a second-resolution timestamp is multiplied by 1000', async () => {
+    await processInboundMessage(
+      { messageId: 'sec-1', from: '5511999887766', type: 'text', text: 'Segundos', timestamp: '1710000000' },
+      'acc-1',
+      'user-1',
+    )
 
     const rpc = rpcCalls.find((c) => c.fn === 'insert_inbound_message')
-    expect(rpc).toBeDefined()
-    // Redelivery: RPC returned NULL → no flows / automations fired.
-    expect(mockDispatchFlows).not.toHaveBeenCalled()
-    expect(mockRunAutomations).not.toHaveBeenCalled()
+    expect(rpc!.params.p_created_at).toBe(new Date(1710000000 * 1000).toISOString())
   })
 
   it('uazapi image+caption: inserts via RPC with URL mediaRef', async () => {
@@ -195,12 +178,19 @@ describe('non-Meta inbound pipeline → idempotency RPC', () => {
   })
 
   it('reaction messages never call insert_inbound_message (handled separately)', async () => {
-    const parsed = zapi.parseInboundMessage({
-      phone: '5511999887766',
-      messageId: 'zaap-react',
-      momment: 1710000000000,
-      reaction: { messageId: 'zaap-target', reaction: '👍' },
+    const parsed = uazapi.parseInboundMessage({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        messages: [
+          {
+            key: { remoteJid: '5511999887766@s.whatsapp.net', id: 'evt-react' },
+            messageTimestamp: 1710000000,
+            message: { reactionMessage: { key: { id: 'evt-target' }, text: '👍' } },
+          },
+        ],
+      },
     })!
+    expect(parsed).toMatchObject({ type: 'reaction', reactionTargetMessageId: 'evt-target', reactionEmoji: '👍' })
 
     await processInboundMessage(parsed, 'acc-1', 'user-1')
 

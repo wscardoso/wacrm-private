@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 // =============================================================
-// Gate 4 — ZAPI/UAZAPI INBOUND RECOVERY.
+// Gate 4 — UAZAPI INBOUND RECOVERY (Z-API was removed; its rejection is covered
+// at the end of this file).
 //
 // Proves, against the REAL bootstrapConnection()/generateConnectionId()/
 // hashWebhookSecret() (src/lib/whatsapp/webhook-auth.ts, NOT mocked),
@@ -10,7 +11,7 @@ import { NextResponse } from 'next/server'
 //   1. Never inserts a whatsapp_config row without connection_id (the
 //      NOT NULL column from 036_webhook_nonmeta_security.sql that had no
 //      DB default — the root cause of the "connect a number" impeditivo).
-//   2. Calls bootstrapConnection() for Z-API/uazapi after every save, and
+//   2. Calls bootstrapConnection() for uazapi after every save, and
 //      it is idempotent-safe: an already-initialized connection is never
 //      silently re-rotated by a routine credential re-save.
 //   3. Returns connection_id + the one-time plaintext webhook_secret in
@@ -23,10 +24,10 @@ import { NextResponse } from 'next/server'
 //      and never call bootstrapConnection.
 // =============================================================
 
-const { mockRequireRole, mockZapiCheckStatus, mockUazapiCheckStatus } = vi.hoisted(() => ({
+const { mockRequireRole, mockUazapiCheckStatus, mockServerClient } = vi.hoisted(() => ({
   mockRequireRole: vi.fn(),
-  mockZapiCheckStatus: vi.fn(),
   mockUazapiCheckStatus: vi.fn(),
+  mockServerClient: vi.fn(),
 }))
 
 vi.mock('@/lib/auth/account', () => ({
@@ -52,10 +53,8 @@ vi.mock('@/lib/whatsapp/config-binding', () => ({
   isWhatsappConfigCanonicalWriteEnabled: () => false,
 }))
 
-vi.mock('@/lib/whatsapp/providers/zapi', () => ({
-  ZApiProvider: class {
-    checkStatus() { return mockZapiCheckStatus() }
-  },
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: mockServerClient,
 }))
 
 vi.mock('@/lib/whatsapp/providers/uazapi', () => ({
@@ -92,7 +91,7 @@ vi.mock('@/lib/supabase/admin-client', () => ({
 }))
 
 import { hashWebhookSecret } from '@/lib/whatsapp/webhook-auth'
-import { POST } from './route'
+import { GET, POST } from './route'
 
 function request(body: Record<string, unknown>): Request {
   return new Request('http://localhost/api/whatsapp/config', {
@@ -107,18 +106,16 @@ let adminDb: ReturnType<typeof mockSupabase>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  process.env.WHATSAPP_ENABLE_ZAPI = 'true'
 
   sessionDb = mockSupabase({ data: null, error: null }) // "existing" lookups -> no row (fresh account) by default
   adminDb = mockSupabase({ data: null, error: null })   // "claimed number" check -> nobody else has it
 
   mockSupabaseAdmin.mockReturnValue(adminDb)
   mockRequireRole.mockResolvedValue({ supabase: sessionDb, userId: 'user-1', accountId: 'acc-1' })
-  mockZapiCheckStatus.mockResolvedValue({ connected: true })
   mockUazapiCheckStatus.mockResolvedValue({ connected: true })
 })
 
-describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', () => {
+describe('POST /api/whatsapp/config — criação de conexão (uazapi)', () => {
   it('primeira conexão: insere connection_id (NOT NULL sem default), bootstrap gera segredo, resposta traz connection_id + webhook_secret coerentes com o hash persistido', async () => {
     // "existing" select -> no row (fresh insert path)
     sessionDb.setResult('whatsapp_config', { data: null, error: null })
@@ -159,7 +156,7 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
       return chain
     })
 
-    const res = await POST(request({ provider: 'zapi', instance_id: 'inst-1', access_token: 'tok' }))
+    const res = await POST(request({ provider: 'uazapi', instance_id: 'inst-1', base_url: 'https://my-server.com', access_token: 'tok' }))
     const data = await res.json()
 
     expect(res.status).toBe(200)
@@ -181,6 +178,7 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
 
   it('conexão já inicializada: bootstrap não sobrescreve o segredo existente e a resposta não revela nenhum segredo', async () => {
     const EXISTING_CONN = 'conn-already-there'
+    const sessionUpdateSpy = vi.fn((...args: [Record<string, unknown>]) => { void args; return { eq: vi.fn(() => Promise.resolve({ data: null, error: null })) } })
 
     ;(sessionDb.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
       if (table !== 'whatsapp_config') return { then: (r: (v: unknown) => void) => r({ data: null, error: null }) }
@@ -190,7 +188,7 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
         maybeSingle: vi.fn(() =>
           Promise.resolve({ data: { id: 'cfg-1', connection_id: EXISTING_CONN }, error: null }),
         ),
-        update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: null, error: null })) })),
+        update: sessionUpdateSpy,
       }
       return chain
     })
@@ -212,17 +210,22 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
       return chain
     })
 
-    const res = await POST(request({ provider: 'zapi', instance_id: 'inst-1', access_token: 'tok' }))
+    const res = await POST(request({ provider: 'uazapi', instance_id: 'inst-1', base_url: 'https://my-server.com', access_token: 'tok' }))
     const data = await res.json()
 
     expect(res.status).toBe(200)
     expect(data.connection_id).toBe(EXISTING_CONN) // unchanged — a live webhook URL must keep working
     expect(data.webhook_secret).toBeNull() // never re-revealed
     expect(adminUpdateSpy).not.toHaveBeenCalled() // bootstrapConnection refused to overwrite
+    // Re-saving an existing row (e.g. one migrated from Z-API) clears the Meta-only waba_id
+    // column, so the legacy encrypted Security Token is not kept in a uazapi connection.
+    expect(sessionUpdateSpy).toHaveBeenCalledTimes(1)
+    expect(sessionUpdateSpy.mock.calls[0][0]).toMatchObject({ provider: 'uazapi', waba_id: null })
   })
 
-  it('uazapi: mesmo comportamento de bootstrap que Z-API (geração do webhook para o segundo provider não-Meta)', async () => {
+  it('uazapi: nova conexão grava waba_id = null (coluna Meta-only, antes usada pelo Security Token da Z-API) e ignora client_token', async () => {
     let insertedConnectionId = ''
+    let insertedRow: Record<string, unknown> | null = null
     ;(sessionDb.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
       if (table !== 'whatsapp_config') return { then: (r: (v: unknown) => void) => r({ data: null, error: null }) }
       const chain: Record<string, unknown> = {
@@ -230,6 +233,7 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
         eq: vi.fn(() => chain),
         maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
         insert: vi.fn((row: Record<string, unknown>) => {
+          insertedRow = row
           insertedConnectionId = row.connection_id as string
           return { then: (r: (v: unknown) => void) => r({ data: null, error: null }) }
         }),
@@ -250,7 +254,7 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
     })
 
     const res = await POST(
-      request({ provider: 'uazapi', instance_id: 'inst-2', base_url: 'https://my-server.com', access_token: 'tok' }),
+      request({ provider: 'uazapi', instance_id: 'inst-2', base_url: 'https://my-server.com', access_token: 'tok', client_token: 'legacy-security-token' }),
     )
     const data = await res.json()
 
@@ -258,6 +262,50 @@ describe('POST /api/whatsapp/config — criação de conexão (Z-API/uazapi)', (
     expect(insertedConnectionId).toBeTruthy()
     expect(data.connection_id).toBe(insertedConnectionId)
     expect(typeof data.webhook_secret).toBe('string')
+    expect(insertedRow).toMatchObject({ provider: 'uazapi', instance_id: 'inst-2', base_url: 'https://my-server.com' })
+    expect((insertedRow as unknown as Record<string, unknown>).waba_id).toBeNull()
+    expect(JSON.stringify(insertedRow)).not.toContain('legacy-security-token')
+  })
+})
+
+// =============================================================
+// Z-API removal — a discontinued provider is rejected explicitly. It must
+// never fall through to the Meta flow (which would persist a Z-API
+// credential as a Meta config) and no row may be written.
+// =============================================================
+describe('Z-API removed', () => {
+  it('POST provider=zapi → 400, nothing is read, verified, written or bootstrapped', async () => {
+    const res = await POST(request({ provider: 'zapi', instance_id: 'inst-1', access_token: 'tok' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/Z-API is no longer supported/)
+    expect(sessionDb.from).not.toHaveBeenCalled()
+    expect(adminDb.from).not.toHaveBeenCalled()
+    expect(mockUazapiCheckStatus).not.toHaveBeenCalled()
+  })
+
+  it('POST provider=zapi is rejected even when the account already has a zapi row (no more grandfathering)', async () => {
+    sessionDb.setResult('whatsapp_config', { data: { provider: 'zapi', id: 'cfg-legacy' }, error: null })
+    const res = await POST(request({ provider: 'zapi', instance_id: 'inst-1', access_token: 'tok' }))
+    expect(res.status).toBe(400)
+  })
+
+  it('GET on a legacy zapi row reports it as unsupported (200, connected:false) without calling any provider', async () => {
+    const legacyRow = { data: { provider: 'zapi', access_token: 'enc:tok', instance_id: 'inst-1', base_url: null, waba_id: 'enc:sec', phone_number_id: 'inst-1', status: 'connected' }, error: null }
+    mockServerClient.mockResolvedValue({
+      auth: { getUser: async () => ({ data: { user: { id: 'user-1' } }, error: null }) },
+      from: (table: string) => {
+        const chain: Record<string, unknown> = {}
+        const result = table === 'profiles' ? { data: { account_id: 'acc-1' }, error: null } : legacyRow
+        for (const m of ['select', 'eq']) chain[m] = vi.fn(() => chain)
+        chain.maybeSingle = vi.fn(() => Promise.resolve(result))
+        return chain
+      },
+    })
+
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ connected: false, reason: 'provider_unsupported' })
+    expect(mockUazapiCheckStatus).not.toHaveBeenCalled()
   })
 })
 

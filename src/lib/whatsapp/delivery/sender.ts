@@ -7,6 +7,7 @@ import type {
   SendReactionArgs, SendInteractiveButtonsArgs, SendInteractiveListArgs,
 } from '../providers/types'
 import { createIntent, settleMessage, settleMessageSystem, type SettlementResult } from './settlement'
+import type { ConnectionIdentityRow } from './connection-binding'
 import { classifyFailure } from './failure-classifier'
 import { computeBackoff, DEFAULT_BACKOFF_CONFIG } from './retry-policy'
 
@@ -72,7 +73,8 @@ export function sendInteractiveList(
 
 export interface DeliveryMeta {
   conversationId: string
-  connectionRef: string
+  /** The `whatsapp_config` row the message is sent through (its id is the connection_ref). */
+  connection: ConnectionIdentityRow
   messageId: string
 }
 
@@ -148,16 +150,16 @@ export async function deliverText(
     messageId: meta.messageId,
     conversationId: meta.conversationId,
     contentType: intentOverrides?.contentType ?? 'text',
-    connectionRef: meta.connectionRef,
+    connection: meta.connection,
     contentText: intentOverrides?.contentText ?? null,
     replyToMessageId: intentOverrides?.replyToMessageId ?? null,
   })
 
   try {
     const result = await provider.sendText(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
+    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
   } catch (error) {
-    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }
 }
 
@@ -172,7 +174,7 @@ export async function deliverMedia(
     messageId: meta.messageId,
     conversationId: meta.conversationId,
     contentType: intentOverrides?.contentType ?? sendArgs.kind,
-    connectionRef: meta.connectionRef,
+    connection: meta.connection,
     contentText: intentOverrides?.contentText ?? null,
     mediaUrl: intentOverrides?.mediaUrl ?? null,
     replyToMessageId: intentOverrides?.replyToMessageId ?? null,
@@ -180,9 +182,9 @@ export async function deliverMedia(
 
   try {
     const result = await provider.sendMedia(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
+    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
   } catch (error) {
-    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }
 }
 
@@ -197,15 +199,15 @@ export async function deliverTemplate(
     messageId: meta.messageId,
     conversationId: meta.conversationId,
     contentType: 'template',
-    connectionRef: meta.connectionRef,
+    connection: meta.connection,
     contentText: intentOverrides?.contentText ?? null,
     replyToMessageId: intentOverrides?.replyToMessageId ?? null,
   })
 
   try {
     const result = await provider.sendTemplate(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connectionRef, result.externalIdentities, result.messageId)
+    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
   } catch (error) {
-    return handleSendFailure(supabase, provider, error, intent.id, meta.connectionRef)
+    return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }
 }

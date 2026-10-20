@@ -16,10 +16,9 @@ import {
   whatsappConfigBindingContext,
   isWhatsappConfigCanonicalWriteEnabled,
 } from '@/lib/whatsapp/config-binding'
-import { ZApiProvider } from '@/lib/whatsapp/providers/zapi'
 import { UazapiProvider } from '@/lib/whatsapp/providers/uazapi'
 import { bootstrapConnection, generateConnectionId } from '@/lib/whatsapp/webhook-auth'
-import type { WhatsAppProviderKind } from '@/types'
+import type { PersistedWhatsAppProviderKind } from '@/types'
 
 /**
  * Encrypts for `whatsapp_config` per the domain's atomic cutover
@@ -81,7 +80,7 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status, provider, instance_id, base_url, waba_id')
+      .select('phone_number_id, access_token, status, provider, instance_id, base_url')
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -122,40 +121,21 @@ export async function GET() {
       )
     }
 
-    const provider = (config.provider as WhatsAppProviderKind) ?? 'meta'
+    const provider = (config.provider as PersistedWhatsAppProviderKind) ?? 'meta'
 
     // ── Non-Meta health check ──────────────────────────────────
+    // Z-API support was removed; a row saved with it can only be migrated or
+    // deleted (DELETE below is provider-agnostic).
     if (provider === 'zapi') {
-      if (!config.instance_id) {
-        return NextResponse.json(
-          { connected: false, reason: 'no_config', message: 'Instance ID not configured.' },
-          { status: 200 },
-        )
-      }
-      try {
-        let clientToken: string | undefined
-        if (config.waba_id) {
-          try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore corrupted client token */ }
-        }
-        const zapi = new ZApiProvider({ instanceId: config.instance_id, token: accessToken, clientToken })
-        const status = await zapi.checkStatus()
-        if (status.connected) {
-          return NextResponse.json({ connected: true })
-        }
-        return NextResponse.json({
+      return NextResponse.json(
+        {
           connected: false,
-          reason: 'provider_disconnected',
+          reason: 'provider_unsupported',
           message:
-            'Z-API instance is not connected. Open the Z-API dashboard and check the instance status.',
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown Z-API error'
-        return NextResponse.json({
-          connected: false,
-          reason: 'meta_api_error',
-          message: `Z-API error: ${message}`,
-        })
-      }
+            'Z-API is no longer supported. Reconnect this account with uazapi or the official Meta WhatsApp Business API, or remove the configuration.',
+        },
+        { status: 200 },
+      )
     }
 
     if (provider === 'uazapi') {
@@ -254,10 +234,8 @@ export async function POST(request: Request) {
       // Non-Meta fields
       instance_id,
       base_url,
-      // Z-API optional Security Token (stored in waba_id column)
-      client_token,
     } = body as {
-      provider?: WhatsAppProviderKind
+      provider?: PersistedWhatsAppProviderKind
       phone_number_id?: string
       waba_id?: string
       access_token?: string
@@ -265,9 +243,19 @@ export async function POST(request: Request) {
       pin?: string
       instance_id?: string
       base_url?: string
-      client_token?: string | null
     }
-    const clientTokenChanged = 'client_token' in (body as object)
+
+    // Z-API support was removed: reject it explicitly instead of letting an
+    // unknown provider fall through to the Meta flow below.
+    if (provider === 'zapi') {
+      return NextResponse.json(
+        {
+          error:
+            'Z-API is no longer supported. Use uazapi or the official Meta WhatsApp Business API.',
+        },
+        { status: 400 },
+      )
+    }
 
     if (!access_token) {
       return NextResponse.json(
@@ -277,40 +265,18 @@ export async function POST(request: Request) {
     }
 
     // ── Non-Meta providers: simple credential save ─────────────
-    if (provider === 'zapi' || provider === 'uazapi') {
+    if (provider === 'uazapi') {
       if (!instance_id) {
         return NextResponse.json(
           { error: 'instance_id is required for this provider' },
           { status: 400 },
         )
       }
-      if (provider === 'uazapi' && !base_url) {
+      if (!base_url) {
         return NextResponse.json(
           { error: 'base_url is required for uazapi' },
           { status: 400 },
         )
-      }
-
-      // Z-API is an internal/testing-only provider, gated behind
-      // WHATSAPP_ENABLE_ZAPI. Never blocks an account that already has a
-      // zapi config — this only stops *new* configs and switches from
-      // another provider *into* zapi. Checked before any encryption or
-      // provider connectivity call so a disabled request fails fast.
-      if (provider === 'zapi' && process.env.WHATSAPP_ENABLE_ZAPI !== 'true') {
-        const { data: existingProviderRow } = await supabase
-          .from('whatsapp_config')
-          .select('provider')
-          .eq('account_id', accountId)
-          .maybeSingle()
-        if (existingProviderRow?.provider !== 'zapi') {
-          return NextResponse.json(
-            {
-              error:
-                'Z-API is an experimental provider disabled on this instance. Contact support if you need access.',
-            },
-            { status: 403 },
-          )
-        }
       }
 
       let encryptedToken: string
@@ -325,54 +291,22 @@ export async function POST(request: Request) {
         )
       }
 
-      // If the client_token wasn't sent (user didn't re-enter it), load the
-      // existing one from DB so the connectivity check uses the right header.
-      let resolvedClientToken: string | undefined = client_token ?? undefined
-      if (!clientTokenChanged) {
-        const { data: existingRow } = await supabase
-          .from('whatsapp_config')
-          .select('waba_id')
-          .eq('account_id', accountId)
-          .maybeSingle()
-        if (existingRow?.waba_id) {
-          try { resolvedClientToken = decryptWithBindingContext(existingRow.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
-        }
-      }
-
       // Verify connectivity before saving
       try {
-        if (provider === 'zapi') {
-          const zapi = new ZApiProvider({
-            instanceId: instance_id,
-            token: access_token,
-            clientToken: resolvedClientToken,
-          })
-          const status = await zapi.checkStatus()
-          if (!status.connected) {
-            return NextResponse.json(
-              {
-                error:
-                  'Z-API instance is not connected. Check the instance status in your Z-API dashboard.',
-              },
-              { status: 400 },
-            )
-          }
-        } else {
-          const uazapi = new UazapiProvider({
-            baseUrl: base_url!,
-            instanceId: instance_id,
-            token: access_token,
-          })
-          const status = await uazapi.checkStatus()
-          if (!status.connected) {
-            return NextResponse.json(
-              {
-                error:
-                  'uazapi instance is not connected. Check the instance status in your uazapi dashboard.',
-              },
-              { status: 400 },
-            )
-          }
+        const uazapi = new UazapiProvider({
+          baseUrl: base_url!,
+          instanceId: instance_id,
+          token: access_token,
+        })
+        const status = await uazapi.checkStatus()
+        if (!status.connected) {
+          return NextResponse.json(
+            {
+              error:
+                'uazapi instance is not connected. Check the instance status in your uazapi dashboard.',
+            },
+            { status: 400 },
+          )
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -387,13 +321,6 @@ export async function POST(request: Request) {
         .select('id, connection_id')
         .eq('account_id', accountId)
         .maybeSingle()
-
-      // For Z-API, waba_id stores the encrypted Security Token (client-token).
-      // Only update it if the frontend explicitly sent the field; omitting keeps the existing value.
-      let encryptedClientToken: string | null | undefined
-      if (clientTokenChanged) {
-        encryptedClientToken = client_token ? encryptForConfig(client_token, accountId) : null
-      }
 
       // Preserve existing verify_token if the field was left blank on update
       let encryptedVerifyToken: string | null | undefined
@@ -412,7 +339,11 @@ export async function POST(request: Request) {
         base_url: base_url ?? null,
         // Keep phone_number_id non-null (DB constraint) with a placeholder
         phone_number_id: phone_number_id ?? instance_id,
-        ...(clientTokenChanged ? { waba_id: encryptedClientToken } : {}),
+        // waba_id is a Meta-only column (036). Re-pointing a row to uazapi
+        // clears it, so a value left by a previous provider — notably the
+        // encrypted Z-API Security Token — is not carried into the new
+        // connection.
+        waba_id: null,
         access_token: encryptedToken,
         ...(encryptedVerifyToken !== undefined ? { verify_token: encryptedVerifyToken } : {}),
         status: 'connected' as const,
@@ -428,7 +359,7 @@ export async function POST(request: Request) {
       // DB default — a fresh row must set it at INSERT time or the insert
       // fails outright. Existing rows keep their connection_id untouched:
       // regenerating it on every save would silently break a webhook URL
-      // the operator already pasted into Z-API/uazapi.
+      // the operator already pasted into uazapi.
       const connectionId = existing?.connection_id ?? generateConnectionId()
 
       if (existing) {

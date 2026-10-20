@@ -19,6 +19,9 @@ import type { NextRequest } from 'next/server'
 
 import { hashWebhookSecret, constantTimeEqual } from '@/lib/whatsapp/webhook-auth'
 
+// Legacy row: a connection saved with the discontinued Z-API provider and a
+// still-valid webhook secret hash. Z-API is no longer processed; this row only
+// proves the route refuses it.
 const VALID_CONN = 'conn-zapi-valid'
 const VALID_SECRET = 'z3cR3T-n0nm3ta-zapi'
 const VALID_HASH = hashWebhookSecret(VALID_SECRET)
@@ -123,90 +126,87 @@ function postRequest(provider: string, connectionId: string, secret: string, bod
   }) as unknown as NextRequest
 }
 
-const ZAPI_BODY = { phone: '5511999887766', text: 'oi', messageId: 'z-auth-1', fromMe: false, moment: 1710000000000, type: 'received' }
+const UAZAPI_BODY = { event: 'MESSAGES_UPSERT', data: [{ messages: [{ key: { remoteJid: '5511999887766@s.whatsapp.net', id: 'ua-auth-1' }, messageTimestamp: 1710000000, message: { conversation: 'oi' } }] }] }
+
+function ctx(provider: string, connectionId: string, webhookSecret: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { params: Promise.resolve({ provider, connectionId, webhookSecret }) } as any
+}
 
 beforeEach(() => { vi.clearAllMocks() })
 
 describe('non-Meta webhook authentication (ADR-SEC-001 / C7)', () => {
-  it('accepts a valid Z-API connection + secret and processes the message', async () => {
-    const res = await POST(postRequest('zapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.processed).toBe(1)
-  })
-
-  it('accepts a valid uazapi connection + secret', async () => {
-    const uaBody = { event: 'MESSAGES_UPSERT', data: [{ messages: [{ key: { remoteJid: '5511999887766@s.whatsapp.net', id: 'ua-auth-1' }, messageTimestamp: 1710000000, message: { conversation: 'oi' } }] }] }
-    const res = await POST(postRequest('uazapi', UAZAPI_CONN, UAZAPI_SECRET, uaBody), {
-      params: Promise.resolve({ provider: 'uazapi', connectionId: UAZAPI_CONN, webhookSecret: UAZAPI_SECRET }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+  it('accepts a valid uazapi connection + secret and processes the message', async () => {
+    const res = await POST(postRequest('uazapi', UAZAPI_CONN, UAZAPI_SECRET, UAZAPI_BODY), ctx('uazapi', UAZAPI_CONN, UAZAPI_SECRET))
     expect(res.status).toBe(200)
   })
 
   it('returns uniform 401 when connection_id does not exist', async () => {
-    const res = await POST(postRequest('zapi', 'conn-does-not-exist', VALID_SECRET, ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'zapi', connectionId: 'conn-does-not-exist', webhookSecret: VALID_SECRET }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+    const res = await POST(postRequest('uazapi', 'conn-does-not-exist', UAZAPI_SECRET, UAZAPI_BODY), ctx('uazapi', 'conn-does-not-exist', UAZAPI_SECRET))
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
   })
 
-  it('returns uniform 401 on provider mismatch (Z-API secret under uazapi route)', async () => {
-    const res = await POST(postRequest('uazapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'uazapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+  it('returns uniform 401 on provider mismatch (legacy zapi row under the uazapi route)', async () => {
+    const res = await POST(postRequest('uazapi', VALID_CONN, VALID_SECRET, UAZAPI_BODY), ctx('uazapi', VALID_CONN, VALID_SECRET))
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
   })
 
   it('returns uniform 401 when secret is missing from the URL', async () => {
-    const req = new Request(`http://localhost/api/whatsapp/webhook/zapi/${VALID_CONN}/`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ZAPI_BODY),
+    const req = new Request(`http://localhost/api/whatsapp/webhook/uazapi/${UAZAPI_CONN}/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(UAZAPI_BODY),
     }) as unknown as NextRequest
-    const res = await POST(req, {
-      params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: '' }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+    const res = await POST(req, ctx('uazapi', UAZAPI_CONN, ''))
     expect(res.status).toBe(401)
   })
 
   it('returns uniform 401 when the secret is invalid (wrong value)', async () => {
-    const res = await POST(postRequest('zapi', VALID_CONN, 'wrong-secret', ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: 'wrong-secret' }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+    const res = await POST(postRequest('uazapi', UAZAPI_CONN, 'wrong-secret', UAZAPI_BODY), ctx('uazapi', UAZAPI_CONN, 'wrong-secret'))
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
   })
 
   it('returns uniform 401 when webhook_secret_hash is NULL (not yet bootstrapped) — no legacy fallback', async () => {
-    configRows[VALID_CONN] = { ...configRows[VALID_CONN], webhook_secret_hash: '' }
-    const res = await POST(postRequest('zapi', VALID_CONN, 'anything', ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: 'anything' }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+    configRows[UAZAPI_CONN] = { ...configRows[UAZAPI_CONN], webhook_secret_hash: '' }
+    const res = await POST(postRequest('uazapi', UAZAPI_CONN, 'anything', UAZAPI_BODY), ctx('uazapi', UAZAPI_CONN, 'anything'))
     expect(res.status).toBe(401)
     // Confirm the legacy verify_token was NOT used to authenticate.
     expect(await res.json()).toEqual({ error: 'Unauthorized' })
     // restore
-    configRows[VALID_CONN] = { ...configRows[VALID_CONN], webhook_secret_hash: VALID_HASH }
+    configRows[UAZAPI_CONN] = { ...configRows[UAZAPI_CONN], webhook_secret_hash: UAZAPI_HASH }
   })
 
   it('does NOT scan every config: issues exactly one indexed lookup', async () => {
-    await POST(postRequest('zapi', VALID_CONN, VALID_SECRET, ZAPI_BODY), {
-      params: Promise.resolve({ provider: 'zapi', connectionId: VALID_CONN, webhookSecret: VALID_SECRET }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+    await POST(postRequest('uazapi', UAZAPI_CONN, UAZAPI_SECRET, UAZAPI_BODY), ctx('uazapi', UAZAPI_CONN, UAZAPI_SECRET))
     const selects = mockFromImpl.mock.calls.filter((c) => c[0] === 'whatsapp_config')
     // A single `.from('whatsapp_config')` call (resolved by indexed
     // connection_id) proves there is no O(n) fan-out / per-row loop.
     expect(selects.length).toBe(1)
+  })
+})
+
+describe('discontinued Z-API provider (route segment `zapi`)', () => {
+  // The legacy row is still in the DB with a valid hash + secret: the route
+  // must refuse BEFORE any lookup, so a still-configured Z-API instance gets
+  // a clear 410 instead of being authenticated or parsed.
+  it('POST answers 410 Gone for a previously valid Z-API URL, without touching the database', async () => {
+    const res = await POST(postRequest('zapi', VALID_CONN, VALID_SECRET, { phone: '5511999887766', text: 'oi' }), ctx('zapi', VALID_CONN, VALID_SECRET))
+    expect(res.status).toBe(410)
+    expect(await res.json()).toEqual({ error: 'Provider discontinued' })
+    expect(mockFromImpl).not.toHaveBeenCalled()
+  })
+
+  it('GET answers 410 Gone for the Z-API segment as well', async () => {
+    const { GET } = await import('@/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route')
+    const res = await GET(new Request(`http://localhost/api/whatsapp/webhook/zapi/${VALID_CONN}/${VALID_SECRET}`), ctx('zapi', VALID_CONN, VALID_SECRET))
+    expect(res.status).toBe(410)
+    expect(mockFromImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not affect uazapi: the same request shape under the uazapi segment still authenticates', async () => {
+    const res = await POST(postRequest('uazapi', UAZAPI_CONN, UAZAPI_SECRET, UAZAPI_BODY), ctx('uazapi', UAZAPI_CONN, UAZAPI_SECRET))
+    expect(res.status).toBe(200)
   })
 })
 

@@ -17,7 +17,7 @@ import {
 } from '@/lib/whatsapp/webhook-auth';
 
 // =============================================================
-// Non-Meta WhatsApp webhook endpoint (Z-API, uazapi).
+// Non-Meta WhatsApp webhook endpoint (uazapi).
 //
 // URL contract (ADR-SEC-001 / C7):
 //   GET  /api/whatsapp/webhook/{provider}/{connectionId}/{webhookSecret}
@@ -38,6 +38,15 @@ import {
 // =============================================================
 
 const INVALID = { error: 'Unauthorized' } as const;
+
+// Z-API support was removed. The provider segment is a fixed public literal,
+// so answering for it needs no connection lookup, secret or rate-limit budget,
+// and discloses nothing about any connection. Existing Z-API webhook URLs get
+// 410 Gone; the stored whatsapp_config rows are left untouched.
+function discontinuedProvider(provider: string): NextResponse | null {
+  if (provider !== 'zapi') return null;
+  return NextResponse.json({ error: 'Provider discontinued' }, { status: 410 });
+}
 
 function unauthorized(): NextResponse {
   return NextResponse.json(INVALID, { status: 401 });
@@ -110,6 +119,8 @@ export async function GET(
   { params }: { params: Promise<{ provider: string; connectionId: string; webhookSecret: string }> },
 ) {
   const { provider, connectionId, webhookSecret } = await params;
+  const gone = discontinuedProvider(provider);
+  if (gone) return gone;
   const out: { config?: ResolvedConfig } = {};
   const rejected = await authenticate(provider, connectionId, webhookSecret, out);
   if (rejected) return rejected;
@@ -123,15 +134,15 @@ export async function POST(
   { params }: { params: Promise<{ provider: string; connectionId: string; webhookSecret: string }> },
 ) {
   const { provider, connectionId, webhookSecret } = await params;
+  const gone = discontinuedProvider(provider);
+  if (gone) return gone;
   const out: { config?: ResolvedConfig } = {};
   const rejected = await authenticate(provider, connectionId, webhookSecret, out);
   if (rejected) return rejected;
   const config = out.config!;
 
   const providerConfig: ProviderConfig =
-    provider === 'zapi'
-      ? { provider: 'zapi', instanceId: config.instance_id ?? '', accessToken: config.access_token }
-      : { provider: 'uazapi', baseUrl: config.base_url ?? '', instanceId: config.instance_id ?? '', accessToken: config.access_token };
+    { provider: 'uazapi', baseUrl: config.base_url ?? '', instanceId: config.instance_id ?? '', accessToken: config.access_token };
   const providerInstance = getProvider(providerConfig);
 
   let payload: unknown;
@@ -145,19 +156,18 @@ export async function POST(
   // Status-first dispatch (ADR-MSG-STATUS-001 §2.11, D-C).
   //
   // Each payload is checked for status events BEFORE inbound parsing,
-  // so that a provider status webhook (Z-API MessageStatusCallback,
-  // uazapi MESSAGES_UPDATE) routes to the canonical status handler
-  // instead of producing a phantom 'unknown' inbound message.
+  // so that a provider status webhook (uazapi MESSAGES_UPDATE) routes to the
+  // canonical status handler instead of producing a phantom 'unknown'
+  // inbound message.
   //
-  // Z-API delivers a single object; uazapi may deliver an array or
-  // { event, data: { messages: [...] } }.
+  // uazapi may deliver an array or { event, data: { messages: [...] } }.
   // =============================================================
   let statusCount = 0;
   let inboundCount = 0;
 
   // Status events are extracted from the WHOLE payload, by the adapter,
   // before any inbound interpretation. Each adapter owns its own envelope:
-  // Z-API sends one object with `ids[]`; uazapi sends
+  // uazapi sends
   // { event: 'MESSAGES_UPDATE', data: { messages: [...] } } — where `data`
   // is an OBJECT, not an array, so it must never be fed through the
   // inbound array-unwrapping below.
@@ -189,13 +199,10 @@ export async function POST(
   }
 
   // Not a status event — inbound path, unchanged from the pre-E2.1
-  // behaviour (Z-API single object; uazapi array or { data: [...] }).
+  // behaviour (uazapi array or { data: [...] }).
   const events: InboundMessage[] = [];
 
-  if (provider === 'zapi') {
-    const parsed = providerInstance.parseInboundMessage(payload);
-    if (parsed) events.push(parsed);
-  } else {
+  {
     const arr = Array.isArray(payload) ? payload : (payload as { data?: unknown[] })?.data;
     if (Array.isArray(arr)) {
       for (const item of arr) {

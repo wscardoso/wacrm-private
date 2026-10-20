@@ -230,13 +230,23 @@ export interface MessageReaction {
   created_at: string;
 }
 
-export type WhatsAppProviderKind = 'meta' | 'zapi' | 'uazapi';
+/** Providers a connection can be created with and dispatched to. */
+export type WhatsAppProviderKind = 'meta' | 'uazapi';
+
+/**
+ * What a stored `whatsapp_config.provider` may still contain. `zapi` is a
+ * discontinued provider kept ONLY so rows saved before its removal can be
+ * recognised (health check, migration notice, deletion). It is never
+ * dispatched to: `providerConfigFromRow` rejects it with
+ * `ProviderUnsupportedError`.
+ */
+export type PersistedWhatsAppProviderKind = WhatsAppProviderKind | 'zapi';
 
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
   /** Which provider is handling this account. Defaults to 'meta'. */
-  provider?: WhatsAppProviderKind;
+  provider?: PersistedWhatsAppProviderKind;
   // ── Meta fields ──────────────────────────────────────────────
   phone_number_id: string;
   waba_id?: string;
@@ -255,7 +265,7 @@ export interface WhatsAppConfig {
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
   // ── Non-Meta fields (added by 032_whatsapp_provider.sql) ─────
-  /** Z-API instance ID or uazapi instance name. */
+  /** uazapi instance name (or the instance ID of a legacy, discontinued Z-API row). */
   instance_id?: string;
   /** uazapi server base URL, e.g. https://my-server.com */
   base_url?: string;

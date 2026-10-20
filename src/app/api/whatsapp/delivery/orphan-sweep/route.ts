@@ -2,10 +2,11 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { getProvider } from '@/lib/whatsapp/providers'
+import { getProvider, providerConfigFromRow } from '@/lib/whatsapp/providers'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { evaluateBinding, type StoredBinding } from '@/lib/whatsapp/delivery/connection-binding'
 import { ORPHAN_THRESHOLD_MS, DEFAULT_TTL_MS, STUCK_RETRYING_THRESHOLD_MS } from '@/lib/whatsapp/delivery/retry-policy'
 
 const BATCH_LIMIT = 50
@@ -20,6 +21,10 @@ const BATCH_LIMIT = 50
  *      providers with native idempotency get a due entry (next_attempt_at =
  *      now), providers without get a blocked entry (next_attempt_at = NULL)
  *      so the TTL will eventually resolve them (ADR-E4B-002 §5 item 2).
+ *      A connection whose provider is no longer supported (e.g. the removed
+ *      Z-API) takes the same blocked path with an explicit `last_error`: its
+ *      delivery state is unknown, it must never be re-sent through another
+ *      provider, and it must not make every sweep log the same error again.
  *   2. **TTL sweep** — pending ledger entries whose own `created_at`
  *      (`outbound_retry_ledger.created_at`, not `messages.created_at`)
  *      is beyond the TTL horizon. Settles them `failed` + ledger → dead.
@@ -105,13 +110,15 @@ async function sweepOrphans(admin: ReturnType<typeof supabaseAdmin>): Promise<nu
 
   const { data: orphans, error } = await admin
     .from('messages')
-    .select('id, connection_ref, conversation_id, created_at')
+    .select('id, connection_ref, delivery_provider, delivery_channel_fp, conversation_id, created_at')
     .eq('status', 'sending')
     .lt('created_at', cutoff)
     .limit(BATCH_LIMIT)
 
   if (error) {
-    console.error('[orphan-sweep] select orphans failed:', error.message)
+    // The code distinguishes an incompatible schema (42703 undefined column,
+    // 42P01 undefined table) from a transient failure.
+    console.error('[orphan-sweep] select orphans failed (%s):', error.code ?? 'no code', error.message)
     return 0
   }
   if (!orphans || orphans.length === 0) return 0
@@ -130,53 +137,86 @@ async function sweepOrphans(admin: ReturnType<typeof supabaseAdmin>): Promise<nu
 
 async function enqueueOrphan(
   admin: ReturnType<typeof supabaseAdmin>,
-  msg: { id: string; connection_ref: string; conversation_id: string; created_at: string },
+  msg: { id: string; conversation_id: string; created_at: string } & StoredBinding,
 ): Promise<boolean> {
+  // Every lookup below can fail for reasons that say nothing about the message
+  // (schema, permissions, network). A failure is thrown — logged by the caller,
+  // not counted, retried on the next run — and NEVER turned into an entry that
+  // misdescribes the message.
+
   // Skip if a ledger entry already exists (race with concurrent sweeper)
-  const { data: existing } = await admin
+  const { data: existing, error: existingErr } = await admin
     .from('outbound_retry_ledger')
     .select('id')
     .eq('message_id', msg.id)
     .maybeSingle()
+  if (existingErr) throw new Error(`ledger lookup failed (${existingErr.code ?? 'no code'}): ${existingErr.message}`)
   if (existing) return false
 
-  // Check provider capability via the connection's provider config
-  const { data: wc } = await admin
-    .from('whatsapp_config')
-    .select('account_id, provider, access_token, instance_id, phone_number_id, base_url, waba_id')
-    .eq('id', msg.connection_ref)
+  // The account comes from the message's own conversation.
+  const { data: conv, error: convErr } = await admin
+    .from('conversations')
+    .select('account_id')
+    .eq('id', msg.conversation_id)
     .maybeSingle()
+  if (convErr) throw new Error(`conversation lookup failed (${convErr.code ?? 'no code'}): ${convErr.message}`)
+  const conversationAccountId = (conv as { account_id?: string | null } | null)?.account_id ?? null
 
-  if (!wc) {
-    console.error('[orphan-sweep] whatsapp_config not found for connection_ref %s', msg.connection_ref)
-    return false
+  const stored: StoredBinding = {
+    connection_ref: msg.connection_ref,
+    delivery_provider: msg.delivery_provider,
+    delivery_channel_fp: msg.delivery_channel_fp,
   }
 
-  const bc = whatsappConfigBindingContext(wc.account_id)
-  const accessToken = decryptWithBindingContext(wc.access_token, bc)
-  let clientToken: string | undefined
-  if (wc.provider === 'zapi' && wc.waba_id) {
-    try { clientToken = decryptWithBindingContext(wc.waba_id, bc) } catch { /* ignore */ }
+  // Look the connection up only when the message records one (a legacy row has
+  // nothing to look up, and `.eq('id', null)` would be a query error).
+  const unrecorded = evaluateBinding({ stored, conversationAccountId, connection: null })
+  const recorded = unrecorded.ok || (unrecorded.reason !== 'binding_missing' && unrecorded.reason !== 'binding_invalid')
+  let wc: Record<string, string | null> | null = null
+  if (recorded) {
+    const { data, error: wcErr } = await admin
+      .from('whatsapp_config')
+      .select('id, account_id, provider, access_token, instance_id, phone_number_id, base_url')
+      .eq('id', stored.connection_ref as string)
+      .maybeSingle()
+    if (wcErr) throw new Error(`connection lookup failed (${wcErr.code ?? 'no code'}): ${wcErr.message}`)
+    wc = data as Record<string, string | null> | null
   }
 
-  const provider = getProvider(
-    wc.provider === 'zapi'
-      ? { provider: 'zapi', instanceId: wc.instance_id, accessToken, clientToken }
-      : wc.provider === 'uazapi'
-        ? { provider: 'uazapi', baseUrl: wc.base_url, instanceId: wc.instance_id, accessToken }
-        : { provider: 'meta', phoneNumberId: wc.phone_number_id, accessToken, verifyToken: '' },
-  )
+  // Same identity rules as the retry cron. Anything unprovable is recorded as
+  // a BLOCKED entry with the reason; the credential is read only when the
+  // connection is proved to be the one the message was created for.
+  const verdict = evaluateBinding({
+    stored,
+    conversationAccountId,
+    connection: wc ? { id: wc.id as string, account_id: wc.account_id, provider: wc.provider, phone_number_id: wc.phone_number_id, instance_id: wc.instance_id, base_url: wc.base_url } : null,
+  })
 
-  const hasIdempotency = provider.capabilities.nativeIdempotency
+  let hasIdempotency = false
+  let lastError = 'orphan - process crashed before settlement'
+  if (!verdict.ok) {
+    lastError = `orphan - blocked (${verdict.reason}): ${verdict.detail} (delivery state unknown, manual verification required; resolved only by TTL)`.slice(0, 500)
+  } else {
+    const bc = whatsappConfigBindingContext(wc!.account_id as string)
+    const accessToken = decryptWithBindingContext(wc!.access_token as string, bc)
+    const provider = getProvider(providerConfigFromRow(wc!, accessToken))
+    hasIdempotency = provider.capabilities.nativeIdempotency
+  }
 
-  await admin.from('outbound_retry_ledger').insert({
+  // message_id is UNIQUE (049): a concurrent sweeper loses with 23505, which
+  // is the "already enqueued" outcome, not a failure.
+  const { error: insertError } = await admin.from('outbound_retry_ledger').insert({
     message_id: msg.id,
     attempt_count: 0,
     next_attempt_at: hasIdempotency ? new Date().toISOString() : null,
     classification: 'ambiguous',
-    last_error: 'orphan - process crashed before settlement',
+    last_error: lastError,
     status: 'pending',
   })
+  if (insertError) {
+    if (insertError.code === '23505') return false
+    throw new Error(`ledger insert failed: ${insertError.message}`)
+  }
 
   return true
 }
@@ -201,11 +241,18 @@ async function sweepExpired(admin: ReturnType<typeof supabaseAdmin>): Promise<nu
   let swept = 0
   for (const row of expired) {
     try {
-      const { data: msg } = await admin
+      const { data: msg, error: msgErr } = await admin
         .from('messages')
         .select('status')
         .eq('id', row.message_id)
         .maybeSingle()
+
+      // A failed lookup is not "the message does not exist": leave the entry
+      // as it is for the next run instead of destroying it.
+      if (msgErr) {
+        console.error('[orphan-sweep] TTL lookup %s failed (%s): %s', row.id, msgErr.code ?? 'no code', msgErr.message)
+        continue
+      }
 
       if (!msg) {
         await admin
@@ -217,7 +264,20 @@ async function sweepExpired(admin: ReturnType<typeof supabaseAdmin>): Promise<nu
       }
 
       if (msg.status === 'sending') {
-        await settleMessageSystem(admin, row.message_id, 'failed', '', [])
+        // Expiry marks a message that was never confirmed as `failed`. That is
+        // the existing semantics of the TTL (ADR-E4B-002 §5 caminho D): after
+        // 72 h without confirmation the intent is closed, although a provider
+        // that never confirmed may have delivered it. It is not evidence of
+        // delivery or of non-delivery.
+        // No identities are attached, so no connection is passed: the RPC
+        // parameter is a UUID and takes NULL — never ''.
+        const settlement = await settleMessageSystem(admin, row.message_id, 'failed', null, [])
+        if (settlement.outcome !== 'failed') {
+          // 'noop': the message left `sending` meanwhile. Do not claim it was
+          // resolved by the TTL; the next run reads its real status.
+          console.error('[orphan-sweep] TTL settle %s returned %s, entry left for the next run', row.id, settlement.outcome)
+          continue
+        }
         await admin
           .from('outbound_retry_ledger')
           .update({ status: 'dead', last_error: 'TTL expired' })

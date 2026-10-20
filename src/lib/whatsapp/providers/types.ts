@@ -157,7 +157,7 @@ export interface WhatsAppProvider {
    * envelope).
    *
    * Returns an ARRAY, not a single event, because I5 requires a provider
-   * event carrying N identifiers (Z-API `ids[]`) to become N independent
+   * event carrying N identifiers (e.g. a batched status update) to become N independent
    * applications — one failing must not suppress the others.
    *
    * Each `externalId` is the provider-level identifier referenced by the
@@ -166,7 +166,7 @@ export interface WhatsAppProvider {
    * `messages.message_id`.
    *
    * `timestamp` MUST be normalised to a ms-epoch string here: providers
-   * disagree on the unit (Meta seconds, Z-API milliseconds) and D5 keeps
+   * disagree on the unit (Meta seconds, some non-Meta providers milliseconds) and D5 keeps
    * that conversion inside the adapter, never in the domain.
    *
    * A recognised status event whose value is outside the declared map is

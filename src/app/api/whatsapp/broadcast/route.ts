@@ -29,7 +29,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
-import { getProvider, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+import { getProvider, providerConfigFromRow, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
 
 interface BroadcastResult {
   phone: string
@@ -170,17 +170,7 @@ export async function POST(request: Request) {
     // ── Provider dispatch (ADR-MSG-001/D3.b) ──
     let provider: ReturnType<typeof getProvider>
     try {
-      let clientToken: string | undefined
-      if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
-      }
-      provider = getProvider(
-        config.provider === 'zapi'
-          ? { provider: 'zapi', instanceId: config.instance_id, accessToken, clientToken }
-          : config.provider === 'uazapi'
-            ? { provider: 'uazapi', baseUrl: config.base_url, instanceId: config.instance_id, accessToken }
-            : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-      )
+      provider = getProvider(providerConfigFromRow(config, accessToken))
     } catch (err) {
       if (err instanceof ProviderUnsupportedError) {
         return NextResponse.json({ error: err.message }, { status: 400 })

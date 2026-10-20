@@ -4,14 +4,14 @@
  *   /api/whatsapp/webhook/{provider}/{connectionId}/{webhookSecret}
  *
  * Pure builder extracted from the settings UI so the exact string the
- * operator is told to paste into Z-API/uazapi can be unit-tested against
+ * operator is told to paste into uazapi can be unit-tested against
  * the real route path (src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts)
  * without rendering the component.
  */
 
 export interface WebhookUrlArgs {
   origin: string
-  provider: 'meta' | 'zapi' | 'uazapi'
+  provider: 'meta' | 'uazapi'
   /** whatsapp_config.connection_id, once the connection has been saved. */
   connectionId: string | null | undefined
   /** Plaintext secret from bootstrapConnection(), revealed exactly once. */

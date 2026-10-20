@@ -91,14 +91,11 @@ vi.mock('@/lib/storage/resolve-media-url', () => ({
 }))
 
 const mockGetProvider = vi.fn()
-vi.mock('@/lib/whatsapp/providers', () => ({
+// Only `getProvider` is replaced: `providerConfigFromRow` and
+// `ProviderUnsupportedError` stay real so provider selection is exercised.
+vi.mock('@/lib/whatsapp/providers', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/whatsapp/providers')>()),
   getProvider: mockGetProvider,
-  ProviderUnsupportedError: class extends Error {
-    constructor(provider: string) {
-      super(`Unsupported WhatsApp provider: ${provider}`)
-      this.name = 'ProviderUnsupportedError'
-    }
-  },
 }))
 
 // ---------------------------------------------------------------
@@ -140,7 +137,7 @@ function mockSupabase(defaultResult: unknown = { data: null, error: null }) {
 function createDefaultSupabase() {
   const db = mockSupabase({ data: '{"messageId":"msg-1","outcome":"sent"}', error: null })
   db.setResult('conversations', { data: { id: 'c1', account_id: 'a1', contact: { id: 'contact-1', phone: '+5511999999999' } }, error: null })
-  db.setResult('whatsapp_config', { data: { id: 'cfg1', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' }, error: null })
+  db.setResult('whatsapp_config', { data: { id: '00000000-0000-4000-8000-0000000000c1', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' }, error: null })
   db.setResult('messages', { data: { id: 'msg-1' }, error: null })
   return db
 }
@@ -500,7 +497,108 @@ describe('POST /api/whatsapp/send', () => {
     expect(res.status).toBe(502)
   })
 
-  it('pauses flow runs after sending', async () => {
+  // `flow_runs` falls through to the default chain in this harness, so its
+  // calls are observable on `db.from('flow_runs')`. Filter by payload: that
+  // shared chain also serves any other table without an explicit override.
+  function pauseCalls() {
+    const chain = db.from('flow_runs') as unknown as {
+      update: ReturnType<typeof vi.fn>
+      eq: ReturnType<typeof vi.fn>
+    }
+    const updates = chain.update.mock.calls.filter(
+      ([payload]) => (payload as { status?: string })?.status === 'paused_by_agent',
+    )
+    return { chain, updates }
+  }
+
+  // ─── Z-API removal — a persisted provider='zapi' row must be rejected ────
+  // Never fall through to Meta: that would run a Z-API credential against
+  // the Meta API.
+  it('rejects a connection saved with the discontinued zapi provider (400), without sending or creating an intent', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'zapi', instance_id: 'inst1', access_token: 'encrypted', waba_id: null, phone_number_id: 'inst1', account_id: 'a1' },
+      error: null,
+    })
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'text',
+      content_text: 'hello',
+    }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Unsupported WhatsApp provider: zapi')
+    expect(mockGetProvider).not.toHaveBeenCalled()
+    expect(mockSendTextMessage).not.toHaveBeenCalled()
+    expect(pauseCalls().updates).toHaveLength(0)
+  })
+
+  // ─── Delivery binding: written in the SAME insert that creates the message ──
+  const insertedMessage = () => {
+    const chain = db.from('messages') as unknown as { insert: ReturnType<typeof vi.fn> }
+    return chain.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)
+  }
+
+  it('Meta path: the intent is created with the connection, provider and channel fingerprint of the config it is sent through', async () => {
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.bind' })
+    const { POST } = await import('./route')
+    expect((await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'hello' }))).status).toBe(200)
+
+    const rows = insertedMessage()
+    expect(rows).toHaveLength(1) // one INSERT carries everything — no second write completes the identity
+    expect(rows[0]).toMatchObject({
+      sender_type: 'agent',
+      status: 'sending',
+      connection_ref: '00000000-0000-4000-8000-0000000000c1',
+      delivery_provider: 'meta',
+    })
+    expect(rows[0].delivery_channel_fp).toMatch(/^v1:[0-9a-f]{64}$/)
+    expect(rows[0].idempotency_key).toBe(rows[0].id)
+    // nothing secret in the row
+    expect(JSON.stringify(rows[0])).not.toContain('encrypted')
+  })
+
+  it('uazapi path: same, with the uazapi provider and its own channel fingerprint', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'uazapi.bind' })
+    const { POST } = await import('./route')
+    expect((await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'hello' }))).status).toBe(200)
+
+    const [row] = insertedMessage()
+    expect(row).toMatchObject({ connection_ref: '00000000-0000-4000-8000-0000000000c1', delivery_provider: 'uazapi' })
+    expect(row.delivery_channel_fp).toMatch(/^v1:[0-9a-f]{64}$/)
+  })
+
+  it('a config that cannot identify its channel creates NO message and sends nothing', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'meta', phone_number_id: '', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    const { POST } = await import('./route')
+    const res = await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'hello' }))
+    expect(res.status).toBe(500)
+    expect(insertedMessage()).toHaveLength(0)
+    expect(mockSendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it('selects the Meta adapter for a meta row and the uazapi adapter for a uazapi row', async () => {
+    mockSendTextMessage.mockResolvedValue({ messageId: 'wamid.sel' })
+    const { POST } = await import('./route')
+    await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'm' }))
+    expect(mockGetProvider.mock.calls[0][0]).toMatchObject({ provider: 'meta', phoneNumberId: '123' })
+
+    mockGetProvider.mockClear()
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    await POST(request({ conversation_id: 'c1', message_type: 'text', content_text: 'u' }))
+    expect(mockGetProvider.mock.calls[0][0]).toMatchObject({ provider: 'uazapi', baseUrl: 'https://my.uazapi.dev', instanceId: 'inst1' })
+  })
+
+  it('ends active flow runs for the contact after a confirmed Meta send', async () => {
     mockSendTextMessage.mockResolvedValueOnce({ messageId: 'wamid.pause' })
     const { POST } = await import('./route')
     const res = await POST(request({
@@ -509,5 +607,50 @@ describe('POST /api/whatsapp/send', () => {
       content_text: 'Pause flows!',
     }))
     expect(res.status).toBe(200)
+
+    const { chain, updates } = pauseCalls()
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ status: 'paused_by_agent', end_reason: 'agent_replied' })
+    expect(updates[0][0].ended_at).toEqual(expect.any(String))
+    expect(chain.eq).toHaveBeenCalledWith('account_id', 'account-1')
+    expect(chain.eq).toHaveBeenCalledWith('contact_id', 'contact-1')
+    expect(chain.eq).toHaveBeenCalledWith('status', 'active')
+  })
+
+  it('ends active flow runs after a confirmed non-Meta (uazapi) send', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    mockSendTextMessage.mockResolvedValueOnce({ messageId: 'uazapi.pause' })
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'text',
+      content_text: 'Pause flows on uazapi!',
+    }))
+    expect(res.status).toBe(200)
+
+    const { chain, updates } = pauseCalls()
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ status: 'paused_by_agent', end_reason: 'agent_replied' })
+    expect(chain.eq).toHaveBeenCalledWith('account_id', 'account-1')
+    expect(chain.eq).toHaveBeenCalledWith('contact_id', 'contact-1')
+  })
+
+  it('does not end flow runs when the non-Meta send fails', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: '00000000-0000-4000-8000-0000000000c1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    mockSendTextMessage.mockRejectedValueOnce(new Error('provider down'))
+    const { POST } = await import('./route')
+    const res = await POST(request({
+      conversation_id: 'c1',
+      message_type: 'text',
+      content_text: 'Will fail',
+    }))
+    expect(res.status).toBe(502)
+    expect(pauseCalls().updates).toHaveLength(0)
   })
 })

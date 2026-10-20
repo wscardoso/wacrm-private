@@ -79,7 +79,7 @@ export type BootstrapOutcome =
  * Generates a connection_id (if the row lacks one), a high-entropy secret,
  * and persists ONLY its SHA-256 hash to whatsapp_config.webhook_secret_hash.
  * The plaintext secret is returned once and is the operator's responsibility
- * to copy into the Z-API / uazapi webhook URL. There is deliberately NO
+ * to copy into the uazapi webhook URL. There is deliberately NO
  * fallback to the legacy verify_token.
  *
  * SAFETY: by default this REFUSES to overwrite an already-initialized

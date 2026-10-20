@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption';
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
-import { getProvider, ProviderUnsupportedError } from '@/lib/whatsapp/providers';
+import { getProvider, providerConfigFromRow, ProviderUnsupportedError } from '@/lib/whatsapp/providers';
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
     // WhatsApp config + access token. Account-scoped post-multi-user.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('id, phone_number_id, access_token, provider, instance_id, base_url, waba_id')
+      .select('id, phone_number_id, access_token, provider, instance_id, base_url')
       .eq('account_id', accountId)
       .single();
 
@@ -129,17 +129,7 @@ export async function POST(request: Request) {
     // ── Provider dispatch (ADR-MSG-001/D3.b) ──
     let provider: ReturnType<typeof getProvider>
     try {
-      let clientToken: string | undefined
-      if (config.provider === 'zapi' && config.waba_id) {
-        try { clientToken = decryptWithBindingContext(config.waba_id, whatsappConfigBindingContext(accountId)) } catch { /* ignore */ }
-      }
-      provider = getProvider(
-        config.provider === 'zapi'
-          ? { provider: 'zapi', instanceId: config.instance_id!, accessToken, clientToken }
-          : config.provider === 'uazapi'
-            ? { provider: 'uazapi', baseUrl: config.base_url!, instanceId: config.instance_id!, accessToken }
-            : { provider: 'meta', phoneNumberId: config.phone_number_id, accessToken, verifyToken: '' },
-      )
+      provider = getProvider(providerConfigFromRow(config, accessToken))
     } catch (err) {
       if (err instanceof ProviderUnsupportedError) {
         return NextResponse.json({ error: err.message }, { status: 400 })
