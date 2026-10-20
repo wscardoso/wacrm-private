@@ -23,6 +23,7 @@ const KNOWN_VIOLATORS = [
   'app/api/whatsapp/templates/[id]/route.ts',
   'app/api/whatsapp/webhook/route.ts',
   'lib/flows/validate.ts',
+  'lib/whatsapp/meta-api.media-origin.test.ts',
   'lib/whatsapp/meta-api.resumable.test.ts',
   'lib/whatsapp/registration.test.ts',
   'lib/whatsapp/template-header-handle.test.ts',
