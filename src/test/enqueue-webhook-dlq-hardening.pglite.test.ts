@@ -22,7 +22,7 @@ const CB = 'b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1'
 const NOPE = 'deadbeef-dead-beef-dead-beefdeadbeef'
 const FN = 'public.enqueue_webhook_dlq(uuid,uuid,jsonb,text)'
 
-async function freshDb(applyHardening: boolean): Promise<PGlite> {
+async function freshDb(applyHardening: boolean, platformDefaultGrants = true): Promise<PGlite> {
   const db = new PGlite()
   await db.exec(`
     CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;
@@ -34,9 +34,13 @@ async function freshDb(applyHardening: boolean): Promise<PGlite> {
     GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
   `)
   await db.exec(m031)
-  // Supabase-style default grants (assumed shape; the real ACL is in the migration header)
-  await db.exec(`GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-                 GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;`)
+  // Supabase-style default grants (assumed shape; the real ACL is in the migration header).
+  // platformDefaultGrants=false models an install that does NOT pre-grant service_role,
+  // where only the grant in 082 gives it EXECUTE once PUBLIC is revoked.
+  if (platformDefaultGrants) {
+    await db.exec(`GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+                   GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;`)
+  }
   if (applyHardening) await db.exec(m082)
   return db
 }
@@ -131,5 +135,28 @@ describe('AFTER (031 + 082): hardened', () => {
     expect(await count(db)).toBe(1)
     expect((await callAs(db, 'service_role', A, CA)).id).toBeTruthy()
     expect(await count(db)).toBe(2)
+  })
+
+  it('re-running leaves the exact same ACL, owner and body (also for an install patched by hand beforehand)', async () => {
+    const state = async (db: PGlite) =>
+      (await db.query<{ acl: string; owner: string; src: string }>(
+        `SELECT proacl::text acl, proowner::regrole::text owner, prosrc src FROM pg_proc WHERE proname = 'enqueue_webhook_dlq'`)).rows[0]
+    const db = await freshDb(true) // 031 + 082
+    const once = await state(db)
+    await db.exec(m082)
+    expect(await state(db)).toEqual(once)
+    // manual fix first (same privileges, 031 body), then the migration: converges to the same state
+    const manual = await freshDb(false)
+    await manual.exec(`REVOKE ALL ON FUNCTION ${FN} FROM PUBLIC, anon, authenticated;
+                       GRANT EXECUTE ON FUNCTION ${FN} TO service_role;`)
+    await manual.exec(m082)
+    expect(await state(manual)).toMatchObject({ owner: once.owner, src: once.src })
+    expect((await callAs(manual, 'anon', A, CA)).code).toBe('42501')
+  })
+
+  it('service_role keeps EXECUTE where the platform did not pre-grant it (the GRANT in 082 is load-bearing)', async () => {
+    const db = await freshDb(true, false)
+    expect((await callAs(db, 'service_role', A, CA)).id).toBeTruthy()
+    for (const role of ['anon', 'authenticated']) expect((await callAs(db, role, A, CA)).code).toBe('42501')
   })
 })

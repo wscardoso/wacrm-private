@@ -11,6 +11,7 @@ import { join } from 'node:path'
 
 const sql = readFileSync(join(process.cwd(), 'scripts', 'diagnostics', 'l5-enqueue-webhook-dlq-exposure.sql'), 'utf8')
 const query = sql.replace(/;\s*$/, '')
+const m082 = readFileSync(join(process.cwd(), 'supabase', 'migrations', '082_enqueue_webhook_dlq_hardening.sql'), 'utf8')
 const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '')
 
 let db: PGlite
@@ -77,7 +78,7 @@ describe('L5 diagnostic: reports the exposure and the hardened state', () => {
     expect(Number(r.dlq_policy_count)).toBe(0)
   })
 
-  it('flags the hardened state as not exposed (service_role only)', async () => {
+  it('does not call it hardened when only the privileges were fixed and the ownership check is missing', async () => {
     await db.exec(`
       REVOKE ALL ON FUNCTION public.enqueue_webhook_dlq(UUID, UUID, JSONB, TEXT) FROM PUBLIC;
       REVOKE ALL ON FUNCTION public.enqueue_webhook_dlq(UUID, UUID, JSONB, TEXT) FROM anon;
@@ -92,6 +93,17 @@ describe('L5 diagnostic: reports the exposure and the hardened state', () => {
     expect(r.client_roles_exposed).toBe(false)
     expect(r.unexpected_execute_grantees).toBeNull()
     expect(r.execute_grantees).toEqual(['postgres', 'service_role'])
+    expect(r.has_ownership_check).toBe(false) // still the 031 body
+    expect(r.hardened).toBe(false)
+  })
+
+  it('flags the state produced by the real migration 082 as hardened', async () => {
+    await db.exec(m082)
+    const r = await row()
+    expect(r.client_roles_exposed).toBe(false)
+    expect(r.execute_grantees).toEqual(['postgres', 'service_role'])
+    expect(Number(r.overloads_in_public)).toBe(1)
+    expect(r.has_ownership_check).toBe(true)
     expect(r.hardened).toBe(true)
   })
 
@@ -102,6 +114,21 @@ describe('L5 diagnostic: reports the exposure and the hardened state', () => {
     expect(r.unexpected_execute_grantees).toEqual(['stray'])
     expect(r.hardened).toBe(false)
     await db.exec(`REVOKE ALL ON FUNCTION public.enqueue_webhook_dlq(UUID, UUID, JSONB, TEXT) FROM stray;`)
+    expect((await row()).hardened).toBe(true)
+  })
+
+  it('reports an exposed overload as its own row and withholds hardened from the main function', async () => {
+    await db.exec(`CREATE FUNCTION public.enqueue_webhook_dlq(p_account_id UUID) RETURNS UUID LANGUAGE sql AS $$ SELECT NULL::uuid $$;`)
+    const { rows } = await db.query<Record<string, unknown>>(query)
+    expect(rows).toHaveLength(2)
+    for (const r of rows) {
+      expect(Number(r.overloads_in_public)).toBe(2)
+      expect(r.hardened).toBe(false)
+    }
+    const overload = rows.find((r) => r.function_signature === 'enqueue_webhook_dlq(uuid)')
+    expect(overload?.public_can_execute).toBe(true)
+    expect(overload?.client_roles_exposed).toBe(true)
+    await db.exec('DROP FUNCTION public.enqueue_webhook_dlq(UUID)')
     expect((await row()).hardened).toBe(true)
   })
 
@@ -123,7 +150,7 @@ describe('L5 diagnostic: read-only guarantees', () => {
 
   it('contains no write, DDL, privilege or session-changing keyword', () => {
     const forbidden =
-      /\b(insert|update|delete|truncate|drop|alter|create|grant|revoke|copy|merge|call|do|vacuum|analyze|reindex|cluster|lock|listen|notify|set|reset|begin|commit|rollback|savepoint|nextval|setval|pg_sleep|dblink|lo_import|lo_export)\b/i
+      /\b(insert|update|delete|truncate|drop|alter|create|grant|revoke|copy|merge|call|do|vacuum|analyze|reindex|cluster|lock|listen|notify|set|reset|begin|commit|rollback|savepoint|nextval|setval|set_config|pg_sleep|pg_advisory\w*|pg_terminate_backend|pg_cancel_backend|pg_notify|dblink\w*|lo_import|lo_export)\b/i
     expect(body).not.toMatch(forbidden)
   })
 
