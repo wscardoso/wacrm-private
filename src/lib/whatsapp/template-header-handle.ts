@@ -1,7 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadResumableMedia } from '@/lib/whatsapp/meta-api'
 import type { TemplatePayload } from '@/lib/whatsapp/template-validators'
-import { resolveSignedMediaUrl, MEDIA_SIGNED_URL_TTL_SECONDS } from '@/lib/storage/resolve-media-url'
+import {
+  resolveSignedMediaUrl,
+  parseAccountBucketPath,
+  MEDIA_SIGNED_URL_TTL_SECONDS,
+} from '@/lib/storage/resolve-media-url'
+import { safeFetch, SafeFetchError } from '@/lib/http/safe-fetch'
 
 /**
  * Meta requires an `example.header_handle` (from the Resumable Upload
@@ -47,10 +52,26 @@ export async function ensureImageHeaderHandle(
 
   // Fetch the sample image bytes (works for our uploaded chat-media URL
   // and for a manually-pasted public link).
+  //
+  // A URL in one of our storage buckets was just re-signed by Storage, so
+  // its origin is our own Supabase project (not the pasted host) and it is
+  // fetched directly. Anything else is a tenant-pasted URL that this server
+  // would otherwise fetch from inside our network: it goes through safeFetch
+  // (public https only, no redirects). Failures stay generic so the message
+  // cannot be used to probe internal hosts.
+  const isOurStorage = parseAccountBucketPath(payload.header_media_url) !== null
   let res: Response
   try {
-    res = await fetch(mediaUrl)
-  } catch {
+    res = isOurStorage
+      ? await fetch(mediaUrl)
+      : await safeFetch(mediaUrl, { maxResponseBytes: IMAGE_MAX_BYTES + 1 })
+  } catch (err) {
+    if (err instanceof SafeFetchError && err.code === 'redirect') {
+      throw new Error('The header image URL redirects. Use the direct link to the image (https).')
+    }
+    if (err instanceof SafeFetchError && err.code === 'response_too_large') {
+      throw new Error("Header image is larger than 5 MB — Meta's limit is 5 MB.")
+    }
     throw new Error('Could not fetch the header image URL. Make sure it is publicly reachable.')
   }
   if (!res.ok) {
