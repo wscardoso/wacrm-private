@@ -4,6 +4,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { decryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 import { UazapiProvider } from '@/lib/whatsapp/providers/uazapi'
+import { resolveUazapiTarget } from '@/lib/whatsapp/providers/uazapi-target'
 
 export async function POST(req: Request) {
   let accountId: string
@@ -16,37 +17,45 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json().catch(() => ({}))
-    let baseUrl = body.baseUrl as string | undefined
-    let instanceId = body.instanceId as string | undefined
-    let token = body.token as string | undefined
+    const asText = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
-    // If not provided in body, load from saved whatsapp_config
-    if (!baseUrl || !instanceId || !token) {
-      const admin = supabaseAdmin()
-      const { data: config } = await admin
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', accountId)
-        .eq('provider', 'uazapi')
-        .maybeSingle()
+    const admin = supabaseAdmin()
+    const { data: config } = await admin
+      .from('whatsapp_config')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('provider', 'uazapi')
+      .maybeSingle()
 
-      if (config) {
-        baseUrl = baseUrl || config.base_url
-        instanceId = instanceId || config.instance_id
-        if (!token && config.access_token) {
-          try {
-            token = decryptWithBindingContext(
-              config.access_token,
-              whatsappConfigBindingContext(accountId),
-            )
-          } catch (e) {
-            console.error('[uazapi-qr] failed to decrypt token:', e)
+    // The stored token is only ever paired with the stored base_url; a request
+    // that names another server must bring its own token.
+    const target = resolveUazapiTarget(
+      {
+        baseUrl: asText(body.baseUrl),
+        instanceId: asText(body.instanceId),
+        token: asText(body.token),
+      },
+      config
+        ? {
+            base_url: config.base_url ?? null,
+            instance_id: config.instance_id ?? null,
+            access_token: config.access_token ?? null,
           }
-        }
-      }
-    }
+        : null,
+      () =>
+        decryptWithBindingContext(config!.access_token, whatsappConfigBindingContext(accountId)),
+    )
 
-    if (!baseUrl || !instanceId || !token) {
+    if (!target.ok) {
+      if (target.code === 'token_required_for_new_host') {
+        return NextResponse.json(
+          { error: 'Informe o token da instância ao alterar o servidor.' },
+          { status: 400 },
+        )
+      }
+      if (target.code === 'invalid_base_url') {
+        return NextResponse.json({ error: 'URL do servidor inválida.' }, { status: 400 })
+      }
       return NextResponse.json(
         { error: 'Configuração incompleta. Forneça Server URL, Nome da Instância e Token.' },
         { status: 400 },
@@ -54,9 +63,9 @@ export async function POST(req: Request) {
     }
 
     const provider = new UazapiProvider({
-      baseUrl,
-      instanceId,
-      token,
+      baseUrl: target.baseUrl,
+      instanceId: target.instanceId,
+      token: target.token,
     })
 
     const result = await provider.connectAndGetQrCode(body.phone)

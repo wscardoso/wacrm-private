@@ -99,9 +99,27 @@ export class UazapiProvider implements WhatsAppProvider {
     return digits.endsWith('@s.whatsapp.net') ? digits : `${digits}@s.whatsapp.net`
   }
 
+  /**
+   * Single outbound HTTP exit for this provider. Every call carries the
+   * instance token in custom headers (`apikey`, `token`). The fetch default
+   * (`redirect: 'follow'`) re-sends custom headers on a cross-origin redirect
+   * (only `Authorization` is dropped), so a redirect from the authorized
+   * server, or one injected into its path, would hand the token to another
+   * origin. Redirects are never followed: a 3xx is a failure. It reuses the
+   * `failed (<status>)` shape so classifyUazapiSendFailure treats it like any
+   * other non-listed status (ambiguous), unchanged.
+   */
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+    const res = await fetch(`${this.baseUrl}${path}`, { ...init, redirect: 'manual' })
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel().catch(() => undefined)
+      throw new Error(`uazapi ${path} failed (${res.status}): redirect refused`)
+    }
+    return res
+  }
+
   private async post(path: string, body: unknown): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`
-    const res = await fetch(url, {
+    const res = await this.request(path, {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -117,8 +135,9 @@ export class UazapiProvider implements WhatsAppProvider {
     const statusResult = await this.getInstanceStatus().catch(() => null)
     if (statusResult && statusResult.connected) return { connected: true }
 
-    const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
-    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    const res = await this.request(`/instance/connectionState/${this.instanceId}`, {
+      headers: this.headers(),
+    }).catch(() => null)
     if (!res || !res.ok) return { connected: false }
     const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
     return { connected: data.instance?.state === 'open' }
@@ -134,7 +153,7 @@ export class UazapiProvider implements WhatsAppProvider {
     if (phone) body.phone = phone.replace(/\D/g, '')
 
     try {
-      const connectRes = await fetch(`${this.baseUrl}/instance/connect`, {
+      const connectRes = await this.request('/instance/connect', {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body),
@@ -173,7 +192,7 @@ export class UazapiProvider implements WhatsAppProvider {
     connected: boolean
   }> {
     try {
-      const res = await fetch(`${this.baseUrl}/instance/status`, {
+      const res = await this.request('/instance/status', {
         headers: this.headers(),
       })
       if (res.ok) {
@@ -200,8 +219,9 @@ export class UazapiProvider implements WhatsAppProvider {
       // Fallback
     }
 
-    const url = `${this.baseUrl}/instance/connectionState/${this.instanceId}`
-    const res = await fetch(url, { headers: this.headers() }).catch(() => null)
+    const res = await this.request(`/instance/connectionState/${this.instanceId}`, {
+      headers: this.headers(),
+    }).catch(() => null)
     if (!res || !res.ok) return { status: 'disconnected', connected: false }
     const data = (await res.json().catch(() => ({}))) as { instance?: { state?: string } }
     const isConn = data.instance?.state === 'open'
