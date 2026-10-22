@@ -7,6 +7,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.ts"],
+    // PGlite full-chain suites (082+ and 085–087) exceed Vitest's 5s default
+    // on CI runners; the prior local green suite used an amplified timeout.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     // Dummy secrets — encryption.ts / webhook-signature.ts read these
     // at module load. Tests never hit a real Meta/Supabase service, so
     // any 32-byte hex / non-empty string will do; keep them lexically

@@ -29,7 +29,13 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
-import { getProvider, providerConfigFromRow, ProviderUnsupportedError } from '@/lib/whatsapp/providers'
+import {
+  getProvider,
+  providerConfigFromRow,
+  providerSupportsTemplates,
+  ProviderUnsupportedError,
+  TEMPLATES_META_ONLY_MESSAGE,
+} from '@/lib/whatsapp/providers'
 
 interface BroadcastResult {
   phone: string
@@ -176,6 +182,16 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: err.message }, { status: 400 })
       }
       throw err
+    }
+
+    // A broadcast is a template fan-out and templates exist only on Meta: the
+    // uazapi adapter would send the template NAME as text to every recipient.
+    // Refuse before anything is looked up or sent (same rule as /send).
+    if (!providerSupportsTemplates(config)) {
+      return NextResponse.json(
+        { error: `${TEMPLATES_META_ONLY_MESSAGE} Broadcasts cannot be sent through a ${config.provider} connection.` },
+        { status: 400 },
+      )
     }
 
     // Load the template row once so provider.sendTemplate can build

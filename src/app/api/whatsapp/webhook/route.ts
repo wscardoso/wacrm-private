@@ -23,6 +23,12 @@ import {
 } from '@/lib/whatsapp/template-webhook'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { persistAttribution } from '@/lib/whatsapp/attribution'
+import {
+  InboundPersistenceError,
+  captureInboundFailure,
+  classifyInboundFailure,
+  type DlqEventInfo,
+} from '@/lib/whatsapp/inbound-dlq'
 import type { Referral } from '@/types'
 
 interface WhatsAppMessage {
@@ -252,6 +258,20 @@ export async function POST(request: Request) {
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
+/** Identifiers/flags of a Meta message for the DLQ envelope. Never content. */
+function metaEventInfo(message: WhatsAppMessage): DlqEventInfo {
+  return {
+    type: message.type,
+    externalMessageId: message.id,
+    timestamp: message.timestamp,
+    hasMedia: !!(
+      message.image || message.video || message.document ||
+      message.audio || message.sticker
+    ),
+    hasContext: !!message.context?.id,
+  }
+}
+
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
   if (!body.entry) return
 
@@ -303,6 +323,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         .from('whatsapp_config')
         .select('*')
         .eq('phone_number_id', phoneNumberId)
+        // For a uazapi row `phone_number_id` holds the instance NAME (a
+        // user-chosen string sharing the column, and its UNIQUE index, with
+        // Meta ids). A signed Meta event must only ever resolve a Meta row.
+        .eq('provider', 'meta')
 
       if (configError) {
         console.error(
@@ -331,10 +355,43 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const config = configRows[0]
 
-      const decryptedAccessToken = decryptWithBindingContext(
-        config.access_token,
-        whatsappConfigBindingContext(config.account_id),
-      )
+      // C6.2 — a token that cannot be decrypted used to reject the whole
+      // processWebhook() run, silently dropping every remaining message of the
+      // delivery (already 200-acked). The config here is proven (single row,
+      // resolved by phone_number_id), so each affected message is captured
+      // individually; the loop then moves on to the next change/entry.
+      let decryptedAccessToken: string
+      try {
+        decryptedAccessToken = decryptWithBindingContext(
+          config.access_token,
+          whatsappConfigBindingContext(config.account_id),
+        )
+      } catch (err) {
+        // Error CLASS only: decrypt errors are not guaranteed free of key/ciphertext material.
+        console.error(
+          'Failed to decrypt whatsapp_config access token (config_id=%s, error_type=%s)',
+          config.id,
+          err instanceof Error ? err.name : 'NonError',
+        )
+        for (const message of value.messages) {
+          const capture = await captureInboundFailure({
+            accountId: config.account_id,
+            configId: config.id,
+            source: 'meta',
+            stage: 'token_decrypt',
+            error: err,
+            event: metaEventInfo(message),
+          })
+          if (!capture.ok) {
+            console.error(
+              'Inbound failure NOT captured in DLQ (message lost), reason=%s stage=%s',
+              capture.reason,
+              'token_decrypt',
+            )
+          }
+        }
+        continue
+      }
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
@@ -345,6 +402,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         // already 200-acked to Meta, so one message throwing must not
         // take the rest of this batch (or subsequent changes/entries
         // in the same delivery) down with it.
+        const state = { persisted: false }
         try {
           await processMessage(
             message,
@@ -356,10 +414,45 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
             // inserts that need it for NOT NULL FK compliance. Always
             // the admin who saved the WhatsApp config.
             config.user_id,
-            decryptedAccessToken
+            decryptedAccessToken,
+            state
           )
         } catch (err) {
-          console.error('Error processing inbound message:', message.id, err)
+          // C6.2 — failure capture (diagnostic only; no replay/retry/drain).
+          // A failure AFTER the message was persisted keeps its pre-C6.2
+          // behaviour: logged, not captured.
+          if (state.persisted) {
+            console.error('Error processing inbound message AFTER persist (not captured):', message.id, err)
+            continue
+          }
+          const failure = classifyInboundFailure(err)
+          if (failure.kind === 'post_insert') continue
+          if (failure.stage === 'unexpected') {
+            // Original log line, unchanged (an existing test pins it).
+            console.error('Error processing inbound message:', message.id, err)
+          } else {
+            console.error('Inbound persistence failure, stage=%s', failure.stage)
+          }
+          // account_id and id come from the single, uniquely-resolved
+          // whatsapp_config row above (configRows.length === 1). One DLQ
+          // row per message — never the whole Meta batch.
+          const capture = await captureInboundFailure({
+            accountId: config.account_id,
+            configId: config.id,
+            source: 'meta',
+            stage: failure.stage,
+            error: err,
+            event: metaEventInfo(message),
+          })
+          if (!capture.ok) {
+            // Meta already received its 200 — there is no redelivery lever
+            // here, so the loss is surfaced loudly in the logs instead.
+            console.error(
+              'Inbound failure NOT captured in DLQ (message lost), reason=%s stage=%s',
+              capture.reason,
+              failure.stage,
+            )
+          }
         }
       }
     }
@@ -610,7 +703,10 @@ async function processMessage(
   // (contacts, conversations). Always the admin who saved the
   // WhatsApp config; the choice is arbitrary post-017 but stable.
   configOwnerUserId: string,
-  accessToken: string
+  accessToken: string,
+  // Set to true once the inbound message row is persisted, so the caller can
+  // tell a pre-insert failure (capturable, C6.2) from a post-insert one.
+  state: { persisted: boolean }
 ) {
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
@@ -622,7 +718,7 @@ async function processMessage(
     senderPhone,
     contactName
   )
-  if (!contactOutcome) return
+  if (!contactOutcome) throw new InboundPersistenceError('contact')
   const contactRecord = contactOutcome.contact
 
   // Find or create conversation
@@ -631,7 +727,7 @@ async function processMessage(
     configOwnerUserId,
     contactRecord.id
   )
-  if (!conversation) return
+  if (!conversation) throw new InboundPersistenceError('conversation')
 
   // Reactions short-circuit here — they aren't messages. We never insert
   // into `messages`, never bump unread_count, never update last_message_text.
@@ -723,7 +819,7 @@ async function processMessage(
 
   if (msgError) {
     console.error('Error inserting message:', msgError)
-    return
+    throw new InboundPersistenceError('message_insert', msgError.code)
   }
 
   const wasInserted = !!insertedId
@@ -734,6 +830,7 @@ async function processMessage(
     )
     return
   }
+  state.persisted = true
 
   // Update conversation
   const { error: convError } = await supabaseAdmin()
@@ -1081,7 +1178,8 @@ async function findOrCreateContact(
       if (raced) return { contact: raced, wasCreated: false }
     }
     console.error('Error creating contact:', createError)
-    return null
+    // SQLSTATE only (validated), never the raw DB error — see C6.2 capture.
+    throw new InboundPersistenceError('contact', createError.code)
   }
 
   return { contact: newContact, wasCreated: true }
@@ -1110,7 +1208,7 @@ async function findOrCreateConversation(
 
   if (error) {
     console.error('Error finding/creating conversation:', error)
-    return null
+    throw new InboundPersistenceError('conversation', error.code)
   }
 
   return data

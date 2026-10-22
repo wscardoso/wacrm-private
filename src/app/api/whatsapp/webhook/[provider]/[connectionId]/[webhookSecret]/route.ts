@@ -6,6 +6,7 @@ import { getProvider, type ProviderConfig } from '@/lib/whatsapp/providers';
 import type { InboundMessage } from '@/lib/whatsapp/providers/types';
 import { processInboundMessage } from '@/lib/whatsapp/inbound-processor';
 import { handleCanonicalStatusEvent } from '@/lib/whatsapp/status-handler';
+import { captureInboundFailure, classifyInboundFailure } from '@/lib/whatsapp/inbound-dlq';
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -202,17 +203,62 @@ export async function POST(
   // behaviour (uazapi array or { data: [...] }).
   const events: InboundMessage[] = [];
 
+  // C6.2 — an adapter that throws on ONE malformed item used to abort the
+  // whole request with an unhandled 500 (the other items of a uazapi batch were
+  // never processed and nothing was recorded). Each parse is now isolated; the
+  // failure is captured below, with the config already authenticated above.
+  const parseFailures: unknown[] = [];
+  const safeParse = (item: unknown): InboundMessage | null => {
+    try {
+      return providerInstance.parseInboundMessage(item);
+    } catch (err) {
+      // Error CLASS only: the message may quote the offending payload.
+      console.error('[webhook] parseInboundMessage failed, error_type=%s', err instanceof Error ? err.name : 'NonError');
+      parseFailures.push(err);
+      return null;
+    }
+  };
+
   {
     const arr = Array.isArray(payload) ? payload : (payload as { data?: unknown[] })?.data;
     if (Array.isArray(arr)) {
       for (const item of arr) {
-        const parsed = providerInstance.parseInboundMessage(item);
+        const parsed = safeParse(item);
         if (parsed) events.push(parsed);
       }
     } else if (arr !== undefined) {
-      const parsed = providerInstance.parseInboundMessage(arr);
+      const parsed = safeParse(arr);
       if (parsed) events.push(parsed);
     }
+  }
+
+  // C6.2 — failure capture (diagnostic only; no replay/retry/drain).
+  //   captured   = failed before/at persistence AND recorded in the DLQ.
+  //   uncaptured = failed before/at persistence and the DLQ write failed too.
+  // Failures AFTER the message was persisted keep their pre-C6.2 behaviour
+  // (logged, not counted as processed, not captured).
+  //
+  // HTTP contract (decision A1, Comandante):
+  //   * persistence failed + captured       -> 200. The DLQ record is
+  //     DIAGNOSTIC and NOT replayable (minimised envelope); the message itself
+  //     is NOT recovered. Its permanent loss is a risk temporarily accepted
+  //     until a separately authorised replay/drain front.
+  //   * persistence failed + capture failed -> 500.
+  //   Redelivery by uazapi / Evolution is NOT assumed or verified.
+  let capturedCount = 0;
+  let uncapturedCount = 0;
+
+  for (const parseErr of parseFailures) {
+    const capture = await captureInboundFailure({
+      accountId: config.account_id,
+      configId: config.id,
+      source: 'uazapi',
+      stage: 'parse',
+      error: parseErr,
+      event: {},
+    });
+    if (capture.ok) capturedCount++;
+    else uncapturedCount++;
   }
 
   for (const event of events) {
@@ -220,14 +266,65 @@ export async function POST(
       await processInboundMessage(event, config.account_id, config.user_id);
       inboundCount++;
     } catch (err) {
-      console.error('[webhook] processInboundMessage failed:', err);
+      const failure = classifyInboundFailure(err);
+      if (failure.kind === 'post_insert') {
+        console.error('[webhook] processInboundMessage failed AFTER persist (not captured):', err);
+        continue;
+      }
+      if (failure.stage === 'unexpected') {
+        // Original log line, unchanged.
+        console.error('[webhook] processInboundMessage failed:', err);
+      } else {
+        console.error('[webhook] processInboundMessage persistence failure, stage=%s', failure.stage);
+      }
+      // account_id and id come from the same whatsapp_config row resolved and
+      // authenticated by connection_id above (never a second lookup).
+      const capture = await captureInboundFailure({
+        accountId: config.account_id,
+        configId: config.id,
+        source: 'uazapi',
+        stage: failure.stage,
+        error: err,
+        event: {
+          type: event.type,
+          externalMessageId: event.messageId,
+          timestamp: event.timestamp,
+          hasMedia: !!event.mediaRef,
+          hasContext: !!event.contextMessageId,
+        },
+      });
+      if (capture.ok) capturedCount++;
+      else uncapturedCount++;
     }
+  }
+
+  // The failure was neither persisted nor captured: answer 5xx so the failure
+  // is visible to the caller/monitoring. Whether the provider then redelivers
+  // is NOT assumed. Other events of this batch were still handled above. IF a
+  // provider re-sent the WHOLE payload, events already persisted would be
+  // deduplicated by insert_inbound_message (no repeated effects), but an event
+  // that was already captured and fails again would be captured again (the DLQ
+  // has no dedup — future front).
+  if (uncapturedCount > 0) {
+    return NextResponse.json(
+      {
+        error: 'Inbound persistence failed and could not be captured',
+        processed: inboundCount,
+        inboundProcessed: inboundCount,
+        captured: capturedCount,
+        uncaptured: uncapturedCount,
+        statusProcessed: statusCount,
+      },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({
     received: true,
     processed: inboundCount,
     inboundProcessed: inboundCount,
+    // Additive (C6.2): events recorded in the DLQ. NOT counted as processed.
+    captured: capturedCount,
     statusProcessed: statusCount,
   });
 }

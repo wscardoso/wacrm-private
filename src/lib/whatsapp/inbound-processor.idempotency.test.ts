@@ -159,13 +159,65 @@ describe('processInboundMessage — C4 idempotency', () => {
     ).toBe(false)
   })
 
-  it('propagates errors and does not short-circuit on db error', async () => {
+  it('throws InboundPersistenceError (not a silent return) on a message-insert db error, and runs no downstream effect', async () => {
     const { processInboundMessage } = await import('./inbound-processor')
+    const { InboundPersistenceError } = await import('./inbound-dlq')
 
-    messagesUpsertResult = { data: null, error: { message: 'boom' } }
-    await processInboundMessage(makeInbound('ext-err'), 'acc-1', 'user-1')
+    messagesUpsertResult = { data: null, error: { message: 'boom', code: '57P01' } }
+    const err = await processInboundMessage(makeInbound('ext-err'), 'acc-1', 'user-1').catch((e) => e)
 
-    // On error we return early (current behaviour) — flows must not run
+    expect(err).toBeInstanceOf(InboundPersistenceError)
+    expect(err.stage).toBe('message_insert')
+    expect(err.dbCode).toBe('57P01')
+    // The raw DB message must not travel inside the error.
+    expect(String(err.message)).not.toContain('boom')
     expect(mockDispatchFlows).not.toHaveBeenCalled()
+    expect(mockRunAutomations).not.toHaveBeenCalled()
+    expect(mockCancelPendingCadences).not.toHaveBeenCalled()
+  })
+
+  it('a legitimate duplicate still returns normally (does not throw)', async () => {
+    const { processInboundMessage } = await import('./inbound-processor')
+    messagesUpsertResult = { data: [], error: null }
+    await expect(processInboundMessage(makeInbound('ext-dup'), 'acc-1', 'user-1')).resolves.toBeUndefined()
+  })
+
+  it('D-C: an unknown event WITHOUT message id creates no contact/conversation/message and runs no effect', async () => {
+    const { processInboundMessage } = await import('./inbound-processor')
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await processInboundMessage(
+      { type: 'unknown' as const, from: '15559876543', messageId: '', timestamp: '1710000000000' },
+      'acc-1', 'user-1',
+    )
+    expect(mockFromImpl).not.toHaveBeenCalled()
+    expect(mockRpcImpl).not.toHaveBeenCalled()
+    expect(mockFindExistingContact).not.toHaveBeenCalled()
+    expect(mockDispatchFlows).not.toHaveBeenCalled()
+    expect(mockRunAutomations).not.toHaveBeenCalled()
+    expect(mockCancelPendingCadences).not.toHaveBeenCalled()
+  })
+
+  it('D-C does not swallow legitimate cases: an unknown type WITH a message id is still stored, a reaction never inserts a message', async () => {
+    const { processInboundMessage } = await import('./inbound-processor')
+    await processInboundMessage(
+      { type: 'unknown' as const, from: '15559876543', messageId: 'ext-unk-1', timestamp: '1710000000000' },
+      'acc-1', 'user-1',
+    )
+    expect(mockRpcImpl.mock.calls.filter((c) => c[0] === 'insert_inbound_message')).toHaveLength(1)
+
+    mockRpcImpl.mockClear()
+    await processInboundMessage(
+      { type: 'reaction' as const, from: '15559876543', messageId: 'ext-react-1', timestamp: '1710000000000', reactionTargetMessageId: 't', reactionEmoji: 'x' },
+      'acc-1', 'user-1',
+    )
+    expect(mockRpcImpl.mock.calls.filter((c) => c[0] === 'insert_inbound_message')).toHaveLength(0)
+  })
+
+  it('wraps an exception thrown AFTER the insert in InboundPostInsertError', async () => {
+    const { processInboundMessage } = await import('./inbound-processor')
+    const { InboundPostInsertError } = await import('./inbound-dlq')
+    mockDispatchFlows.mockRejectedValueOnce(new Error('flow boom'))
+    const err = await processInboundMessage(makeInbound('ext-post'), 'acc-1', 'user-1').catch((e) => e)
+    expect(err).toBeInstanceOf(InboundPostInsertError)
   })
 })

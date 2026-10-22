@@ -37,22 +37,36 @@ import type {
 /**
  * ADR-E4B-003 §3.4 — Meta-specific interpretation, confined to this file.
  *
- * meta-api.ts throws a plain `Error` whose message is either Meta's own
- * JSON error text, or the fallback `Meta API error: ${status}` when the
- * error body wasn't parseable JSON. The fallback is the only place an
- * HTTP status survives to this boundary today; extracted here, never
- * exposed past this function.
+ * The HTTP status reaches this boundary in one of two ways:
+ *   - `MetaApiError.status`, set by meta-api.ts from the Response itself.
+ *     This is authoritative, also when Meta answered with a JSON error body
+ *     (whose `message` is Meta's own text and carries no status). Recognised
+ *     by shape (name + numeric status), not `instanceof`, so it does not
+ *     depend on which copy of meta-api.ts produced the error (module
+ *     duplication in a bundle, or a test double of that module).
+ *   - the legacy fallback text `Meta API error: ${status}` on a plain `Error`
+ *     (an unparseable body from a caller that still throws a plain Error).
+ *     It is read only when there is no typed status, and only as the whole
+ *     message: free text from the provider does not decide the class.
  */
-function classifyMetaSendFailure(error: unknown): SendOutcomeClass {
+function httpStatusOf(error: unknown): number | undefined {
+  if (error instanceof Error && error.name === 'MetaApiError') {
+    const status = (error as Error & { status?: unknown }).status
+    if (typeof status === 'number' && Number.isInteger(status)) return status
+  }
   const message = error instanceof Error ? error.message : String(error)
-  const match = /Meta API error: (\d{3})/.exec(message)
-  if (!match) {
-    // No status recoverable — Meta's own error text, a local invariant
-    // message (e.g. "returned no message id"), or a network-level
-    // failure. None of these give certainty of non-delivery here.
+  const match = /^Meta API error: (\d{3})$/.exec(message)
+  return match ? Number(match[1]) : undefined
+}
+
+function classifyMetaSendFailure(error: unknown): SendOutcomeClass {
+  const status = httpStatusOf(error)
+  if (status === undefined) {
+    // No status recoverable — a local invariant message (e.g. "returned no
+    // message id"), or a network-level failure. None of these give certainty
+    // of non-delivery here.
     return 'ambiguous'
   }
-  const status = Number(match[1])
   // Certain, definitive rejection by the API layer before any dispatch:
   // bad request / auth / not found / unprocessable.
   if ([400, 401, 403, 404, 422].includes(status)) {

@@ -62,6 +62,15 @@ const mockSettle = vi.fn(async () => ({ messageId: 'x', outcome: 'sent' }))
 vi.mock('@/lib/whatsapp/delivery/settlement', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/whatsapp/delivery/settlement')>()),
   settleMessageSystem: (...a: unknown[]) => (mockSettle as unknown as (...x: unknown[]) => unknown)(...a),
+  settleAcceptedSend: async (
+    supabase: unknown,
+    args: { messageId: string; connectionRef: string; externalIdentities: unknown; providerMessageId: string },
+  ) => {
+    const settlement = await (mockSettle as unknown as (...x: unknown[]) => Promise<{ messageId: string; outcome: string }>)(
+      supabase, args.messageId, 'sent', args.connectionRef, args.externalIdentities, args.providerMessageId,
+    )
+    return { settlement, pending: false }
+  },
 }))
 const mockHandleFailure = vi.fn(async () => ({ messageId: 'x', outcome: 'noop' }))
 vi.mock('@/lib/whatsapp/delivery/sender', () => ({ handleSendFailure: (...a: unknown[]) => (mockHandleFailure as unknown as (...x: unknown[]) => unknown)(...a) }))
@@ -96,7 +105,8 @@ describe.each([
   ['meta', metaCfg],
   ['uazapi', uaCfg],
 ])('outbound creation sites — %s connection', (provider, cfg) => {
-  it.each(callers)('%s: ONE insert carries the message, its idempotency key and the delivery binding', async (_name, call, expected) => {
+  // Templates exist only on Meta: the uazapi variant of the automations template step is refused (see below).
+  it.each(callers.filter(([name]) => !(provider === 'uazapi' && name === 'automations template')))('%s: ONE insert carries the message, its idempotency key and the delivery binding', async (_name, call, expected) => {
     db.config = cfg
     await call()
 
@@ -140,5 +150,31 @@ describe('a failed insert', () => {
     db.insertError = { message: 'column "delivery_channel_fp" of relation "messages" does not exist' }
     await expect(autoText({ ...base, text: 'x' })).rejects.toThrow('failed to create message row: column "delivery_channel_fp" of relation "messages" does not exist')
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('templates on a non-Meta connection', () => {
+  it('the automations send_template step is refused BEFORE a message is created or the template name is sent as text', async () => {
+    db.config = uaCfg
+    await expect(engineSendTemplate({ ...base, templateName: 'boas_vindas', language: 'pt_BR' })).rejects.toThrow(
+      /only available with the official Meta WhatsApp Business API/,
+    )
+    expect(db.inserts).toHaveLength(0)
+    expect(send).not.toHaveBeenCalled()
+    expect(mockSettle).not.toHaveBeenCalled()
+  })
+
+  it('a Meta connection is unaffected', async () => {
+    db.config = metaCfg
+    await engineSendTemplate({ ...base, templateName: 'boas_vindas', language: 'pt_BR' })
+    expect(db.inserts).toHaveLength(1)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('the automations TEXT step on uazapi is unaffected', async () => {
+    db.config = uaCfg
+    await autoText({ ...base, text: 'oi' })
+    expect(db.inserts).toHaveLength(1)
+    expect(send).toHaveBeenCalledTimes(1)
   })
 })

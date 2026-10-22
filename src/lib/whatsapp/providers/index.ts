@@ -95,3 +95,19 @@ export function providerConfigFromRow(row: ProviderConfigRow, accessToken: strin
       throw new ProviderUnsupportedError(String(row.provider))
   }
 }
+
+/**
+ * Message templates (and therefore broadcasts, which are template fan-outs)
+ * exist only on the official Meta API. The uazapi adapter has no template
+ * concept and would deliver the template NAME as plain text, so every
+ * template-sending entry point must refuse a non-Meta connection BEFORE it
+ * creates or sends anything. `/send` has always done so (with its own, longer
+ * wording); `/broadcast` and the automations `send_template` step share this
+ * rule and this message.
+ */
+export function providerSupportsTemplates(row: Pick<ProviderConfigRow, 'provider'>): boolean {
+  return (row.provider ?? 'meta') === 'meta'
+}
+
+export const TEMPLATES_META_ONLY_MESSAGE =
+  'Template messages are only available with the official Meta WhatsApp Business API.'

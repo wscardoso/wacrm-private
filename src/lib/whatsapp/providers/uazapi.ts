@@ -14,7 +14,6 @@ import type {
   SendResult,
   SendTextArgs,
   SendMediaArgs,
-  SendTemplateArgs,
   SendReactionArgs,
   SendInteractiveButtonsArgs,
   SendInteractiveListArgs,
@@ -57,6 +56,19 @@ function classifyUazapiSendFailure(error: unknown): SendOutcomeClass {
   }
   return 'ambiguous'
 }
+
+/**
+ * Request budgets. Sends use the same 30 s as the Meta adapter
+ * (meta-api.ts FETCH_TIMEOUT_MS); control-plane calls (status / connect / QR)
+ * are interactive and get a shorter one. Without a signal a hung uazapi server
+ * holds the /send request, a cron batch or a flow run until the platform kills
+ * it — and the user, seeing nothing, sends again.
+ *
+ * A timeout carries no HTTP status, so classifyUazapiSendFailure() files it as
+ * `ambiguous`: the request may well have been processed.
+ */
+const SEND_TIMEOUT_MS = 30_000
+const CONTROL_TIMEOUT_MS = 15_000
 
 export class UazapiProvider implements WhatsAppProvider {
   readonly kind = 'uazapi'
@@ -109,8 +121,12 @@ export class UazapiProvider implements WhatsAppProvider {
    * `failed (<status>)` shape so classifyUazapiSendFailure treats it like any
    * other non-listed status (ambiguous), unchanged.
    */
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const res = await fetch(`${this.baseUrl}${path}`, { ...init, redirect: 'manual' })
+  private async request(path: string, init: RequestInit = {}, timeoutMs = CONTROL_TIMEOUT_MS): Promise<Response> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
     if (res.status >= 300 && res.status < 400) {
       await res.body?.cancel().catch(() => undefined)
       throw new Error(`uazapi ${path} failed (${res.status}): redirect refused`)
@@ -123,12 +139,15 @@ export class UazapiProvider implements WhatsAppProvider {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
-    })
+    }, SEND_TIMEOUT_MS)
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(`uazapi ${path} failed (${res.status}): ${text}`)
     }
-    return res.json()
+    // A 2xx means uazapi accepted the request. An unreadable body must not turn
+    // an accepted send into a thrown error (the caller would treat it as a send
+    // failure); it just carries no message id.
+    return res.json().catch(() => ({}))
   }
 
   async checkStatus(): Promise<{ connected: boolean }> {
@@ -237,12 +256,22 @@ export class UazapiProvider implements WhatsAppProvider {
   }
 
   private extractMessageId(data: unknown): string {
-    const d = data as Record<string, unknown>
+    const d = data as Record<string, unknown> | null
     const key = d?.key as Record<string, unknown> | undefined
-    return (key?.id as string) ?? ''
+    return typeof key?.id === 'string' ? key.id : ''
   }
 
   private withIdentities(messageId: string): SendResult {
+    // A 2xx without a message id means the send was accepted but cannot be
+    // correlated later. Declaring '' as an identity would put the empty string
+    // into message_external_ids, whose unique index is
+    // (connection_ref, kind, value): the SECOND such message of a connection
+    // would violate it and fail to settle. Declare no identity instead; the
+    // message still settles as sent (without delivery ticks, which need an id).
+    if (!messageId) {
+      console.warn('[uazapi] send accepted (2xx) but the response carried no message id; no external identity declared')
+      return { messageId: '', externalIdentities: [] }
+    }
     const identities: ExternalIdentity[] = [{ kind: 'provider_message_id', value: messageId }]
     return { messageId, externalIdentities: identities }
   }
@@ -286,11 +315,14 @@ export class UazapiProvider implements WhatsAppProvider {
     return this.withIdentities(this.extractMessageId(data))
   }
 
-  async sendTemplate({ to, templateName, params }: SendTemplateArgs): Promise<SendResult> {
-    const text = params
-      ? Object.entries(params).reduce((t, [k, v]) => t.replace(`{{${k}}}`, v), templateName)
-      : templateName
-    return this.sendText({ to, text })
+  async sendTemplate(): Promise<SendResult> {
+    // Templates exist only on the official Meta API. Sending the template name
+    // as plain text (the previous behaviour) delivers the wrong content.
+    // 422 is classified deterministic-permanent, so a retry cron will not
+    // resend it.
+    throw new Error(
+      'uazapi sendTemplate failed (422): template messages are only supported on the Meta provider',
+    )
   }
 
   async sendReaction({ to, targetMessageId, emoji }: SendReactionArgs): Promise<SendResult> {

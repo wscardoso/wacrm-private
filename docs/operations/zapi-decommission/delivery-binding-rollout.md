@@ -111,10 +111,10 @@ What these tests **cannot** show: behaviour of the real PostgREST/Supabase stack
 
 ## 9. Known residual risks (not fixed by this work)
 
-1. The cron marks a ledger entry `dead` for a `content_type` it cannot rebuild (e.g. Flows `interactive`) leaving the message `sending` until the TTL.
+1. ~~The cron marks a ledger entry `dead` for a `content_type` it cannot rebuild (e.g. Flows `interactive`) leaving the message `sending` until the TTL.~~ **Fixed (local, uncommitted):** the cron never writes `dead` while the message is `sending`. For an unsendable entry (unsupported `content_type`, missing recipient) it first settles the message `failed` through `settle_outbound_message_system` (compare-and-set) and only then marks the entry `dead` — and only when the ledger classification is `deterministic_transient` (proof that no earlier attempt was delivered). Otherwise the entry is blocked (`pending`, `next_attempt_at NULL`) and the TTL resolves both. The same rule covers a fatal exception in the drain (blocked, `scheduler_fatal_error`) and a failing settle (released or blocked, never `dead`). The cron also re-reads the message status and re-sends only while it is `sending`; a message already `sent`/`delivered`/`read` closes the entry `delivered`, `failed` closes it `dead`, anything else blocks it.
 2. Flows media inserts never persisted `media_url`, so a media retry has nothing to send (it is blocked/dead, not misdelivered).
 3. The cron re-sends a template without language/components.
-4. If settlement fails **after** the provider accepted the send, the entry can end `dead` while the message was in fact delivered.
+4. If settlement fails **after** the provider accepted the send, the delivery state is unknown. **Changed (local, uncommitted):** the entry is no longer `dead`; it is blocked (`settle_failed_after_send`, with the provider message id in `last_error` for reconciliation), never re-sent, and the 72 h TTL settles the message `failed` (risk 5 applies: it may have been delivered). A settle `noop` after a real send (the message left `sending` between the status read and the settle) is no longer recorded as `delivered`: the entry goes `dead` with a possible-duplicate reason, because this send did not settle the message.
 5. The TTL marks a possibly-delivered message `failed` (state unknown, by design of ADR-E4B-002 §5 path D).
 6. `/broadcast` and `/react` create no `messages` row, so they are outside this contract.
 7. Everything in §7 "cannot show".

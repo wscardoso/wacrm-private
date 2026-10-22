@@ -82,6 +82,15 @@ export async function createIntent(
   return { id: data.id }
 }
 
+/**
+ * An identity with an empty value identifies nothing and, worse, would occupy
+ * the unique slot (connection_ref, kind, '') so that the next message of the
+ * connection fails to settle. Never hand one to the database.
+ */
+function nonBlankIdentities(externalIdentities: ExternalIdentity[] | undefined): ExternalIdentity[] {
+  return (externalIdentities ?? []).filter(ei => typeof ei.value === 'string' && ei.value.trim() !== '')
+}
+
 export async function settleMessage(
   supabase: SupabaseClient,
   messageId: string,
@@ -90,7 +99,7 @@ export async function settleMessage(
   externalIdentities: ExternalIdentity[],
   providerMessageId?: string,
 ): Promise<SettlementResult> {
-  const identities = externalIdentities ?? []
+  const identities = nonBlankIdentities(externalIdentities)
   const rows = identities.map(ei => ({
     message_id: messageId,
     connection_ref: connectionRef,
@@ -108,6 +117,118 @@ export async function settleMessage(
 
   if (error) throw error
   return parseSettlementResult(data)
+}
+
+export interface AcceptedSendSettlement {
+  settlement: SettlementResult
+  /**
+   * true when the provider accepted the message but the database settlement
+   * could not be completed. The message row is still `sending`; the provider
+   * id is in the reconciliation record (outbound_retry_ledger.last_error and
+   * the structured `ACCEPTED_SETTLE_PENDING` log line).
+   */
+  pending: boolean
+}
+
+export interface SettleAcceptedSendArgs {
+  messageId: string
+  connectionRef: string
+  externalIdentities: ExternalIdentity[]
+  providerMessageId: string
+  /** Facade to use: `authenticated` (user session) or `system` (service role). */
+  actor?: 'authenticated' | 'system'
+}
+
+/**
+ * Settle a message the provider has ALREADY ACCEPTED (it returned an id).
+ *
+ * From that moment a database error is not a send failure: the message is
+ * out of our hands, so it must never be routed through `handleSendFailure`
+ * (which would classify it, enqueue it as a retryable/ambiguous send and let
+ * the caller answer 502 — inviting a resend of a message that was probably
+ * delivered). This helper instead:
+ *
+ *   1. settles `sent`;
+ *   2. on failure tries once more — without the external identities when
+ *      there are any (a transient error is retried as is by the CAS inside the
+ *      RPC; a failure caused by recording the identities, e.g. a unique
+ *      violation, still leaves the message `sent` with its `message_id`);
+ *   3. if that fails too, writes a reconciliation record that names the
+ *      provider id (blocked ledger entry: `next_attempt_at NULL`, never
+ *      picked by the retry cron) plus a structured log line, and returns
+ *      `pending: true` so the caller can answer "accepted, settlement
+ *      pending" instead of an error.
+ *
+ * Never throws.
+ */
+export async function settleAcceptedSend(
+  supabase: SupabaseClient,
+  args: SettleAcceptedSendArgs,
+): Promise<AcceptedSendSettlement> {
+  const settle = args.actor === 'system' ? settleMessageSystem : settleMessage
+  const identities = args.externalIdentities ?? []
+
+  let firstError: unknown
+  try {
+    const settlement = await settle(
+      supabase, args.messageId, 'sent', args.connectionRef, identities, args.providerMessageId,
+    )
+    return { settlement, pending: false }
+  } catch (err) {
+    firstError = err
+  }
+
+  let lastError: unknown = firstError
+  try {
+    const settlement = await settle(
+      supabase, args.messageId, 'sent', args.connectionRef, [], args.providerMessageId,
+    )
+    console.warn(
+      '[whatsapp/settle] settled sent on the second attempt',
+      JSON.stringify({
+        messageId: args.messageId,
+        providerMessageId: args.providerMessageId,
+        withoutIdentities: identities.length > 0,
+        firstError: describeError(firstError),
+      }),
+    )
+    return { settlement, pending: false }
+  } catch (err) {
+    lastError = err
+  }
+
+  const detail = {
+    messageId: args.messageId,
+    connectionRef: args.connectionRef,
+    providerMessageId: args.providerMessageId,
+    error: describeError(lastError),
+  }
+  console.error('[whatsapp/settle] ACCEPTED_SETTLE_PENDING', JSON.stringify(detail))
+
+  try {
+    const enqueueRpc = args.actor === 'system' ? 'enqueue_outbound_retry_system' : 'enqueue_outbound_retry'
+    const enqueued = await supabase.rpc(enqueueRpc, {
+      p_message_id: args.messageId,
+      p_classification: 'ambiguous',
+      // NULL: the retry cron selects only entries with a due next_attempt_at,
+      // so this record can never trigger a re-send of an accepted message.
+      p_next_attempt_at: null,
+      p_last_error: `ACCEPTED_BY_PROVIDER provider_message_id=${args.providerMessageId}; settlement failed: ${detail.error}`.slice(0, 500),
+    })
+    if (enqueued?.error) {
+      console.error('[whatsapp/settle] could not write the reconciliation record:', describeError(enqueued.error))
+    }
+  } catch (err) {
+    console.error('[whatsapp/settle] could not write the reconciliation record:', describeError(err))
+  }
+
+  return { settlement: { messageId: args.messageId, outcome: 'noop' }, pending: true }
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message)
+  return String(err)
 }
 
 /**
@@ -131,7 +252,7 @@ export async function settleMessageSystem(
   externalIdentities: ExternalIdentity[],
   providerMessageId?: string,
 ): Promise<SettlementResult> {
-  const identities = externalIdentities ?? []
+  const identities = nonBlankIdentities(externalIdentities)
   if (identities.length > 0 && !connectionRef) {
     throw new Error('settleMessageSystem: identities require a connectionRef')
   }

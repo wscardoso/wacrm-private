@@ -82,15 +82,40 @@ interface MetaErrorResponse {
   error?: { message?: string; code?: number; type?: string }
 }
 
+/**
+ * A non-2xx answer from the Graph API. It IS an `Error` whose `message` is
+ * exactly what the plain `Error` it replaces carried (Meta's own error text, or
+ * the caller's fallback), so every existing caller that reads `.message` is
+ * unaffected. What it adds is the HTTP status of the response: the provider
+ * adapter's send-failure classifier (providers/meta.ts, ADR-E4B-003 §3.4) needs
+ * the status to tell a definite rejection (400/401/403/404/422) from a
+ * possibly-processed one (429/5xx), and Meta's JSON error text does not carry
+ * it. Nothing else may interpret the status: that stays in the adapter.
+ */
+export class MetaApiError extends Error {
+  readonly status: number
+  /** Meta's own error `code`, when the body had one. Informational. */
+  readonly metaCode?: number
+
+  constructor(message: string, status: number, metaCode?: number) {
+    super(message)
+    this.name = 'MetaApiError'
+    this.status = status
+    this.metaCode = metaCode
+  }
+}
+
 async function throwMetaError(response: Response, fallback: string): Promise<never> {
   let message = fallback
+  let metaCode: number | undefined
   try {
     const data = (await response.json()) as MetaErrorResponse
     if (data.error?.message) message = data.error.message
+    if (typeof data.error?.code === 'number') metaCode = data.error.code
   } catch {
     // response body wasn't JSON — keep the fallback
   }
-  throw new Error(message)
+  throw new MetaApiError(message, response.status, metaCode)
 }
 
 // ============================================================

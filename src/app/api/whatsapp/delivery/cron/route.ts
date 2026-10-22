@@ -26,6 +26,23 @@ const BATCH_LIMIT = 50
  *   2. Reconstruct message, contact, provider
  *   3. Call provider.send
  *   4. settleMessageSystem + update ledger (delivered / dead / re-enqueue)
+ *
+ * Two invariants hold for every exit of an entry:
+ *
+ *   - The message is only re-sent while it is STILL `sending` (its status is
+ *     read with the message; the settlement compare-and-set is the final
+ *     arbiter). A message that left `sending` — settled by the original
+ *     sender, failed by the TTL — closes the ledger entry in agreement with
+ *     the message and sends nothing.
+ *   - A ledger entry is never `dead` while its message is `sending`. Nothing
+ *     else resolves that pair (the orphan sweep skips messages that have a
+ *     ledger row; the TTL reads only `pending` rows), so it would stay
+ *     `sending` forever. `dead` is written only after the message itself was
+ *     settled `failed` (system facade, compare-and-set), and that is done only
+ *     with proof of non-delivery. Without proof the entry is BLOCKED
+ *     (`pending`, `next_attempt_at NULL`) and the 72 h TTL settles both
+ *     (ADR-E4B-002 §5 caminho D). A failed or unexpected step never turns
+ *     into `dead` on its own.
  */
 export async function GET(request: Request) {
   const expected = process.env.AUTOMATION_CRON_SECRET
@@ -71,13 +88,22 @@ export async function GET(request: Request) {
       if (result === 'processed') processed++
       if (result === 'dead') dead++
     } catch (err) {
-      console.error('[delivery-cron] entry %s fatal:', row.id, err instanceof Error ? err.message : err)
+      const detail = err instanceof Error ? err.message : String(err)
+      console.error('[delivery-cron] entry %s fatal:', row.id, detail)
+      // Where the exception came from is unknown here (before the send, or
+      // after the provider accepted it), so it proves nothing about delivery:
+      // not `dead` (the message would stay `sending` for ever) and not
+      // re-sendable. Blocked, the TTL resolves it. The status guard keeps this
+      // from overwriting a row another worker already moved on.
       await admin
         .from('outbound_retry_ledger')
-        .update({ status: 'dead', last_error: 'scheduler fatal error' })
+        .update({
+          status: 'pending',
+          next_attempt_at: null,
+          last_error: `blocked (scheduler_fatal_error): ${detail.slice(0, 200)} (delivery state unknown, resolved only by TTL)`.slice(0, 500),
+        })
         .eq('id', row.id)
         .eq('status', 'retrying')
-      dead++
     }
   }
 
@@ -145,6 +171,93 @@ async function blockEntry(
   return 'processed'
 }
 
+/**
+ * Returns the claimed entry to `pending`, due time kept, so the next run looks
+ * at it again. Used when the state of the MESSAGE changed under this run or a
+ * step failed for a reason that is not a verdict on it.
+ */
+async function releaseForRecheck(
+  admin: ReturnType<typeof supabaseAdmin>,
+  row: { id: string },
+  detail: string,
+): Promise<DrainResult> {
+  await admin
+    .from('outbound_retry_ledger')
+    .update({ status: 'pending', last_error: detail.slice(0, 500) })
+    .eq('id', row.id)
+    .eq('status', 'retrying')
+  return 'skipped'
+}
+
+/**
+ * The message is no longer `sending` (the original sender settled it, the TTL
+ * failed it…): the message is the source of truth (ARO-001 §10). Nothing is
+ * re-sent and nothing is settled; the entry is closed in agreement with it.
+ * `delivered` here means "the intent ended `sent`", not "this entry's send
+ * settled it" — no send happened. Any state this module does not recognise is
+ * blocked, never closed and never destroyed.
+ */
+async function closeForResolvedMessage(
+  admin: ReturnType<typeof supabaseAdmin>,
+  row: { id: string },
+  status: string | null | undefined,
+): Promise<DrainResult> {
+  if (status === 'sent' || status === 'delivered' || status === 'read') {
+    await admin
+      .from('outbound_retry_ledger')
+      .update({ status: 'delivered', last_error: `message already ${status} — nothing re-sent` })
+      .eq('id', row.id)
+    return 'processed'
+  }
+  if (status === 'failed') {
+    await admin
+      .from('outbound_retry_ledger')
+      .update({ status: 'dead', last_error: 'message already failed — nothing re-sent' })
+      .eq('id', row.id)
+    return 'dead'
+  }
+  return blockEntry(admin, row, 'message_not_sending', `message status is "${status ?? 'unknown'}", not "sending"`)
+}
+
+/**
+ * The entry can never be sent (no recipient, content the cron cannot rebuild).
+ * The ledger may only go `dead` together with the message going `failed`:
+ * that is settled first (system facade, compare-and-set) and only when the
+ * ledger carries proof that no earlier attempt was delivered
+ * (`deterministic_transient`, emitted by the adapter). An `ambiguous` entry
+ * may already have been delivered, so it is blocked for the TTL instead —
+ * the same treatment as every other entry that cannot be re-sent.
+ */
+async function failUnsendable(
+  admin: ReturnType<typeof supabaseAdmin>,
+  row: { id: string; classification: string },
+  msgId: string,
+  reason: string,
+): Promise<DrainResult> {
+  if (row.classification !== 'deterministic_transient') {
+    return blockEntry(admin, row, 'unsendable_without_proof_of_non_delivery', reason)
+  }
+
+  let settlement: SettlementResult
+  try {
+    settlement = await settleMessageSystem(admin, msgId, 'failed', null, [])
+  } catch (err) {
+    // The message is still `sending`: the entry must not die. Retried next run.
+    return releaseAfterQueryError(admin, row, 'failing the unsendable message', err as QueryError)
+  }
+  if (settlement.outcome !== 'failed') {
+    // `noop`: the message left `sending` meanwhile. Do not claim anything;
+    // the next run reads its real status and closes the entry accordingly.
+    return releaseForRecheck(admin, row, `${reason} — message left "sending" meanwhile, re-checked on the next run`)
+  }
+
+  await admin
+    .from('outbound_retry_ledger')
+    .update({ status: 'dead', last_error: reason })
+    .eq('id', row.id)
+  return 'dead'
+}
+
 async function processDueEntry(
   admin: ReturnType<typeof supabaseAdmin>,
   row: { id: string; message_id: string; attempt_count: number; classification: string; created_at: string },
@@ -162,7 +275,7 @@ async function processDueEntry(
   // ── 2. Load message + conversation + contact + provider config ──
   const { data: msg, error: msgErr } = await admin
     .from('messages')
-    .select('id, conversation_id, content_type, content_text, media_url, template_name, reply_to_message_id, connection_ref, delivery_provider, delivery_channel_fp, created_at')
+    .select('id, status, conversation_id, content_type, content_text, media_url, template_name, reply_to_message_id, connection_ref, delivery_provider, delivery_channel_fp, created_at')
     .eq('id', row.message_id)
     .single()
 
@@ -181,6 +294,14 @@ async function processDueEntry(
     return 'dead'
   }
 
+  // The message must STILL be `sending`. The ledger row is only a record of
+  // the process; the message is the fact (ARO-001 §10). Read together with the
+  // message; the settlement compare-and-set remains the final arbiter if it
+  // changes between this read and the settle.
+  if (msg.status !== 'sending') {
+    return closeForResolvedMessage(admin, row, msg.status as string | null | undefined)
+  }
+
   const { data: conv, error: convErr } = await admin
     .from('conversations')
     .select('account_id, contact:contacts(phone)')
@@ -194,11 +315,7 @@ async function processDueEntry(
 
   const phone = (conv as { contact: { phone: string } | null } | null)?.contact?.phone
   if (!phone) {
-    await admin
-      .from('outbound_retry_ledger')
-      .update({ status: 'dead', last_error: 'contact phone not found' })
-      .eq('id', row.id)
-    return 'dead'
+    return failUnsendable(admin, row, msg.id, 'contact phone not found')
   }
   const to = sanitizePhoneForMeta(phone)
 
@@ -259,6 +376,14 @@ async function processDueEntry(
     )
   }
 
+  // ── 2c. Content the cron can rebuild ───────────────────────
+  // Decided before anything is attempted, so it can never be confused with a
+  // send outcome (Flows `interactive`, for one, has nothing to rebuild from).
+  const contentType = msg.content_type
+  if (!['text', 'image', 'video', 'document', 'audio', 'template'].includes(contentType)) {
+    return failUnsendable(admin, row, msg.id, `unsupported content_type: ${contentType}`)
+  }
+
   // ── 3. Resolve context (reply-to) ──────────────────────────
   const replyToId = msg.reply_to_message_id
   let contextMessageId: string | undefined
@@ -273,7 +398,6 @@ async function processDueEntry(
 
   // ── 4. Re-execute delivery ─────────────────────────────────
   const msgId = msg.id
-  const contentType = msg.content_type
   let sendResult: SendResult
   try {
     if (contentType === 'text') {
@@ -297,18 +421,13 @@ async function processDueEntry(
         caption: msg.content_text ?? undefined,
         contextMessageId,
       })
-    } else if (contentType === 'template') {
+    } else {
+      // 'template' — the only type left after the 2c check
       sendResult = await provider.sendTemplate({
         to,
         templateName: msg.template_name ?? '',
         contextMessageId,
       })
-    } else {
-      await admin
-        .from('outbound_retry_ledger')
-        .update({ status: 'dead', last_error: `unsupported content_type: ${contentType}` })
-        .eq('id', row.id)
-      return 'dead'
     }
   } catch (sendErr) {
     return handleRetryFailure(admin, row, provider, sendErr, msgId, connectionRef)
@@ -322,17 +441,40 @@ async function processDueEntry(
       sendResult.externalIdentities, sendResult.messageId,
     )
   } catch (settleErr) {
-    await admin
-      .from('outbound_retry_ledger')
-      .update({ status: 'dead', last_error: `settle failed: ${settleErr instanceof Error ? settleErr.message : String(settleErr)}` })
-      .eq('id', row.id)
-    return 'dead'
+    // The provider ACCEPTED the send; only recording it failed. The message may
+    // well have been delivered, and it is still `sending`. That is ambiguous:
+    // not `dead` (limbo), not `failed` (could be a lie to the operator), not
+    // re-sendable (duplicate). Blocked, with the provider id so a human can
+    // reconcile; the TTL closes it (ADR-E4B-002 §5 caminho D, same accepted
+    // outcome as any unconfirmed send).
+    const detail = settleErr instanceof Error ? settleErr.message : String(settleErr)
+    console.error('[delivery-cron] entry %s settle after accepted send failed:', row.id, detail)
+    return blockEntry(
+      admin,
+      row,
+      'settle_failed_after_send',
+      `provider accepted the send (id ${sendResult.messageId}) but settlement failed: ${detail.slice(0, 200)} (delivery state unknown, never re-sent, resolved only by TTL)`,
+    )
   }
 
-  const ledgerStatus = settlement.outcome === 'sent' || settlement.outcome === 'noop' ? 'delivered' : 'dead'
-  await admin.from('outbound_retry_ledger').update({ status: ledgerStatus }).eq('id', row.id)
+  if (settlement.outcome === 'sent') {
+    await admin.from('outbound_retry_ledger').update({ status: 'delivered' }).eq('id', row.id)
+    return 'processed'
+  }
 
-  return ledgerStatus === 'delivered' ? 'processed' : 'dead'
+  // `noop`: the provider accepted THIS send, but the message had already left
+  // `sending` (settled by someone else after the status read). This send did
+  // not settle it, so it is not `delivered` by it, and the provider id could
+  // not be recorded. An accepted send that is not on the message is a possible
+  // duplicate: surfaced for an operator, not hidden as a success.
+  await admin
+    .from('outbound_retry_ledger')
+    .update({
+      status: 'dead',
+      last_error: `settle ${settlement.outcome}: message left "sending" before this send was settled; provider accepted it (id ${sendResult.messageId}), not recorded on the message — possible duplicate`.slice(0, 500),
+    })
+    .eq('id', row.id)
+  return 'dead'
 }
 
 async function handleRetryFailure(
@@ -363,7 +505,14 @@ async function handleRetryFailure(
   )
 
   if (action.kind === 'settle-failed') {
-    await settleMessageSystem(admin, msgId, 'failed', connectionRef, [])
+    // A throw here propagates to the run's fatal handler, which blocks the
+    // entry: the message is still `sending`, so the ledger must not die.
+    const settlement = await settleMessageSystem(admin, msgId, 'failed', connectionRef, [])
+    if (settlement.outcome !== 'failed') {
+      // `noop`: the message left `sending` meanwhile — the next run reads its
+      // real status and closes the entry accordingly.
+      return releaseForRecheck(admin, row, `${lastError} — message left "sending" meanwhile, re-checked on the next run`)
+    }
     await admin
       .from('outbound_retry_ledger')
       .update({ status: 'dead', last_error: lastError })

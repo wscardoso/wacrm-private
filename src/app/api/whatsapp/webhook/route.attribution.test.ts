@@ -286,6 +286,9 @@ beforeEach(() => {
     user_id: 'user-1',
     access_token: 'enc-token',
     phone_number_id: '123',
+    // whatsapp_config.provider is NOT NULL DEFAULT 'meta'. A Meta webhook
+    // only resolves a Meta row.
+    provider: 'meta',
   })
   mockSupabaseAdmin.mockReturnValue(fakeSupabase)
 })

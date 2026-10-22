@@ -119,7 +119,7 @@ const bindingOf = (cfg: Parameters<typeof bindingFromConnection>[0]) => {
 const BINDING_FIELDS = bindingOf(metaCfg)
 const msgRow = (extra: Record<string, unknown> = BINDING_FIELDS, more: Record<string, unknown> = {}) => ({
   data: {
-    id: 'msg-1', conversation_id: 'conv-1', content_type: 'text', content_text: 'hi', media_url: null,
+    id: 'msg-1', status: 'sending', conversation_id: 'conv-1', content_type: 'text', content_text: 'hi', media_url: null,
     template_name: null, reply_to_message_id: null, ...extra, ...more, created_at: new Date().toISOString(),
   },
   error: null,
@@ -313,6 +313,7 @@ describe('GET /api/whatsapp/delivery/cron', () => {
     expect(String(ledgerUpdates(failing).at(-1)?.last_error)).toContain('conversation lookup failed (42P01)')
 
     const noPhone = makeAdmin({ conversation: { data: { contact: null }, error: null } })
+    mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'failed' })
     mockSupabaseAdmin.mockReturnValue(noPhone)
     expect(await (await GET(req('test-secret'))).json()).toEqual({ processed: 0, dead: 1 })
     expect(ledgerUpdates(noPhone)).toContainEqual({ status: 'dead', last_error: 'contact phone not found' })
@@ -541,6 +542,7 @@ describe('GET /api/whatsapp/delivery/cron', () => {
       message: {
         data: {
           id: 'msg-1',
+          status: 'sending',
           conversation_id: 'conv-1',
           content_type: 'image',
           content_text: null,
@@ -580,6 +582,7 @@ describe('GET /api/whatsapp/delivery/cron', () => {
       message: {
         data: {
           id: 'msg-1',
+          status: 'sending',
           conversation_id: 'conv-1',
           content_type: 'document',
           content_text: null,
@@ -614,5 +617,205 @@ describe('GET /api/whatsapp/delivery/cron', () => {
     expect(res.status).toBe(200)
     expect(body).toEqual({ processed: 1, dead: 0 })
     expect(mockResolveSignedMediaUrl).not.toHaveBeenCalled()
+  })
+  // ─── Defect 3 — the CURRENT state of the message gates the re-send ──────
+  // The retry used to run for any ledger row whose message exists, whatever
+  // the message's status was by now (settled by the original sender, failed
+  // by the TTL…), and then wrote ledger `delivered` on a settle `noop`.
+
+  const sendSpy = () => (mockGetProvider.mock.results[0]?.value as { sendText: ReturnType<typeof vi.fn> } | undefined)?.sendText
+
+  it.each(['sent', 'delivered', 'read'])(
+    'message already %s: nothing is re-sent or settled; the ledger is closed `delivered` by what the message says, not by a send',
+    async (status) => {
+      const admin = makeAdmin({ message: msgRow(BINDING_FIELDS, { status }) })
+      expect(await run(admin)).toEqual({ processed: 1, dead: 0 })
+      expect(mockGetProvider).not.toHaveBeenCalled()
+      expect(mockSettleMessageSystem).not.toHaveBeenCalled()
+      const updates = ledgerUpdates(admin)
+      expect(updates).toContainEqual({ status: 'delivered', last_error: `message already ${status} — nothing re-sent` })
+    },
+  )
+
+  it('message already failed: nothing is re-sent or settled; the ledger is closed `dead` (it follows the message), never `delivered`', async () => {
+    const admin = makeAdmin({ message: msgRow(BINDING_FIELDS, { status: 'failed' }) })
+    expect(await run(admin)).toEqual({ processed: 0, dead: 1 })
+    expect(mockGetProvider).not.toHaveBeenCalled()
+    expect(mockSettleMessageSystem).not.toHaveBeenCalled()
+    const updates = ledgerUpdates(admin)
+    expect(updates).toContainEqual({ status: 'dead', last_error: 'message already failed — nothing re-sent' })
+    expect(updates.some((u) => u.status === 'delivered')).toBe(false)
+  })
+
+  it.each(['pending', 'received', undefined])(
+    'message in an unexpected state (%s): not re-sent, not destroyed — blocked for the TTL',
+    async (status) => {
+      const admin = makeAdmin({ message: msgRow(BINDING_FIELDS, { status }) })
+      await run(admin)
+      expect(mockGetProvider).not.toHaveBeenCalled()
+      expect(mockSettleMessageSystem).not.toHaveBeenCalled()
+      const updates = ledgerUpdates(admin)
+      expect(updates.some((u) => u.status === 'dead' || u.status === 'delivered')).toBe(false)
+      expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+      expect(String(updates.at(-1)?.last_error)).toContain('blocked (message_not_sending)')
+    },
+  )
+
+  it('a message still `sending` is re-sent as before and the ledger is `delivered` only when THIS send settled it (outcome sent)', async () => {
+    const admin = makeAdmin()
+    expect(await run(admin)).toEqual({ processed: 1, dead: 0 })
+    expect(sendSpy()).toHaveBeenCalledTimes(1)
+    expect(ledgerUpdates(admin)).toContainEqual({ status: 'delivered' })
+  })
+
+  it('settle noop after a real send (the message left `sending` meanwhile): NOT `delivered` — dead with an explicit duplicate-risk reason', async () => {
+    mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'noop' })
+    const admin = makeAdmin()
+    expect(await run(admin)).toEqual({ processed: 0, dead: 1 })
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'delivered')).toBe(false)
+    const dead = updates.find((u) => u.status === 'dead')
+    expect(String(dead?.last_error)).toContain('settle noop')
+    expect(String(dead?.last_error)).toContain('wamid.1')
+    expect(String(dead?.last_error)).toContain('possible duplicate')
+  })
+
+  // ─── Defect 2 — a ledger entry is never `dead` while its message is `sending` ──
+  // `dead` + message `sending` was a limbo no sweep resolves: the orphan sweep
+  // skips messages that have a ledger row and the TTL only reads `pending`
+  // rows. Now: `dead` only together with the message `failed` (CAS via the
+  // system facade), and only with proof of non-delivery; otherwise the entry is
+  // BLOCKED (pending, next_attempt_at NULL) so the TTL resolves both.
+
+  const interactiveMsg = () => msgRow(BINDING_FIELDS, { content_type: 'interactive' })
+  const settleFailedCalls = () => mockSettleMessageSystem.mock.calls.filter((c) => c[2] === 'failed')
+
+  it('unsupported content_type with proof of non-delivery: message settled `failed` (CAS, system facade, no identities) THEN ledger `dead`', async () => {
+    mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'failed' })
+    const admin = makeAdmin({ message: interactiveMsg() })
+    expect(await run(admin)).toEqual({ processed: 0, dead: 1 })
+    expect(sendSpy()?.mock.calls.length ?? 0).toBe(0)
+    expect(mockSettleMessageSystem).toHaveBeenCalledWith(admin, 'msg-1', 'failed', null, [])
+    expect(ledgerUpdates(admin)).toContainEqual({ status: 'dead', last_error: 'unsupported content_type: interactive' })
+    // order: the message is settled before the ledger is declared dead
+    const ledger = admin._tables.outbound_retry_ledger as unknown as { update: ReturnType<typeof vi.fn> }
+    const deadIdx = ledger.update.mock.calls.findIndex((c) => (c[0] as { status?: string }).status === 'dead')
+    expect(mockSettleMessageSystem.mock.invocationCallOrder[0]).toBeLessThan(ledger.update.mock.invocationCallOrder[deadIdx])
+  })
+
+  it('unsupported content_type WITHOUT proof of non-delivery (ambiguous entry, provider with native idempotency): never failed, never dead — blocked for the TTL', async () => {
+    mockGetProvider.mockReturnValue({
+      sendText: vi.fn(), classifySendFailure: vi.fn(),
+      capabilities: { nativeIdempotency: true, deliveryReconciliation: false },
+    })
+    const admin = makeAdmin({ message: interactiveMsg(), due: [{ ...DUE_ROW, classification: 'ambiguous' }] })
+    await run(admin)
+    expect(settleFailedCalls()).toHaveLength(0)
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+    expect(String(updates.at(-1)?.last_error)).toContain('unsupported content_type: interactive')
+  })
+
+  it('contact phone missing with proof of non-delivery: message settled `failed`, then ledger `dead`', async () => {
+    mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'failed' })
+    const admin = makeAdmin({ conversation: { data: { account_id: 'acct-1', contact: null }, error: null } })
+    expect(await run(admin)).toEqual({ processed: 0, dead: 1 })
+    expect(mockSettleMessageSystem).toHaveBeenCalledWith(admin, 'msg-1', 'failed', null, [])
+    expect(ledgerUpdates(admin)).toContainEqual({ status: 'dead', last_error: 'contact phone not found' })
+  })
+
+  it('contact phone missing WITHOUT proof of non-delivery: blocked, message untouched', async () => {
+    const admin = makeAdmin({
+      conversation: { data: { account_id: 'acct-1', contact: null }, error: null },
+      due: [{ ...DUE_ROW, classification: 'ambiguous' }],
+    })
+    await run(admin)
+    expect(mockSettleMessageSystem).not.toHaveBeenCalled()
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+  })
+
+  it('unsendable but the message left `sending` meanwhile (settle noop): the ledger is not killed — released for a re-check', async () => {
+    mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'noop' })
+    const admin = makeAdmin({ message: interactiveMsg() })
+    expect(await run(admin)).toEqual({ processed: 0, dead: 0 })
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates.at(-1)).toMatchObject({ status: 'pending' })
+    expect(updates.every((u) => !('next_attempt_at' in u))).toBe(true) // stays due: the next run sees the real status
+  })
+
+  it('unsendable and the failing settle itself errors: the ledger is not killed — released, retried next run', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockSettleMessageSystem.mockRejectedValue({ code: '57P01', message: 'terminating connection' })
+    const admin = makeAdmin({ message: interactiveMsg() })
+    expect(await run(admin)).toEqual({ processed: 0, dead: 0 })
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates.at(-1)).toMatchObject({ status: 'pending' })
+  })
+
+  it('settlement FAILS after the provider accepted the send: delivery state unknown — blocked (never dead, never failed, never re-sent) with the provider id for the operator', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockSettleMessageSystem.mockRejectedValue(new Error('db down'))
+    const admin = makeAdmin()
+    expect(await run(admin)).toEqual({ processed: 1, dead: 0 })
+    expect(sendSpy()).toHaveBeenCalledTimes(1)
+    expect(settleFailedCalls()).toHaveLength(0)
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+    const last = String(updates.at(-1)?.last_error)
+    expect(last).toContain('blocked (settle_failed_after_send)')
+    expect(last).toContain('wamid.1')
+    expect(last).toContain('db down')
+  })
+
+  it('fatal error before anything is sent (credential cannot be decrypted): blocked for the TTL, NOT dead, message not settled', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockDecrypt.mockImplementation(() => { throw new Error('Unsupported state or unable to authenticate data') })
+    const admin = makeAdmin()
+    expect(await run(admin)).toEqual({ processed: 0, dead: 0 })
+    expect(mockSettleMessageSystem).not.toHaveBeenCalled()
+    const updates = ledgerUpdates(admin)
+    expect(updates.some((u) => u.status === 'dead')).toBe(false)
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+    expect(String(updates.at(-1)?.last_error)).toContain('blocked (scheduler_fatal_error)')
+    const ledger = admin._tables.outbound_retry_ledger as unknown as { eq: ReturnType<typeof vi.fn> }
+    expect(ledger.eq).toHaveBeenCalledWith('status', 'retrying') // never overwrites a row another worker moved on
+  })
+
+  // handleRetryFailure (a send that threw) — previously untested
+  describe('a send that throws', () => {
+    const failingProvider = () => ({
+      sendText: vi.fn().mockRejectedValue(new Error('boom')),
+      classifySendFailure: vi.fn().mockReturnValue('deterministic-permanent'),
+      capabilities: { nativeIdempotency: false, deliveryReconciliation: false },
+    })
+    beforeEach(() => {
+      mockGetProvider.mockReturnValue(failingProvider())
+      mockClassifyFailure.mockReturnValue('permanent')
+      mockDecideRetryOutcome.mockReturnValue({ kind: 'settle-failed' })
+    })
+
+    it('permanent: message settled `failed` THEN ledger `dead`', async () => {
+      mockSettleMessageSystem.mockResolvedValue({ messageId: 'msg-1', outcome: 'failed' })
+      const admin = makeAdmin()
+      expect(await run(admin)).toEqual({ processed: 0, dead: 1 })
+      expect(mockSettleMessageSystem).toHaveBeenCalledWith(admin, 'msg-1', 'failed', CFG_ID, [])
+      expect(ledgerUpdates(admin)).toContainEqual({ status: 'dead', last_error: 'boom' })
+    })
+
+    it('permanent but the failing settle errors: the ledger is not killed (the message is still `sending`) — blocked for the TTL', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      mockSettleMessageSystem.mockRejectedValue(new Error('db down'))
+      const admin = makeAdmin()
+      expect(await run(admin)).toEqual({ processed: 0, dead: 0 })
+      const updates = ledgerUpdates(admin)
+      expect(updates.some((u) => u.status === 'dead')).toBe(false)
+      expect(updates).toContainEqual(expect.objectContaining({ status: 'pending', next_attempt_at: null }))
+    })
   })
 })

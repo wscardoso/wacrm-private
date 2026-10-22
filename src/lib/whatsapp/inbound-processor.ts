@@ -18,6 +18,7 @@ import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/
 import { runAutomationsForTrigger, cancelPendingCadencesForContact } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import type { InboundMessage } from '@/lib/whatsapp/providers/types'
+import { InboundPersistenceError, InboundPostInsertError } from '@/lib/whatsapp/inbound-dlq'
 
 // ============================================================
 // Content-type mapping
@@ -75,7 +76,9 @@ async function findOrCreateContact(
       if (raced) return { contact: raced, wasCreated: false }
     }
     console.error('[inbound-processor] Error creating contact:', error)
-    return null
+    // Keep only the SQLSTATE (validated in InboundPersistenceError), never the
+    // raw DB error, so the capture can record a safe code (C6.2).
+    throw new InboundPersistenceError('contact', error.code)
   }
 
   return { contact: newContact, wasCreated: true }
@@ -97,7 +100,7 @@ async function findOrCreateConversation(
 
   if (error) {
     console.error('[inbound-processor] Error finding/creating conversation:', error)
-    return null
+    throw new InboundPersistenceError('conversation', error.code)
   }
   return data
 }
@@ -208,11 +211,44 @@ async function retryOnError<T>(
 // Main entry point
 // ============================================================
 
+/**
+ * Throws InboundPersistenceError when contact, conversation or the message
+ * insert FAILS (C6.2) — distinguishable from a legitimate duplicate, which
+ * still returns normally. Anything thrown after the message was persisted is
+ * wrapped in InboundPostInsertError so callers can keep it out of the DLQ.
+ */
 export async function processInboundMessage(
   inbound: InboundMessage,
   accountId: string,
   configOwnerUserId: string,
 ): Promise<void> {
+  const state = { persisted: false }
+  try {
+    await processInboundMessageCore(inbound, accountId, configOwnerUserId, state)
+  } catch (err) {
+    if (state.persisted) throw new InboundPostInsertError(err)
+    throw err
+  }
+}
+
+async function processInboundMessageCore(
+  inbound: InboundMessage,
+  accountId: string,
+  configOwnerUserId: string,
+  state: { persisted: boolean },
+): Promise<void> {
+  // D-C (ADR-MSG-STATUS-001 §2.6): a provider callback that is not a
+  // customer message (an unrecognised status callback, a presence event…)
+  // still reaches this point carrying a phone. With no recognisable content
+  // AND no external id it cannot be deduplicated or correlated, and would
+  // otherwise create a contact, a conversation and a phantom customer
+  // message with message_id ''. Dropped before any write; the payload is
+  // deliberately not logged (it carries a phone number).
+  if (inbound.type === 'unknown' && !inbound.messageId) {
+    console.warn('[inbound-processor] D-C: dropped non-message callback (type=unknown, no messageId)')
+    return
+  }
+
   const senderPhone = normalizePhone(inbound.from)
   const senderName = inbound.senderName ?? ''
 
@@ -223,7 +259,7 @@ export async function processInboundMessage(
     senderPhone,
     senderName,
   )
-  if (!contactOutcome) return
+  if (!contactOutcome) throw new InboundPersistenceError('contact')
   const contactRecord = contactOutcome.contact
 
   // 2) Find or create conversation
@@ -232,7 +268,7 @@ export async function processInboundMessage(
     configOwnerUserId,
     contactRecord.id,
   )
-  if (!conversation) return
+  if (!conversation) throw new InboundPersistenceError('conversation')
 
   // 3) Reactions short-circuit — never insert into messages
   if (inbound.type === 'reaction') {
@@ -316,7 +352,7 @@ export async function processInboundMessage(
 
   if (msgError) {
     console.error('[inbound-processor] Error inserting message:', msgError)
-    return
+    throw new InboundPersistenceError('message_insert', msgError.code)
   }
 
   const wasInserted = !!insertedId
@@ -327,6 +363,7 @@ export async function processInboundMessage(
     )
     return
   }
+  state.persisted = true
 
   // 9) Update conversation
   await supabaseAdmin()

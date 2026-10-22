@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { settleMessage, settleMessageSystem } from './settlement'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { settleAcceptedSend, settleMessage, settleMessageSystem } from './settlement'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Commit 6.1 correção #7 — cobertura obrigatória de "Settlement":
@@ -57,5 +57,68 @@ describe('settleMessageSystem — defensive jsonb parsing (Commit 6.1 correção
     })
     const result = await settleMessageSystem(supabase, 'm5', 'sent', 'conn-1', [], 'wamid.5')
     expect(result).toEqual({ messageId: 'm5', outcome: 'sent' })
+  })
+})
+
+describe('settleAcceptedSend — settlement after the provider accepted', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const ARGS = {
+    messageId: 'm6',
+    connectionRef: 'conn-1',
+    externalIdentities: [{ kind: 'wamid', value: 'wamid.6' }],
+    providerMessageId: 'wamid.6',
+  }
+
+  function scripted(settle: Array<{ data: unknown; error: unknown }>) {
+    const queue = [...settle]
+    const rpc = vi.fn(async (name: string) =>
+      name.startsWith('settle_outbound_message')
+        ? (queue.shift() ?? { data: { messageId: 'm6', outcome: 'sent' }, error: null })
+        : { data: { enqueued: true }, error: null },
+    )
+    return { supabase: { rpc } as unknown as SupabaseClient, rpc }
+  }
+
+  it('first attempt ok: one settle call, not pending', async () => {
+    const { supabase, rpc } = scripted([{ data: { messageId: 'm6', outcome: 'sent' }, error: null }])
+    const r = await settleAcceptedSend(supabase, ARGS)
+    expect(r).toEqual({ settlement: { messageId: 'm6', outcome: 'sent' }, pending: false })
+    expect(rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('system actor uses the system facades for both settle and the reconciliation record', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { supabase, rpc } = scripted([
+      { data: null, error: { message: 'boom' } },
+      { data: null, error: { message: 'boom' } },
+    ])
+    const r = await settleAcceptedSend(supabase, { ...ARGS, actor: 'system' })
+    expect(r.pending).toBe(true)
+    const names = rpc.mock.calls.map((c) => c[0])
+    expect(names).toEqual(['settle_outbound_message_system', 'settle_outbound_message_system', 'enqueue_outbound_retry_system'])
+  })
+
+  it('never throws, even when the reconciliation record cannot be written either', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rpc = vi.fn(async () => {
+      throw new Error('database unreachable')
+    })
+    const r = await settleAcceptedSend({ rpc } as unknown as SupabaseClient, ARGS)
+    expect(r).toEqual({ settlement: { messageId: 'm6', outcome: 'noop' }, pending: true })
+    const logged = (console.error as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(' ')).join(' | ')
+    expect(logged).toContain('ACCEPTED_SETTLE_PENDING')
+    expect(logged).toContain('wamid.6')
+  })
+
+  it('does not attempt a "failed" settle at any point', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { supabase, rpc } = scripted([
+      { data: null, error: { message: 'boom' } },
+      { data: null, error: { message: 'boom' } },
+    ])
+    await settleAcceptedSend(supabase, ARGS)
+    const statuses = rpc.mock.calls.filter((c) => String(c[0]).startsWith('settle_')).map((c) => (c as unknown as [string, { p_status: string }])[1].p_status)
+    expect(statuses).toEqual(['sent', 'sent'])
   })
 })

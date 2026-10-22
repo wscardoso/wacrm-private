@@ -5,8 +5,14 @@ import {
   isValidE164,
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
-import { getProvider, providerConfigFromRow, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { createIntent, settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import {
+  getProvider,
+  providerConfigFromRow,
+  providerSupportsTemplates,
+  TEMPLATES_META_ONLY_MESSAGE,
+  type ExternalIdentity,
+} from '@/lib/whatsapp/providers'
+import { createIntent, settleAcceptedSend } from '@/lib/whatsapp/delivery/settlement'
 import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
@@ -94,6 +100,13 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error('WhatsApp not configured for this account')
   }
 
+  // Templates exist only on Meta. The uazapi adapter would send the template
+  // NAME as plain text to the customer, so a non-Meta connection refuses the
+  // step before any message is created (same rule as /send and /broadcast).
+  if (input.kind === 'template' && !providerSupportsTemplates(config)) {
+    throw new Error(`${TEMPLATES_META_ONLY_MESSAGE} The send_template step cannot run on a ${config.provider} connection.`)
+  }
+
   const accessToken = decryptWithBindingContext(config.access_token, whatsappConfigBindingContext(config.account_id))
 
   // ── Provider dispatch (ADR-MSG-001/D3.b) ──
@@ -152,12 +165,6 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       db,
     )
     waMessageId = result
-
-    // Commit 6.1 correção #6 — este módulo roda sob supabaseAdmin()
-    // (service_role, sem auth.uid()). A fachada authenticated
-    // (settle_outbound_message) rejeitaria com "not authorized" —
-    // usar a fachada de sistema (ADR-SYS-001).
-    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
     // Commit 6.1 correção #1/#6 — handleSendFailure com actor='system':
     // falha reenlviável fica `sending` + enqueue_outbound_retry_system;
@@ -169,6 +176,16 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     }
     throw err
   }
+
+  // The provider accepted the message. A database error here is not a send
+  // failure and must not be retried (settleAcceptedSend).
+  await settleAcceptedSend(db, {
+    messageId,
+    connectionRef: config.id,
+    externalIdentities: identities,
+    providerMessageId: waMessageId,
+    actor: 'system',
+  })
 
   // ── ODI-001 §7: conversation update (not gated — automation always
   //     updates last_message_text even on 'failed' to surface the state) ──

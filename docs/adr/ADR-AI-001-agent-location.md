@@ -10,9 +10,9 @@
 | **Status** | **Proposto** — decisão documental com revisão técnica/editorial (rev. 1.1 e 1.2, 2026-10-20; §14). **Aprovação arquitetural formal: não registrada.** Nenhum registro de aceite por pessoa ou instância foi localizado no repositório, e este ADR não atribui aprovação a ninguém. Até esse registro, D1–D15 são decisões **propostas**, não aprovadas. **Implementação não autorizada por este ADR** (ver §12). |
 | **Autoridade** | Decide **apenas** localização de execução e precedência de turno. Não reabre `ADR-AUT-001` D1/D4/D7, não altera `SBD-001` D5–D13, não decide o roadmap da ROXY. |
 | **ADR-AI-002** | **Identificador reservado, não criado.** Fronteira ampla de dados, ações, autoridade, tenant e billing. Este ADR **não** ocupa esse escopo. |
-| **Baseline FORCECRM** | `main` @ `3301c77` mais o commit da release de delivery binding e remoção da Z-API (código; migrations `083` e `084`). Nada foi alterado pela auditoria que fundamenta a decisão (rev. 1.0/1.1). A rev. 1.2 (§14) registra uma correção de código **independente** em `src/app/api/whatsapp/send/route.ts` e no teste correspondente, motivada por uma afirmação factual errada deste ADR (§6.5); ela não decorre da decisão aqui tomada. |
+| **Baseline FORCECRM** | `main` @ `3301c77`, working tree com o trabalho não commitado da frente C6.2 (DLQ). Nada foi alterado pela auditoria que fundamenta a decisão (rev. 1.0/1.1). A rev. 1.2 (§14) registra uma correção de código **independente** em `src/app/api/whatsapp/send/route.ts` e no teste correspondente, motivada por uma afirmação factual errada deste ADR (§6.5); ela não decorre da decisão aqui tomada. |
 | **Baseline ROXY** | Repositório `git@github.com:wscardoso/roxy-agent.git`, `main` @ `845ebf7` (2026-09-01), **working tree com modificações locais não commitadas**. As citações refletem a working tree, não um commit publicado. |
-| **Convenção de linhas** | Referências `arquivo:linha` a código do FORCECRM seguem o **código do commit da release** acima (os números de `webhook/route.ts`, `[provider]/.../route.ts` e `inbound-processor.ts` foram remapeados para ele e podem divergir de `3301c77`). Referências a `ADR-AUT-001` seguem o commit **`3301c77`** (`git show 3301c77:docs/adr/ADR-AUT-001-automations-flows-reconciliation.md`): a working tree acrescenta ali uma linha na linha 10 (nota de reconciliação de 2026-10-17), deslocando as demais em +1. Mesma convenção de `SBD-001` e `FORCECRM-ROXY-BOUNDARY`. |
+| **Convenção de linhas** | Referências `arquivo:linha` a código do FORCECRM seguem a **working tree** acima (inclui o trabalho C6.2 não commitado em `webhook/route.ts`, `[provider]/.../route.ts` e `inbound-processor.ts`; os números podem divergir de `3301c77`). Referências a `ADR-AUT-001` seguem o commit **`3301c77`** (`git show 3301c77:docs/adr/ADR-AUT-001-automations-flows-reconciliation.md`): a working tree acrescenta ali uma linha na linha 10 (nota de reconciliação de 2026-10-17), deslocando as demais em +1. Mesma convenção de `SBD-001` e `FORCECRM-ROXY-BOUNDARY`. |
 | **Data** | 2026-10-20 |
 
 > **Convenção de identidade documental (2026-10-20).** `ADR-AI-001` designa **este** ADR: localização do agente nativo do FORCECRM e decisão de não importar o runtime da ROXY. `ADR-AI-002` designa a fronteira ampla de **dados, ações, autoridade, tenant e billing**, e permanece **reservado e não criado**. Documentos de planejamento anteriores a esta data usam `ADR-AI-001` para a fronteira ampla; onde isso ocorre, foi inserida nota editorial apontando a nova convenção. O histórico não foi reescrito.
@@ -65,8 +65,8 @@ Esta decisão foi tomada por leitura de código nos dois repositórios, não por
 
 | Capacidade | Estado | Evidência |
 |---|---|---|
-| Persistência idempotente de entrada | `[VERIFICADO]` | RPC `insert_inbound_message` (`supabase/migrations/034_messages_inbound_idempotency.sql`, `035_inbound_idempotency_rpcs.sql`); chamada em `src/app/api/whatsapp/webhook/route.ts:706`; duplicata interrompe efeitos downstream em `src/lib/whatsapp/inbound-processor.ts:322-328` |
-| Precedência Flows → Automations | `[VERIFICADO]` | `webhook/route.ts:796` (Flows, `await`), `:816` (`flowConsumed`), `:832` (supressão), `:859` (Automations); equivalente em `inbound-processor.ts:347,367,376,392` |
+| Persistência idempotente de entrada | `[VERIFICADO]` | RPC `insert_inbound_message` (`supabase/migrations/034_messages_inbound_idempotency.sql`, `035_inbound_idempotency_rpcs.sql`); chamada em `src/app/api/whatsapp/webhook/route.ts:798`; duplicata interrompe efeitos downstream em `src/lib/whatsapp/inbound-processor.ts:358-364` |
+| Precedência Flows → Automations | `[VERIFICADO]` | `webhook/route.ts:889` (Flows, `await`), `:909` (`flowConsumed`), `:925` (supressão), `:952` (Automations); equivalente em `inbound-processor.ts:384,404,413,429` |
 | Unicidade de run ativa por **conta + contato** | `[VERIFICADO]` | índice parcial `idx_one_active_run_per_contact` **recriado em `017_account_sharing.sql:337-340`** sobre `(account_id, contact_id)`; a definição original em `010_flows.sql:189-191` era `(user_id, contact_id)` e foi substituída. Consulta: `src/lib/flows/engine.ts:180-199`. Status: `010_flows.sql:165-172`; `068_flow_runs_merge_terminal_state.sql:15-24` |
 | Handoff de Flow | `[VERIFICADO]` | `src/lib/flows/engine.ts:434-455` (`assign_to` opcional, `status='pending'`, `endRun(..., "handed_off", "handoff_node")`), `:1050-1061` (fallback esgotado, sem assignee) |
 | Envio com integridade transacional | `[VERIFICADO]` | intent antes do envio + settle (`048_outbound_delivery_integrity.sql`, `050_background_system_authorization.sql`), ledger de retry (`049`, `051`, `052`) |
@@ -74,8 +74,8 @@ Esta decisão foi tomada por leitura de código nos dois repositórios, não por
 | Isolamento por conta | `[VERIFICADO]` | `messages` **não tem `account_id`** (`001_initial_schema.sql:163-166`); RLS por join com `conversations` (`017_account_sharing.sql:511-517`) |
 | Invariante de negócio para deal | `[VERIFICADO]` | `resolveAutomationDealWrite` (`src/lib/deals/status.ts:58`) |
 | Cálculo da janela de 24 h | `[VERIFICADO]` | `computeSessionInfo` (`src/lib/inbox/session-window.ts:9-21`), consumido apenas pela thread de inbox (`src/components/inbox/message-thread.tsx:239`). Lista de mensagens **vazia** retorna `expired: false` e `remaining: ""` (`session-window.ts:10`), comportamento fixado por teste (`session-window.test.ts:44-49`) |
-| ACK do webhook Meta separado do processamento | `[VERIFICADO]` | `webhook/route.ts:247-252` — `processWebhook(body)` é destacado e a rota responde `200` imediatamente, **sem** garantia de durabilidade do processamento |
-| ACK do webhook não-Meta acoplado ao processamento | `[VERIFICADO]` | `[provider]/[connectionId]/[webhookSecret]/route.ts:220` — `await processInboundMessage(...)` antes de responder |
+| ACK do webhook Meta separado do processamento | `[VERIFICADO]` | `webhook/route.ts:253-258` — `processWebhook(body)` é destacado e a rota responde `200` imediatamente, **sem** garantia de durabilidade do processamento |
+| ACK do webhook não-Meta acoplado ao processamento | `[VERIFICADO]` | `[provider]/[connectionId]/[webhookSecret]/route.ts:259` — `await processInboundMessage(...)` antes de responder |
 | Base de testes | `[OBSERVADO]` | 34 arquivos em `src/test/`, com suíte PGlite e testes de rota co-localizados |
 
 ### 2.2 O que não existe
@@ -83,8 +83,8 @@ Esta decisão foi tomada por leitura de código nos dois repositórios, não por
 | Lacuna | Evidência |
 |---|---|
 | Superfície de IA/LLM | `[OBSERVADO]` zero ocorrências de `openrouter`, `openai`, `anthropic`, `langchain`, `ai-sdk`, `llm`, `agent_runs`, `agent_steps` em `src/`; `package.json:41-64` sem dependência de IA |
-| Persistência de execução de agente | `[OBSERVADO]` nenhuma tabela de run, passo, decisão ou outbox em `supabase/migrations/` (numeração `001`–`084`; 81 arquivos, incluindo a `082`, que entrou em `main` pelo PR #25) |
-| **Substrato de execução durável** | `[OBSERVADO]` **não existe fila, worker, outbox ou dispatcher de turno.** O caminho Meta destaca `processWebhook(body)` como promessa em memória e responde `200` antes de qualquer persistência (`webhook/route.ts:247-252`); o caminho não-Meta aguarda todo o processamento dentro da requisição (`.../[provider]/.../route.ts:220`). Nenhum dos dois sobrevive à queda do processo. |
+| Persistência de execução de agente | `[OBSERVADO]` nenhuma tabela de run, passo, decisão ou outbox em `supabase/migrations/` (numeração `001`–`084` commitada, incluindo a `082` do PR #25). As migrations `085`–`087` estão só no working tree e não criam tabelas de agente. |
+| **Substrato de execução durável** | `[OBSERVADO]` **não existe fila, worker, outbox ou dispatcher de turno.** O caminho Meta destaca `processWebhook(body)` como promessa em memória e responde `200` antes de qualquer persistência; o caminho não-Meta aguarda todo o processamento dentro da requisição. Nenhum dos dois sobrevive à queda do processo. A captura DLQ (C6.2), ainda não commitada, registra falhas de persistência; **não é** um substrato de execução de turno. |
 | Garantia de recuperação após queda | `[OBSERVADO]` nenhuma. Não há retomada, replay ou claim persistido de turno. |
 | Contexto de agente | `[OBSERVADO]` nenhum módulo; os dados existem dispersos |
 | Catálogo de ferramentas reutilizável | `[VERIFICADO]` `runStep` é função privada (`src/lib/automations/engine.ts:465`) — não exportada |
@@ -234,7 +234,7 @@ Nenhum desses itens é um componente executável contra o FORCECRM hoje. São de
 
 #### 4.2.1 O que nem A nem B resolve hoje: substrato de execução
 
-`[OBSERVADO]` A escolha de A **não** cria, por si, execução durável. O FORCECRM também não tem fila, worker, outbox ou dispatcher de turno (§2.2). Hoje o webhook Meta responde `200` e deixa `processWebhook` como promessa em memória (`route.ts:247-252`); o webhook não-Meta aguarda o processamento inteiro antes de responder (`.../[provider]/.../route.ts:220`). Em nenhum dos dois existe recuperação após queda do processo.
+`[OBSERVADO]` A escolha de A **não** cria, por si, execução durável. O FORCECRM também não tem fila, worker, outbox ou dispatcher de turno (§2.2). Hoje o webhook Meta responde `200` e deixa `processWebhook` como promessa em memória (`route.ts:253-258`); o webhook não-Meta aguarda o processamento inteiro antes de responder (`.../[provider]/.../route.ts:259`). Em nenhum dos dois existe recuperação após queda do processo.
 
 Isso é um **quinto bloqueio de produção**, mas não é um bloqueio específico de B: afeta A e C igualmente. Ele é tratado como decisão própria em D15 e §6.6, e a escolha do substrato permanece aberta (Q10). Nenhuma fila, worker ou garantia de execução durável é afirmada aqui.
 
@@ -296,7 +296,7 @@ A e C produzem o mesmo runtime. A diferença é disciplina: C compromete-se a **
 
 ### 6.2 Ordem
 
-`[OBSERVADO]` A ordem abaixo é **lógica**, não a ordem de uma única requisição. Hoje o webhook Meta responde `200` antes de `[1]` (`route.ts:247-252`); o webhook não-Meta responde somente depois de `[6]` (`.../[provider]/.../route.ts:220`). D15 separa ACK de execução, mas o substrato que realizaria essa separação **não existe** (Q10).
+`[OBSERVADO]` A ordem abaixo é **lógica**, não a ordem de uma única requisição. Hoje o webhook Meta responde `200` antes de `[1]` (`route.ts:253-258`); o webhook não-Meta responde somente depois de `[6]` (`.../[provider]/.../route.ts:259`). D15 separa ACK de execução, mas o substrato que realizaria essa separação **não existe** (Q10).
 
 ```
 [1] persistir entrada (idempotente)
@@ -368,7 +368,7 @@ Nada, para o par que D4 governa. D4 continua: Flows primeiro, consumo suprime co
 | Caminho não-Meta | Não pode continuar acoplando o ACK ao turno inteiro. | Como deixará de fazê-lo — o mesmo substrato ou outro. |
 | Observabilidade | Run, passo, decisão e resultado persistidos (D14). | Formato, retenção e consultas. |
 
-`[OBSERVADO]` **Nada disso está implementado.** O caminho Meta responde antes da persistência (`route.ts:247-252`); o não-Meta aguarda o processamento (`.../[provider]/.../route.ts:220`); não há fila, worker ou outbox no repositório.
+`[OBSERVADO]` **Nada disso está implementado.** O caminho Meta responde antes da persistência (`route.ts:253-258`); o não-Meta aguarda o processamento (`.../[provider]/.../route.ts:259`); não há fila, worker ou outbox no repositório. O trabalho não commitado da frente C6.2 (DLQ) não é um substrato de turno e não é pressuposto aqui.
 
 `[QUESTÃO Q10]` — **Qual substrato de execução durável.** É pré-requisito do primeiro turno real (P10), não uma decisão que este ADR possa tomar por analogia. Nenhuma fila, worker ou garantia de execução é afirmada enquanto a escolha não for registrada em decisão própria.
 
@@ -503,9 +503,9 @@ Qualquer incremento de código exige autorização separada e deve satisfazer, n
 ## 13. Índice de evidências
 
 **FORCECRM**
-- `src/app/api/whatsapp/webhook/route.ts:247-252,706,796,816,832,859` — ACK antes do processamento, persistência idempotente, Flows, `flowConsumed`, supressão, Automations
-- `src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts:220` — caminho não-Meta aguarda o processamento inteiro
-- `src/lib/whatsapp/inbound-processor.ts:325,347,367,376,392` — caminho não-Meta equivalente
+- `src/app/api/whatsapp/webhook/route.ts:253-258,798,889,909,925,952` — ACK antes do processamento, persistência idempotente, Flows, `flowConsumed`, supressão, Automations
+- `src/app/api/whatsapp/webhook/[provider]/[connectionId]/[webhookSecret]/route.ts:259` — caminho não-Meta aguarda o processamento inteiro
+- `src/lib/whatsapp/inbound-processor.ts:361,384,404,413,429` — caminho não-Meta equivalente
 - `supabase/migrations/034_messages_inbound_idempotency.sql`, `035_inbound_idempotency_rpcs.sql` — contrato de idempotência
 - `supabase/migrations/010_flows.sql:165-172` — status de run; `017_account_sharing.sql:337-340` — `idx_one_active_run_per_contact` sobre `(account_id, contact_id)`
 - `src/lib/flows/engine.ts:183-199,434-455,1019-1021,1050-1060` — run ativa, handoff, fallback `ignore`, fallback esgotado com handoff

@@ -6,7 +6,7 @@ import type {
   SendTextArgs, SendMediaArgs, SendTemplateArgs,
   SendReactionArgs, SendInteractiveButtonsArgs, SendInteractiveListArgs,
 } from '../providers/types'
-import { createIntent, settleMessage, settleMessageSystem, type SettlementResult } from './settlement'
+import { createIntent, settleAcceptedSend, settleMessage, settleMessageSystem, type SettlementResult } from './settlement'
 import type { ConnectionIdentityRow } from './connection-binding'
 import { classifyFailure } from './failure-classifier'
 import { computeBackoff, DEFAULT_BACKOFF_CONFIG } from './retry-policy'
@@ -157,7 +157,13 @@ export async function deliverText(
 
   try {
     const result = await provider.sendText(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
+    const accepted = await settleAcceptedSend(supabase, {
+      messageId: intent.id,
+      connectionRef: meta.connection.id,
+      externalIdentities: result.externalIdentities,
+      providerMessageId: result.messageId,
+    })
+    return accepted.settlement
   } catch (error) {
     return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }
@@ -182,7 +188,13 @@ export async function deliverMedia(
 
   try {
     const result = await provider.sendMedia(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
+    const accepted = await settleAcceptedSend(supabase, {
+      messageId: intent.id,
+      connectionRef: meta.connection.id,
+      externalIdentities: result.externalIdentities,
+      providerMessageId: result.messageId,
+    })
+    return accepted.settlement
   } catch (error) {
     return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }
@@ -206,7 +218,13 @@ export async function deliverTemplate(
 
   try {
     const result = await provider.sendTemplate(sendArgs)
-    return settleMessage(supabase, intent.id, 'sent', meta.connection.id, result.externalIdentities, result.messageId)
+    const accepted = await settleAcceptedSend(supabase, {
+      messageId: intent.id,
+      connectionRef: meta.connection.id,
+      externalIdentities: result.externalIdentities,
+      providerMessageId: result.messageId,
+    })
+    return accepted.settlement
   } catch (error) {
     return handleSendFailure(supabase, provider, error, intent.id, meta.connection.id)
   }

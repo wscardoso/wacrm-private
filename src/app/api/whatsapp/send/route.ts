@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendText, sendMedia, sendTemplate, handleSendFailure } from '@/lib/whatsapp/delivery/sender'
-import { createIntent, settleMessage } from '@/lib/whatsapp/delivery/settlement'
+import { createIntent, settleAcceptedSend } from '@/lib/whatsapp/delivery/settlement'
 import type { SettlementResult } from '@/lib/whatsapp/delivery/settlement'
 import {
   encrypt,
@@ -337,6 +337,7 @@ export async function POST(request: Request) {
       }
 
       let providerMessageId = ''
+      let providerIdentities: ExternalIdentity[] = []
       let sendError: unknown = null
       try {
         const result = isMediaKind
@@ -354,7 +355,7 @@ export async function POST(request: Request) {
               contextMessageId,
             })
         providerMessageId = result.messageId
-        settlement = await settleMessage(supabase, messageId, 'sent', config.id, result.externalIdentities, result.messageId)
+        providerIdentities = result.externalIdentities
       } catch (err) {
         sendError = err
       }
@@ -378,8 +379,20 @@ export async function POST(request: Request) {
         )
       }
 
+      // The provider has accepted the message. From here a database error is
+      // NOT a send failure (see settleAcceptedSend): never 502, never retried.
+      const accepted = await settleAcceptedSend(supabase, {
+        messageId,
+        connectionRef: config.id,
+        externalIdentities: providerIdentities,
+        providerMessageId,
+      })
+      settlement = accepted.settlement
+
       // ── ODI-001 §7: gate N-3 — effects fire only on outcome === 'sent' ──
-      if (settlement.outcome === 'sent') {
+      // (or when the provider accepted and only the bookkeeping is pending:
+      // the customer did receive the message, and both effects are idempotent)
+      if (settlement.outcome === 'sent' || accepted.pending) {
         await supabase
           .from('conversations')
           .update({
@@ -392,11 +405,7 @@ export async function POST(request: Request) {
         await pauseFlowRunsOnAgentSend(accountId, contact.id)
       }
 
-      return NextResponse.json({
-        success: true,
-        message_id: messageId,
-        whatsapp_message_id: providerMessageId,
-      })
+      return acceptedResponse(messageId, providerMessageId, accepted.pending)
     }
 
     // ── Meta provider path (unchanged) ───────────────────────────────────
@@ -495,16 +504,18 @@ export async function POST(request: Request) {
       return { messageId: result.messageId, identities: result.externalIdentities }
     }
 
+    // Phase 1 — SEND only. Nothing in this block touches the database: a
+    // database error must never be mistaken for "recipient not allowed" and
+    // make the loop send the same message to the next phone variant.
+    let accepted: { messageId: string; identities: ExternalIdentity[] } | null = null
     try {
       const variants = phoneVariants(sanitizedPhone)
       let lastError: unknown = null
 
       for (const variant of variants) {
         try {
-          const out = await attemptOne(variant)
-          waMessageId = out.messageId
+          accepted = await attemptOne(variant)
           workingPhone = variant
-          metaSettlement = await settleMessage(supabase, messageId, 'sent', config.id, out.identities, out.messageId)
           lastError = null
           break
         } catch (err) {
@@ -518,6 +529,7 @@ export async function POST(request: Request) {
       }
 
       if (lastError) throw lastError
+      if (!accepted) throw new Error('No phone number variant to send to')
     } catch (err) {
       // Commit 6.1 correção #1 — mesmo tratamento via handleSendFailure
       // (ADR-E4B-001/002/003): reenviável fica `sending` + ledger;
@@ -535,6 +547,18 @@ export async function POST(request: Request) {
       )
     }
 
+    // Phase 2 — the provider ACCEPTED the message. A database error from here
+    // on is not a send failure (see settleAcceptedSend): never 502, never
+    // handed to handleSendFailure, never retried.
+    waMessageId = accepted.messageId
+    const settled = await settleAcceptedSend(supabase, {
+      messageId,
+      connectionRef: config.id,
+      externalIdentities: accepted.identities,
+      providerMessageId: accepted.messageId,
+    })
+    metaSettlement = settled.settlement
+
     // If a non-original variant succeeded, update the contact so future
     // sends go straight through.
     if (workingPhone !== sanitizedPhone) {
@@ -548,7 +572,9 @@ export async function POST(request: Request) {
     }
 
     // ── ODI-001 §7: gate N-3 — effects only on outcome === 'sent' ──
-    if (metaSettlement.outcome === 'sent') {
+    // (or when the provider accepted and only the bookkeeping is pending:
+    // the customer did receive the message, and both effects are idempotent)
+    if (metaSettlement.outcome === 'sent' || settled.pending) {
       await supabase
         .from('conversations')
         .update({
@@ -561,11 +587,7 @@ export async function POST(request: Request) {
       await pauseFlowRunsOnAgentSend(accountId, contact.id)
     }
 
-    return NextResponse.json({
-      success: true,
-      message_id: messageId,
-      whatsapp_message_id: waMessageId,
-    })
+    return acceptedResponse(messageId, waMessageId, settled.pending)
   } catch (error) {
     console.error('Error in WhatsApp send POST:', error)
     return NextResponse.json(
@@ -573,6 +595,32 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
+}
+
+/**
+ * Success response for a message the provider accepted. When only the
+ * database settlement is pending the answer is still a success (202): the
+ * message was handed to the provider, so the UI must not offer a resend.
+ */
+function acceptedResponse(messageId: string, whatsappMessageId: string, settlementPending: boolean): NextResponse {
+  if (!settlementPending) {
+    return NextResponse.json({
+      success: true,
+      message_id: messageId,
+      whatsapp_message_id: whatsappMessageId,
+    })
+  }
+  return NextResponse.json(
+    {
+      success: true,
+      settlement: 'pending',
+      message_id: messageId,
+      whatsapp_message_id: whatsappMessageId,
+      warning:
+        'The message was accepted by the WhatsApp provider; recording its delivery state is pending reconciliation. Do not resend it.',
+    },
+    { status: 202 },
+  )
 }
 
 /**

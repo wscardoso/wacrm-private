@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------
@@ -260,5 +260,62 @@ describe('POST /api/whatsapp/broadcast', () => {
     expect(body.sent).toBe(2)
     expect(body.failed).toBe(1)
     expect(body.results).toHaveLength(3)
+  })
+})
+
+// ---------------------------------------------------------------
+// A broadcast is a template fan-out. Templates exist only on the official
+// Meta API; the uazapi adapter would send the template NAME as plain text to
+// every recipient. /broadcast must refuse a non-Meta account up front, with
+// the same rule (and message) as /send.
+// ---------------------------------------------------------------
+describe('POST /api/whatsapp/broadcast — non-Meta account', () => {
+  const uazapiCfg = {
+    id: 'cfg1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev',
+    phone_number_id: 'inst1', access_token: 'encrypted', account_id: 'a1',
+  }
+  const BODY = {
+    recipients: [{ phone: '+5511999999999', params: ['Alice'] }, { phone: '+5521988888888' }],
+    template_name: 'welcome',
+    template_language: 'pt_BR',
+  }
+
+  // Never reach a real host from a test: any fetch is captured here.
+  const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ key: { id: 'x' } }), { status: 200 }))
+  beforeEach(() => {
+    fetchSpy.mockClear()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('answers 400 and sends NOTHING (no template name as text) to a uazapi account', async () => {
+    db.setResult('whatsapp_config', { data: uazapiCfg, error: null })
+    const { POST } = await import('./route')
+    const res = await POST(request(BODY))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/only available with the official Meta WhatsApp Business API/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockSendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('does not even look the template up for a non-Meta account', async () => {
+    db.setResult('whatsapp_config', { data: uazapiCfg, error: null })
+    const { POST } = await import('./route')
+    await POST(request(BODY))
+    expect(db.from).not.toHaveBeenCalledWith('message_templates')
+  })
+
+  it('a Meta account (explicit provider) still broadcasts', async () => {
+    db.setResult('whatsapp_config', {
+      data: { id: 'cfg1', provider: 'meta', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' },
+      error: null,
+    })
+    mockSendTemplateMessage.mockResolvedValue({ messageId: 'wamid.m' })
+    const { POST } = await import('./route')
+    const res = await POST(request(BODY))
+    expect(res.status).toBe(200)
+    expect((await res.json()).sent).toBe(2)
   })
 })

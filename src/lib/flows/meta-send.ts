@@ -6,7 +6,7 @@ import {
   sendWithPhoneVariantRetry,
 } from '@/lib/whatsapp/phone-utils'
 import { getProvider, providerConfigFromRow, type ExternalIdentity } from '@/lib/whatsapp/providers'
-import { createIntent, settleMessageSystem } from '@/lib/whatsapp/delivery/settlement'
+import { createIntent, settleAcceptedSend } from '@/lib/whatsapp/delivery/settlement'
 import { handleSendFailure } from '@/lib/whatsapp/delivery/sender'
 import { supabaseAdmin } from './admin-client'
 
@@ -128,10 +128,6 @@ export async function engineSendText(
       db,
     )
     waMessageId = result
-
-    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
-    // fachada de sistema (ADR-SYS-001).
-    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
     // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
     // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
@@ -142,6 +138,16 @@ export async function engineSendText(
     }
     throw err
   }
+
+  // The provider accepted the message. A database error here is not a send
+  // failure and must not be retried (settleAcceptedSend).
+  await settleAcceptedSend(db, {
+    messageId,
+    connectionRef: config.id,
+    externalIdentities: identities,
+    providerMessageId: waMessageId,
+    actor: 'system',
+  })
 
   await db
     .from('conversations')
@@ -251,10 +257,6 @@ export async function engineSendMedia(
       db,
     )
     waMessageId = result
-
-    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
-    // fachada de sistema (ADR-SYS-001).
-    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
     // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
     // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
@@ -265,6 +267,16 @@ export async function engineSendMedia(
     }
     throw err
   }
+
+  // The provider accepted the message. A database error here is not a send
+  // failure and must not be retried (settleAcceptedSend).
+  await settleAcceptedSend(db, {
+    messageId,
+    connectionRef: config.id,
+    externalIdentities: identities,
+    providerMessageId: waMessageId,
+    actor: 'system',
+  })
 
   await db
     .from('conversations')
@@ -420,10 +432,6 @@ async function sendInteractiveViaMeta(
       db,
     )
     waMessageId = result
-
-    // Commit 6.1 correção #6 — service_role, sem auth.uid(): usar a
-    // fachada de sistema (ADR-SYS-001).
-    await settleMessageSystem(db, messageId, 'sent', config.id, identities, waMessageId)
   } catch (err) {
     // Commit 6.1 correção #1/#6 — handleSendFailure(actor='system'):
     // reenviável fica `sending` + ledger; só `permanent` liquida `failed`.
@@ -434,6 +442,16 @@ async function sendInteractiveViaMeta(
     }
     throw err
   }
+
+  // The provider accepted the message. A database error here is not a send
+  // failure and must not be retried (settleAcceptedSend).
+  await settleAcceptedSend(db, {
+    messageId,
+    connectionRef: config.id,
+    externalIdentities: identities,
+    providerMessageId: waMessageId,
+    actor: 'system',
+  })
 
   await db
     .from('conversations')

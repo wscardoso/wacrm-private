@@ -101,7 +101,7 @@ Signature Match:     SUCCESS (Authenticated)
 --- CRYPTO INTEGRITY VALIDATION (E7) ---
 Binding Context:     whatsapp_config:eefd83ef-b6b2-49a4-af4d-71fd21a95dcb
 Decryption:          SUCCESS
-Decrypted Token:     E3BE09CE2BF95D2...
+Decrypted Token:     [redacted]
 ```
 
 ### Evidência 5: Idempotência de Webhook e Assinaturas (Vitest)

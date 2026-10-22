@@ -52,7 +52,7 @@ Baseado em evidência de código (src/, supabase/migrations/, docs/MASTER-ROADMA
 ### 3.3 Orquestração (Dois Motores)
 - Automations — árvore de ações reativas a evento discreto (src/lib/automations/, automations + automation_steps + automation_logs + automation_pending_executions)
 - Flows — máquina de estados conversacional multi-turno (src/lib/flows/, flows + flow_nodes + flow_runs + flow_run_events)
-- Precedência — Flows avalia primeiro (síncrono, await); consumo suprime gatilhos de conteúdo de Automations; gatilhos de identidade disparam sempre (ADR-AUT-001 D4; linhas atuais: `webhook/route.ts:796-859`, `inbound-processor.ts:347-392`)
+- Precedência — Flows avalia primeiro (síncrono, await); consumo suprime gatilhos de conteúdo de Automations; gatilhos de identidade disparam sempre (ADR-AUT-001 D4; linhas atuais: `webhook/route.ts:889-952`, `inbound-processor.ts:384-429`)
 
 ### 3.4 Atribuição & Identidade
 - CTWA Attribution — captura (lead_attributions), enriquecimento via Marketing API (E6.0, ADR-ATTR-001/002 Aceitos)
@@ -368,13 +368,13 @@ Este documento não faz e não decide:
 
 ## 15. Evidências — Referências arquivo:linha
 
-> **Convenção de linhas.** Referências a `ADR-AUT-001` seguem `3301c77` (ver §4.1). Referências a código do FORCECRM seguem o código do commit da release de delivery binding e remoção da Z-API (os números de `webhook/route.ts` e `inbound-processor.ts` foram remapeados para ele).
+> **Convenção de linhas.** Referências a `ADR-AUT-001` seguem `3301c77` (ver §4.1). Referências a código do FORCECRM seguem a working tree da data da revisão 1.1, que inclui trabalho C6.2 não commitado.
 
 | Afirmação | Classificação | Arquivo:Linha |
 |-----------|---------------|---------------|
 | ADR-AUT-001 defere IA a FORCECRM × ROXY | DECISÃO | docs/adr/ADR-AUT-001-automations-flows-reconciliation.md:10,128,167,193 |
 | Automations e Flows são dois motores do ForceCRM | IMPLEMENTADO | docs/adr/ADR-AUT-001-automations-flows-reconciliation.md:113 (D1) |
-| Precedência Flows → Automations implementada | IMPLEMENTADO | `src/app/api/whatsapp/webhook/route.ts:796-859`, `src/lib/whatsapp/inbound-processor.ts:347-392` (linhas atuais; `ADR-AUT-001` cita 758-840/360-393, corretas no baseline `2a6061e`) |
+| Precedência Flows → Automations implementada | IMPLEMENTADO | `src/app/api/whatsapp/webhook/route.ts:889-952`, `src/lib/whatsapp/inbound-processor.ts:384-429` (linhas atuais; `ADR-AUT-001` cita 758-840/360-393, corretas no baseline `2a6061e`) |
 | getProvider() em Automations e Flows | IMPLEMENTADO | src/lib/automations/meta-send.ts:104, src/lib/flows/meta-send.ts:97,229,400 |
 | ROXY não existe **neste repositório** (grep negativo) | OBSERVADO | grep -r roxy src/ supabase/ --include=*.ts --include=*.tsx --include=*.sql |
 | Hermes apenas como dependência hermes-parser | IMPLEMENTADO | package-lock.json:6320,7157-7171 |

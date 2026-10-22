@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------
@@ -652,5 +652,167 @@ describe('POST /api/whatsapp/send', () => {
     }))
     expect(res.status).toBe(502)
     expect(pauseCalls().updates).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------
+// Settlement failure AFTER the provider accepted the message.
+//
+// Once a provider has returned an id the message is out of our hands: a
+// database error while settling it must never be handled as a send failure
+// (no 502, no "failed" bubble, no invitation to resend, no resend by us) and
+// must leave a reconciliation trail that names the provider id.
+// ---------------------------------------------------------------
+describe('POST /api/whatsapp/send — settlement fails after the provider accepted', () => {
+  const META_CFG = { id: '00000000-0000-4000-8000-0000000000c1', phone_number_id: '123', access_token: 'encrypted', account_id: 'a1' }
+  const UAZAPI_CFG = { id: '00000000-0000-4000-8000-0000000000c1', provider: 'uazapi', instance_id: 'inst1', base_url: 'https://my.uazapi.dev', access_token: 'encrypted', account_id: 'a1' }
+
+  type RpcResult = { data: unknown; error: unknown }
+  const ok = (outcome = 'sent'): RpcResult => ({ data: { messageId: 'msg-1', outcome }, error: null })
+  const dbError = (message = 'canceling statement due to statement timeout'): RpcResult => ({ data: null, error: { message, code: '57014' } })
+
+  /** Route every rpc by name; `settle` is a queue of results, one per settle call. */
+  function stubRpc(settle: Array<RpcResult | Error>) {
+    const queue = [...settle]
+    db.rpc.mockImplementation((name: string) => {
+      if (name === 'settle_outbound_message') {
+        const next = queue.shift() ?? ok()
+        return (next instanceof Error ? Promise.reject(next) : Promise.resolve(next)) as never
+      }
+      return Promise.resolve({ data: { enqueued: true }, error: null }) as never
+    })
+  }
+  const rpcCalls = (name: string) => db.rpc.mock.calls.filter(([n]) => n === name).map(([, a]) => a as Record<string, unknown>)
+  // `flow_runs` falls through to the default chain in this harness.
+  const pauseUpdates = () =>
+    (db.from('flow_runs') as unknown as { update: ReturnType<typeof vi.fn> }).update.mock.calls.filter(
+      ([payload]) => (payload as { status?: string })?.status === 'paused_by_agent',
+    )
+
+  const SEND = { conversation_id: 'c1', message_type: 'text', content_text: 'hello' }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  for (const [label, cfg, wamid] of [
+    ['Meta', META_CFG, 'wamid.accepted1'],
+    ['uazapi', UAZAPI_CFG, 'ABCD1234'],
+  ] as const) {
+    describe(label, () => {
+      beforeEach(() => {
+        db.setResult('whatsapp_config', { data: cfg, error: null })
+        mockSendTextMessage.mockResolvedValue({ messageId: wamid, externalIdentities: [{ kind: 'wamid', value: wamid }] })
+        vi.spyOn(console, 'error').mockImplementation(() => {})
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+      })
+
+      it('answers 202 "accepted, settlement pending" with the provider id — not 502 — when settle keeps failing', async () => {
+        stubRpc([dbError(), dbError()])
+        const { POST } = await import('./route')
+        const res = await POST(request(SEND))
+        expect(res.status).toBe(202)
+        const body = await res.json()
+        expect(body).toMatchObject({ success: true, settlement: 'pending', whatsapp_message_id: wamid })
+        expect(body.message_id).toEqual(expect.any(String))
+        expect(body.error).toBeUndefined()
+      })
+
+      it('does not treat the settle error as a send failure: no failure classification, no "failed" settle, provider called once', async () => {
+        stubRpc([dbError(), dbError()])
+        const { POST } = await import('./route')
+        await POST(request(SEND))
+        const classify = (mockGetProvider.mock.results[0].value as { classifySendFailure: ReturnType<typeof vi.fn> }).classifySendFailure
+        expect(classify).not.toHaveBeenCalled()
+        expect(rpcCalls('settle_outbound_message').every((a) => a.p_status === 'sent')).toBe(true)
+        expect(mockSendTextMessage).toHaveBeenCalledTimes(1)
+      })
+
+      it('leaves a reconciliation record naming the provider id, blocked from any automatic re-send', async () => {
+        stubRpc([dbError(), dbError()])
+        const { POST } = await import('./route')
+        await POST(request(SEND))
+        const enq = rpcCalls('enqueue_outbound_retry')
+        expect(enq).toHaveLength(1)
+        expect(enq[0]).toMatchObject({ p_classification: 'ambiguous', p_next_attempt_at: null })
+        expect(String(enq[0].p_last_error)).toContain('ACCEPTED_BY_PROVIDER')
+        expect(String(enq[0].p_last_error)).toContain(wamid)
+      })
+
+      it('survives a transient settle failure: the second attempt settles the message sent (200)', async () => {
+        stubRpc([dbError('fetch failed'), ok('sent')])
+        const { POST } = await import('./route')
+        const res = await POST(request(SEND))
+        expect(res.status).toBe(200)
+        expect((await res.json()).settlement).toBeUndefined()
+        expect(rpcCalls('enqueue_outbound_retry')).toHaveLength(0)
+      })
+
+      it('falls back to settling sent WITHOUT identities when recording them is what fails (e.g. unique violation)', async () => {
+        stubRpc([
+          { data: null, error: { message: 'duplicate key value violates unique constraint "uq_meid_connection_kind_value"', code: '23505' } },
+          ok('sent'),
+        ])
+        const { POST } = await import('./route')
+        const res = await POST(request(SEND))
+        expect(res.status).toBe(200)
+        const calls = rpcCalls('settle_outbound_message')
+        expect(calls).toHaveLength(2)
+        expect(calls[0].p_identities).toHaveLength(1)
+        expect(calls[1].p_identities).toEqual([])
+        expect(calls[1]).toMatchObject({ p_status: 'sent', p_provider_message_id: wamid })
+      })
+
+      it('a settle call that rejects (throws) is handled the same way', async () => {
+        stubRpc([new Error('socket hang up'), new Error('socket hang up')])
+        const { POST } = await import('./route')
+        const res = await POST(request(SEND))
+        expect(res.status).toBe(202)
+        expect(mockSendTextMessage).toHaveBeenCalledTimes(1)
+      })
+
+      it('still applies the confirmed-send effects (the customer did receive the message)', async () => {
+        stubRpc([dbError(), dbError()])
+        const { POST } = await import('./route')
+        await POST(request(SEND))
+        expect(pauseUpdates()).toHaveLength(1)
+      })
+
+      it('never logs the access token', async () => {
+        stubRpc([dbError(), dbError()])
+        const { POST } = await import('./route')
+        await POST(request(SEND))
+        const logged = JSON.stringify([
+          ...(console.error as unknown as ReturnType<typeof vi.fn>).mock.calls,
+          ...(console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls,
+        ])
+        expect(logged).not.toContain('decrypted-token')
+      })
+    })
+  }
+
+  it('Meta: a settle error that looks like "recipient not allowed" must NOT make the loop send to the next phone variant', async () => {
+    db.setResult('whatsapp_config', { data: META_CFG, error: null })
+    mockPhoneVariants.mockImplementation((p: string) => [p, `1${p}`])
+    mockIsRecipientNotAllowedError.mockReturnValue(true)
+    mockSendTextMessage.mockResolvedValue({ messageId: 'wamid.once', externalIdentities: [] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubRpc([dbError('131030 not in allowed list'), dbError('131030 not in allowed list')])
+    const { POST } = await import('./route')
+    const res = await POST(request(SEND))
+    expect(mockSendTextMessage).toHaveBeenCalledTimes(1)
+    expect(res.status).toBe(202)
+  })
+
+  it('a genuine provider failure is unchanged: 502 + failure handling', async () => {
+    db.setResult('whatsapp_config', { data: META_CFG, error: null })
+    mockSendTextMessage.mockRejectedValue(new Error('token expired'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubRpc([ok('failed')])
+    const { POST } = await import('./route')
+    const res = await POST(request(SEND))
+    expect(res.status).toBe(502)
+    expect(rpcCalls('settle_outbound_message')[0]).toMatchObject({ p_status: 'failed' })
   })
 })
