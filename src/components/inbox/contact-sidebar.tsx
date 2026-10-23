@@ -215,7 +215,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                   {attribution.ad_media_url && (
                     <img
                       src={resolvedAdMediaUrl}
-                      alt={attribution.ad_headline ?? "Ad creative"}
+                      alt={attribution.ad_headline ?? t("ad_creative")}
                       className="h-28 w-full object-cover"
                     />
                   )}
@@ -254,11 +254,11 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           <div>
             <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <TagIcon className="h-3 w-3" />
-              Tags
+              {t("tags")}
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
               {tags.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No tags</p>
+                <p className="px-1 text-xs text-muted-foreground">{t("no_tags")}</p>
               ) : (
                 tags.map((tag) => (
                   <span
@@ -283,11 +283,11 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           <div>
             <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <DollarSign className="h-3 w-3" />
-              Active Deals
+              {t("active_deals")}
             </div>
             <div className="mt-2 space-y-2">
               {deals.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No deals</p>
+                <p className="px-1 text-xs text-muted-foreground">{t("no_deals")}</p>
               ) : (
                 deals.map((deal) => (
                   <div
@@ -327,7 +327,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           <div>
             <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <StickyNote className="h-3 w-3" />
-              Notes
+              {t("notes")}
             </div>
             <div className="mt-2">
               {!isPlatformContext && (
@@ -335,7 +335,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                   <textarea
                     value={newNote}
                     onChange={(e) => setNewNote(e.target.value)}
-                    placeholder="Add a note..."
+                    placeholder={t("add_note")}
                     rows={2}
                     className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
                   />

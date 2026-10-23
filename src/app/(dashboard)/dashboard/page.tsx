@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
@@ -40,7 +40,11 @@ type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
   const t = useTranslations("dashboard")
+  const locale = useLocale()
   const { defaultCurrency } = useAuth()
+  // Captured once per mount for the header eyebrow; lazy init keeps
+  // the impure Date read out of render.
+  const [today] = useState(() => new Date())
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
   const [metricsError, setMetricsError] = useState(false)
@@ -187,11 +191,20 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
+    <div className="mx-auto max-w-[1400px] space-y-6">
+      {/* Header — date eyebrow, display-serif title, one-line summary. */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
+          {today.toLocaleDateString(locale, {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+          })}
+        </p>
+        <h1 className="mt-1.5 font-display text-3xl font-semibold tracking-tight text-foreground sm:text-[34px]">
+          {t("title")}
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           {t("description")}
         </p>
       </div>
@@ -212,7 +225,10 @@ export default function DashboardPage() {
               icon={MessageSquare}
               delta={{
                 sign: metrics.activeConversations.previous,
-                label: deltaLabel(metrics.activeConversations.previous, t("delta_new_today")),
+                label:
+                  metrics.activeConversations.previous === 0
+                    ? t("no_new_today")
+                    : deltaLabel(metrics.activeConversations.previous, t("delta_new_today")),
               }}
             />
             <MetricCard

@@ -15,6 +15,7 @@ import {
   CornerDownLeft,
 } from "lucide-react";
 import { format } from "date-fns";
+import { useTranslations } from "next-intl";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { useResolvedMediaUrl } from "@/components/shared/account-media";
@@ -46,10 +47,11 @@ function StatusIcon({ status }: { status: Message["status"] }) {
 }
 
 function MediaUnavailable({ label }: { label: string }) {
+  const t = useTranslations("inbox");
   return (
     <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
       <ImageOff className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span>{label} unavailable</span>
+      <span>{t("media_unavailable", { label })}</span>
     </div>
   );
 }
@@ -174,6 +176,7 @@ function MediaDocumentLink({
 }
 
 function MessageContent({ message }: { message: Message }) {
+  const t = useTranslations("inbox");
   switch (message.content_type) {
     case "text":
       return (
@@ -186,9 +189,9 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage url={message.media_url} alt={t("shared_image")} />
           ) : (
-            <MediaUnavailable label="Image" />
+            <MediaUnavailable label={t("media_image")} />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -204,7 +207,7 @@ function MessageContent({ message }: { message: Message }) {
           {message.media_url ? (
             <MediaVideo url={message.media_url} className="max-h-64 max-w-60 rounded-lg" />
           ) : (
-            <MediaUnavailable label="Video" />
+            <MediaUnavailable label={t("media_video")} />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -220,19 +223,19 @@ function MessageContent({ message }: { message: Message }) {
           {message.media_url ? (
             <MediaAudio url={message.media_url} className="max-w-60" />
           ) : (
-            <MediaUnavailable label="Audio" />
+            <MediaUnavailable label={t("media_audio")} />
           )}
         </div>
       );
 
     case "document":
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || "Document"} />;
+        return <MediaUnavailable label={message.content_text || t("media_document")} />;
       }
       return (
         <MediaDocumentLink
           url={message.media_url}
-          label={message.content_text || "Document"}
+          label={message.content_text || t("media_document")}
         />
       );
 
@@ -241,7 +244,7 @@ function MessageContent({ message }: { message: Message }) {
         <div>
           <span className="mb-1 inline-flex items-center gap-1 rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
             <LayoutTemplate className="h-3 w-3" />
-            Template
+            {t("template_badge")}
           </span>
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -255,7 +258,7 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div className="flex items-center gap-2 text-sm">
           <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span>{message.content_text || "Location shared"}</span>
+          <span>{message.content_text || t("location_shared")}</span>
         </div>
       );
 
@@ -269,10 +272,10 @@ function MessageContent({ message }: { message: Message }) {
         <div className="flex flex-col gap-0.5">
           <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             <CornerDownLeft className="h-3 w-3" />
-            Button reply
+            {t("button_reply")}
           </span>
           <p className="whitespace-pre-wrap break-words text-sm">
-            {message.content_text || "[Interactive reply]"}
+            {message.content_text || t("interactive_fallback")}
           </p>
         </div>
       );

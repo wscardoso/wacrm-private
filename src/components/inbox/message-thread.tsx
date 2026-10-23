@@ -6,7 +6,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { usePlatformContext } from "@/hooks/use-platform-context";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
-import { presenceLabel } from "@/lib/presence";
+import type { PresenceStatus } from "@/lib/presence";
+import { contactDisplayName as resolveContactName } from "@/lib/contacts/display-name";
+import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import type {
   Conversation,
@@ -28,7 +30,8 @@ import {
   PanelRightOpen,
   PanelRightClose,
 } from "lucide-react";
-import { format, isToday, isYesterday } from "date-fns";
+import { format, formatDistance, isToday, isYesterday } from "date-fns";
+import { enUS, ptBR } from "date-fns/locale";
 import { computeSessionInfo } from "@/lib/inbox/session-window";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -109,11 +112,19 @@ interface MessageThreadProps {
   onToggleContactPanel?: () => void;
 }
 
-function formatDateSeparator(dateStr: string): string {
+function formatDateSeparator(
+  dateStr: string,
+  labels: { today: string; yesterday: string },
+  locale: string,
+): string {
   const date = new Date(dateStr);
-  if (isToday(date)) return "Today";
-  if (isYesterday(date)) return "Yesterday";
-  return format(date, "MMMM d, yyyy");
+  if (isToday(date)) return labels.today;
+  if (isYesterday(date)) return labels.yesterday;
+  return date.toLocaleDateString(locale, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 function groupMessagesByDate(messages: Message[]) {
@@ -133,10 +144,11 @@ function groupMessagesByDate(messages: Message[]) {
   return groups;
 }
 
-const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
-  { label: "Open", value: "open", color: "text-primary" },
-  { label: "Pending", value: "pending", color: "text-amber-400" },
-  { label: "Closed", value: "closed", color: "text-muted-foreground" },
+// labelKey → `inbox.*` message; `value` is the stored status.
+const STATUS_OPTIONS: { labelKey: string; value: ConversationStatus; color: string }[] = [
+  { labelKey: "status_open", value: "open", color: "text-chart-1" },
+  { labelKey: "status_pending", value: "pending", color: "text-amber-500" },
+  { labelKey: "status_closed", value: "closed", color: "text-muted-foreground" },
 ];
 
 /**
@@ -167,6 +179,23 @@ export function MessageThread({
   onToggleContactPanel,
 }: MessageThreadProps) {
   const { user } = useAuth();
+  const t = useTranslations("inbox");
+  const tc = useTranslations("common");
+  const tp = useTranslations("presence");
+  const locale = useLocale();
+  // Localized placeholders for quoting media-only messages.
+  const previewLabels = useMemo(
+    () => ({
+      image: t("preview_image"),
+      video: t("preview_video"),
+      audio: t("preview_audio"),
+      document: t("preview_document"),
+      location: t("preview_location"),
+      template: t("preview_template"),
+      message: t("preview_message"),
+    }),
+    [t],
+  );
   // Platform (operator) read-only context. When true, every mutating
   // control below is suppressed and its handler short-circuits, so the
   // supervised tenant's data is view-only. Reads are unaffected. (P1b)
@@ -475,7 +504,7 @@ export function MessageThread({
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
           console.error("Failed to send message:", reason);
-          toast.error(`Failed to send: ${reason}`);
+          toast.error(t("toast_send_failed", { reason }));
           // Mark the optimistic bubble as failed so the user sees what happened
           onUpdateMessage(tempId, { status: "failed" });
           return;
@@ -487,12 +516,12 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "sent" });
       } catch (err) {
         console.error("Failed to send message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(`Failed to send: ${reason}`);
+        const reason = err instanceof Error ? err.message : t("network_error");
+        toast.error(t("toast_send_failed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage]
+    [conversation, onNewMessage, onUpdateMessage, t]
   );
 
   const handleSendMedia = useCallback(
@@ -541,7 +570,7 @@ export function MessageThread({
         if (!res.ok) {
           const reason = data?.error || `HTTP ${res.status}`;
           console.error("Failed to send media:", reason);
-          toast.error(`Failed to send: ${reason}`);
+          toast.error(t("toast_send_failed", { reason }));
           onUpdateMessage(tempId, { status: "failed" });
           // The upload never reached the recipient — GC the orphaned
           // object rather than leaving it in the public bucket forever.
@@ -552,13 +581,13 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "sent" });
       } catch (err) {
         console.error("Failed to send media:", err);
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(`Failed to send: ${reason}`);
+        const reason = err instanceof Error ? err.message : t("network_error");
+        toast.error(t("toast_send_failed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, t],
   );
 
   const handleStatusChange = useCallback(
@@ -635,7 +664,7 @@ export function MessageThread({
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
           console.error("Failed to send template:", reason);
-          toast.error(`Failed to send template: ${reason}`);
+          toast.error(t("toast_template_failed", { reason }));
           onUpdateMessage(tempId, { status: "failed" });
           return;
         }
@@ -643,12 +672,12 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "sent" });
       } catch (err) {
         console.error("Failed to send template:", err);
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(`Failed to send template: ${reason}`);
+        const reason = err instanceof Error ? err.message : t("network_error");
+        toast.error(t("toast_template_failed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, t],
   );
 
   // Build a quick id → Message map so reply quotes can be rendered without
@@ -670,7 +699,8 @@ export function MessageThread({
     return map;
   }, [reactions]);
 
-  const contactDisplayName = contact?.name || contact?.phone || "Customer";
+  const contactDisplayName =
+    resolveContactName(contact?.name, contact?.phone) ?? t("customer_fallback");
 
   // Author label for a quoted message: "You" when we sent the parent,
   // contact name when the customer sent it.
@@ -678,9 +708,9 @@ export function MessageThread({
     (m: Message): string => {
       const isAgentMsg =
         m.sender_type === "agent" || m.sender_type === "bot";
-      return isAgentMsg ? "You" : contactDisplayName;
+      return isAgentMsg ? t("message_reactions_you") : contactDisplayName;
     },
-    [contactDisplayName],
+    [contactDisplayName, t],
   );
 
   const handleStartReply = useCallback(
@@ -688,10 +718,10 @@ export function MessageThread({
       setReplyTo({
         id: msg.id,
         authorLabel: authorLabelFor(msg),
-        preview: buildReplyPreview(msg),
+        preview: buildReplyPreview(msg, previewLabels),
       });
     },
-    [authorLabelFor],
+    [authorLabelFor, previewLabels],
   );
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
@@ -710,7 +740,7 @@ export function MessageThread({
         return;
       }
       if (messageId.startsWith("temp-")) {
-        toast.error("Wait for the message to finish sending");
+        toast.error(t("toast_wait_sending"));
         return;
       }
 
@@ -755,12 +785,12 @@ export function MessageThread({
           throw new Error(payload?.error || `HTTP ${res.status}`);
         }
       } catch (err) {
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(`Reaction failed: ${reason}`);
+        const reason = err instanceof Error ? err.message : t("network_error");
+        toast.error(t("toast_reaction_failed", { reason }));
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id, isPlatformContext],
+    [conversation, user?.id, isPlatformContext, t],
   );
 
   const handleAssignChange = useCallback(
@@ -776,7 +806,7 @@ export function MessageThread({
 
       if (error) {
         console.error("Failed to update assignment:", error);
-        toast.error("Failed to update assignment");
+        toast.error(t("toast_assign_failed"));
         return;
       }
 
@@ -797,7 +827,7 @@ export function MessageThread({
         );
       }
     },
-    [conversation, onAssignChange, isPlatformContext],
+    [conversation, onAssignChange, isPlatformContext, t],
   );
 
   // Empty state — same WhatsApp-style doodle background as the active
@@ -810,16 +840,17 @@ export function MessageThread({
           <MessageSquare className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="mt-4 text-sm font-medium text-muted-foreground">
-          Select a conversation
+          {t("no_conversation_selected")}
         </h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Choose a conversation from the left to start messaging
+          {t("no_conversation_selected_desc")}
         </p>
       </div>
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName =
+    resolveContactName(contact.name, contact.phone) ?? t("unknown_contact");
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -827,8 +858,30 @@ export function MessageThread({
   const assignedAgentId = conversation.assigned_agent_id ?? null;
   const currentAssignee = profiles.find((p) => p.user_id === assignedAgentId);
   const assignLabel = assignedAgentId
-    ? (currentAssignee?.full_name ?? "Assigned")
-    : "Assign";
+    ? (currentAssignee?.full_name ?? t("assigned"))
+    : t("assign");
+  const sessionLabel =
+    sessionInfo.state === "no_customer"
+      ? t("session_no_customer")
+      : sessionInfo.state === "expired"
+        ? t("session_expired")
+        : sessionInfo.hoursLeft != null
+          ? t("session_hours_left", { hours: sessionInfo.hoursLeft })
+          : sessionInfo.minutesLeft != null
+            ? t("session_minutes_left", { minutes: sessionInfo.minutesLeft })
+            : "";
+  // Tooltip for a teammate's presence dot, localized.
+  const presenceText = (status: PresenceStatus, lastSeenAt: string | null) => {
+    if (status === "online") return tp("online");
+    if (status === "away") return tp("away");
+    const time = lastSeenAt
+      ? formatDistance(new Date(lastSeenAt), new Date(now), {
+          addSuffix: true,
+          locale: locale === "pt-BR" ? ptBR : enUS,
+        })
+      : "—";
+    return tp("offline", { time });
+  };
 
   return (
     // `min-w-0` is load-bearing: the page already puts min-w-0 on the
@@ -850,7 +903,7 @@ export function MessageThread({
             <button
               type="button"
               onClick={onBack}
-              aria-label="Back to conversations"
+              aria-label={t("back_to_conversations")}
               className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
             >
               <ArrowLeft className="h-5 w-5" />
@@ -873,7 +926,7 @@ export function MessageThread({
             )}
           >
             <Clock className="h-3 w-3" />
-            {sessionInfo.remaining}
+            {sessionLabel}
           </Badge>
         </div>
 
@@ -888,10 +941,10 @@ export function MessageThread({
               type="button"
               onClick={onToggleContactPanel}
               aria-label={
-                contactPanelOpen ? "Hide contact panel" : "Show contact panel"
+                contactPanelOpen ? t("hide_contact_panel") : t("show_contact_panel")
               }
               aria-pressed={contactPanelOpen}
-              title={contactPanelOpen ? "Hide contact" : "Show contact"}
+              title={contactPanelOpen ? t("hide_contact") : t("show_contact")}
               className={cn(
                 "hidden h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground lg:inline-flex",
                 contactPanelOpen ? "text-primary" : "text-muted-foreground",
@@ -915,8 +968,8 @@ export function MessageThread({
               type="button"
               onClick={handleRefreshClick}
               disabled={isRefreshing}
-              aria-label="Refresh conversation"
-              title="Refresh"
+              aria-label={t("refresh_conversation")}
+              title={t("refresh")}
               className={cn(
                 "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60",
               )}
@@ -934,7 +987,7 @@ export function MessageThread({
                   "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
                   currentStatus?.color ?? "text-muted-foreground"
                 )}>
-                {currentStatus?.label ?? "Status"}
+                {currentStatus ? t(currentStatus.labelKey) : t("status_label")}
                 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -947,7 +1000,7 @@ export function MessageThread({
                   onClick={() => handleStatusChange(opt.value)}
                   className={cn("text-sm", opt.color)}
                 >
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -973,7 +1026,7 @@ export function MessageThread({
             >
               {profiles.length === 0 ? (
                 <DropdownMenuItem disabled className="text-sm text-muted-foreground">
-                  No teammates available
+                  {t("no_teammates")}
                 </DropdownMenuItem>
               ) : (
                 profiles.map((p) => {
@@ -990,16 +1043,15 @@ export function MessageThread({
                     >
                       <PresenceDot
                         status={presence}
-                        label={presenceLabel(
+                        label={presenceText(
                           presence,
                           getRow(p.user_id)?.last_seen_at ?? null,
-                          now
                         )}
                         className="mr-2"
                       />
                       <span className="flex-1">
                         {p.full_name}
-                        {p.user_id === user?.id ? " (me)" : ""}
+                        {p.user_id === user?.id ? t("me_suffix") : ""}
                       </span>
                       {isSelected && <Check className="ml-2 h-3 w-3" />}
                     </DropdownMenuItem>
@@ -1013,7 +1065,7 @@ export function MessageThread({
                     onClick={() => handleAssignChange(null)}
                     className="text-sm text-muted-foreground"
                   >
-                    Unassign
+                    {t("unassign")}
                   </DropdownMenuItem>
                 </>
               )}
@@ -1031,20 +1083,20 @@ export function MessageThread({
           </div>
         ) : messagesError ? (
           <div className="flex flex-col items-center gap-2 py-12 text-center">
-            <p className="text-sm text-muted-foreground">Couldn&apos;t load messages</p>
+            <p className="text-sm text-muted-foreground">{t("load_messages_error")}</p>
             <button
               type="button"
               onClick={() => setRetryToken((t) => t + 1)}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             >
-              Try again
+              {tc("try_again")}
             </button>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">No messages yet</p>
+            <p className="text-sm text-muted-foreground">{t("no_messages_yet")}</p>
             <p className="text-xs text-muted-foreground">
-              Send a template to start the conversation
+              {t("start_with_template")}
             </p>
           </div>
         ) : (
@@ -1054,7 +1106,11 @@ export function MessageThread({
                 {/* Date separator */}
                 <div className="mb-4 flex items-center justify-center">
                   <span className="rounded-full bg-muted px-3 py-1 text-[10px] font-medium text-muted-foreground">
-                    {formatDateSeparator(group.date)}
+                    {formatDateSeparator(
+                      group.date,
+                      { today: t("today"), yesterday: t("yesterday") },
+                      locale,
+                    )}
                   </span>
                 </div>
                 {/* Messages */}
@@ -1066,7 +1122,7 @@ export function MessageThread({
                     const reply = parent
                       ? {
                           authorLabel: authorLabelFor(parent),
-                          preview: buildReplyPreview(parent),
+                          preview: buildReplyPreview(parent, previewLabels),
                         }
                       : null;
                     const msgReactions = reactionsByMessageId.get(msg.id);

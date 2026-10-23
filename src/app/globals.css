@@ -48,6 +48,13 @@
   --color-primary-hover: var(--primary-hover);
   --color-primary-soft: var(--primary-soft);
   --color-primary-soft-2: var(--primary-soft-2);
+  /* Brand highlight (Digitall Force gold) for the few places that
+   * should catch the eye — active nav marker, eyebrows on dark
+   * panels — plus the editorial display face used for page titles. */
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-highlight-strong: var(--highlight-strong);
+  --font-display: var(--font-display);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -72,7 +79,7 @@
  * --sidebar-ring) live in the ACCENT blocks. They set disjoint
  * variables, so cascade order between them doesn't matter.
  *
- * `:root` carries the dark-mode + violet defaults so a visitor
+ * `:root` carries the dark-mode + Force defaults so a visitor
  * renders correctly before JS runs; the boot script in
  * layout.tsx replays the saved mode + accent before first paint.
  *
@@ -145,9 +152,135 @@ html[data-mode="light"] {
   --sidebar-border: oklch(0.922 0.004 260);
 }
 
-/* ---- ACCENT: primary color ---- */
+/* ---- BRAND: theme-independent tokens ---- */
+
+:root {
+  --highlight: #e9b351;
+  --highlight-foreground: #0b2927;
+  /* Gold for thin selection outlines. Brand gold (#E9B351) only
+   * reaches ~1.9:1 on a light surface, so light mode uses a deeper
+   * gold that keeps a 1px border crisp; dark mode uses the brand gold. */
+  --highlight-strong: #e9b351;
+  /* The Digitall Force logo file is white-on-transparent. Sidebars
+   * that are already dark show it as-is; a light sidebar gets an
+   * ink-green plate behind it so the original artwork stays legible
+   * without being recolored. */
+  --logo-plate: transparent;
+}
+
+html[data-mode="light"]:not([data-theme="force"]) {
+  --logo-plate: #0b2927;
+}
+
+html[data-mode="light"] {
+  --highlight-strong: #b8862b;
+}
+
+/* ---- FORCE: Digitall Force brand theme (default) ----
+ *
+ * Palette sampled from the Digitall Force strategic-report deck:
+ *   ink green  #0B2927  (cover / dark panels)
+ *   deep green #133A36  (raised dark surface)
+ *   heading    #16302E
+ *   teal       #17706A  (primary)    mid teal  #2E8F82
+ *   light teal #7DBFB3  (charts)     mint      #62BAA9
+ *   gold       #E9B351  (highlight)
+ *   cream      #F5F0E9  (page)       paper     #FEFCF9 (cards)
+ *   sand line  #E9E2D7  (borders)    sage      #C8D6D2
+ *   slate text #617370  (muted)      mist      #CDDFDB (text on ink)
+ *
+ * Unlike the other accents, Force also re-tints the neutral
+ * surfaces (warm off-white in light, graphite in dark) and keeps the
+ * sidebar dark in both modes (ink green in light, charcoal in dark),
+ * so it carries the brand rather than just a button color. The compound selectors out-rank the plain
+ * MODE blocks above, so other accents are untouched. `:root` carries
+ * the Force accent as the pre-JS default; every other accent block
+ * out-ranks it. */
 
 :root,
+html[data-theme="force"] {
+  --primary: #17706a;
+  --primary-foreground: #fefcf9;
+  --primary-hover: #2e8f82;
+  --primary-soft: rgb(23 112 106 / 0.1);
+  --primary-soft-2: rgb(23 112 106 / 0.18);
+  --ring: #17706a;
+  --chart-1: #17706a;
+  --chart-2: #e9b351;
+  --chart-3: #7dbfb3;
+  --chart-4: #2e8f82;
+  --chart-5: #c8d6d2;
+  --sidebar: #0b2927;
+  --sidebar-foreground: #cddfdb;
+  --sidebar-accent: #133a36;
+  --sidebar-accent-foreground: #f5f0e9;
+  --sidebar-border: #1a4541;
+  --sidebar-primary: #e9b351;
+  --sidebar-primary-foreground: #0b2927;
+  --sidebar-ring: #62baa9;
+}
+
+html[data-theme="force"][data-mode="light"] {
+  /* Light: warm off-white page, white cards with a sand hairline —
+   * the report's paper-on-cream, kept quiet so the data leads. */
+  --background: #f7f4ef;
+  --foreground: #16302e;
+  --card: #ffffff;
+  --card-2: #faf7f2;
+  --card-foreground: #16302e;
+  --popover: #ffffff;
+  --popover-foreground: #16302e;
+  --secondary: #f1ece4;
+  --secondary-foreground: #16302e;
+  --muted: #f1ece4;
+  --muted-foreground: #5f6f6c;
+  --accent: #f1ece4;
+  --accent-foreground: #16302e;
+  --border: #e6dfd4;
+  --input: #ddd5c8;
+}
+
+html[data-theme="force"][data-mode="dark"] {
+  /* Dark: graphite / charcoal neutrals instead of ink green. Gold is
+   * the accent (active states, selections, icons); the brand teal is
+   * kept for data (chart series), where it reads as identity rather
+   * than as a green wash over the whole UI. */
+  --background: #111312;
+  --foreground: #f1eee8;
+  --card: #181a19;
+  --card-2: #1d201f;
+  --card-foreground: #f1eee8;
+  --popover: #1b1e1d;
+  --popover-foreground: #f1eee8;
+  --secondary: #232625;
+  --secondary-foreground: #f1eee8;
+  --muted: #232625;
+  --muted-foreground: #9ba29f;
+  --accent: #232625;
+  --accent-foreground: #f1eee8;
+  --border: #2a2e2c;
+  --input: #313533;
+  --primary: #e9b351;
+  --primary-foreground: #17140e;
+  --primary-hover: #f0c372;
+  --primary-soft: rgb(233 179 81 / 0.12);
+  --primary-soft-2: rgb(233 179 81 / 0.2);
+  --ring: #e9b351;
+  --chart-1: #5fae9f;
+  --chart-2: #e9b351;
+  --chart-3: #7dbfb3;
+  --chart-4: #2e8f82;
+  --chart-5: #3a3f3d;
+  --sidebar: #0c0e0d;
+  --sidebar-foreground: #c9cfcc;
+  --sidebar-accent: #1c1f1e;
+  --sidebar-accent-foreground: #f1eee8;
+  --sidebar-border: #222524;
+  --sidebar-ring: #e9b351;
+}
+
+/* ---- ACCENT: primary color ---- */
+
 html[data-theme="violet"] {
   --primary: oklch(0.526 0.247 293);
   --primary-foreground: oklch(0.985 0 0);
