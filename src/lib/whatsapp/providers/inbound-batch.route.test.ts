@@ -77,8 +77,11 @@ vi.mock('@/lib/supabase/admin-client', () => ({
     from: mockFromImpl,
     rpc: (fn: string) => {
       rpcCalls.push(fn)
-      if (fn === 'insert_inbound_message') {
-        return Promise.resolve({ data: rpcInserts ? `id-${rpcCalls.length}` : null, error: null })
+      if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
+        if (!rpcInserts) {
+          return Promise.resolve({ data: { message_id: 'existing', message_inserted: false, job_ready: true }, error: null })
+        }
+        return Promise.resolve({ data: { message_id: `id-${rpcCalls.length}`, message_inserted: true, job_ready: true }, error: null })
       }
       return Promise.resolve({ data: null, error: null })
     },
@@ -181,7 +184,7 @@ describe('uazapi batch data[] via real provider route', () => {
     // each parsed event (3 events → 3 dispatches).
     expect(spy).toHaveBeenCalledTimes(3)
     // One idempotency RPC per genuinely-inserted message.
-    expect(rpcCalls.filter((f) => f === 'insert_inbound_message').length).toBe(3)
+    expect(rpcCalls.filter((f) => f === 'persist_inbound_message_with_turn').length).toBe(3)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const firstArg = spy.mock.calls[0][0] as any
     expect(firstArg.messageId).toBe('evt-batch-1')

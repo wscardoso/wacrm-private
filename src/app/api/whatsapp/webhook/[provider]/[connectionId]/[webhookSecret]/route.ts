@@ -5,6 +5,7 @@ import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding';
 import { getProvider, type ProviderConfig } from '@/lib/whatsapp/providers';
 import type { InboundMessage } from '@/lib/whatsapp/providers/types';
 import { processInboundMessage } from '@/lib/whatsapp/inbound-processor';
+import { drainInboundTurnJobs } from '@/lib/agent/turn/drain';
 import { handleCanonicalStatusEvent } from '@/lib/whatsapp/status-handler';
 import { captureInboundFailure, classifyInboundFailure } from '@/lib/whatsapp/inbound-dlq';
 import {
@@ -232,19 +233,17 @@ export async function POST(
     }
   }
 
-  // C6.2 — failure capture (diagnostic only; no replay/retry/drain).
-  //   captured   = failed before/at persistence AND recorded in the DLQ.
-  //   uncaptured = failed before/at persistence and the DLQ write failed too.
-  // Failures AFTER the message was persisted keep their pre-C6.2 behaviour
-  // (logged, not counted as processed, not captured).
+  // C6.2 — failure capture is diagnostic only (minimised envelope, no original
+  // payload, no replay). It is not durable recovery of the inbound message.
   //
-  // HTTP contract (decision A1, Comandante):
-  //   * persistence failed + captured       -> 200. The DLQ record is
-  //     DIAGNOSTIC and NOT replayable (minimised envelope); the message itself
-  //     is NOT recovered. Its permanent loss is a risk temporarily accepted
-  //     until a separately authorised replay/drain front.
-  //   * persistence failed + capture failed -> 500.
-  //   Redelivery by uazapi / Evolution is NOT assumed or verified.
+  // HTTP (R1 / H6, UAZAPI docs):
+  //   * 2xx only when every inbound event in this delivery was durably stored
+  //     (message + turn job) or was not an inbound message (status, ignored callback).
+  //   * persistence or parse failed, whether or not the DLQ row was written -> 500.
+  //   * UAZAPI's worker does not automatically retry a non-2xx delivery
+  //     (docs.uazapi.com/docs/errors-and-retries). This 500 does not recover
+  //     the event through the provider. Repeated events, if they arrive, are
+  //     deduped and must not re-run Flows or Automations.
   let capturedCount = 0;
   let uncapturedCount = 0;
 
@@ -263,7 +262,9 @@ export async function POST(
 
   for (const event of events) {
     try {
-      await processInboundMessage(event, config.account_id, config.user_id);
+      await processInboundMessage(event, config.account_id, config.user_id, {
+        deferDownstream: true,
+      });
       inboundCount++;
     } catch (err) {
       const failure = classifyInboundFailure(err);
@@ -298,17 +299,19 @@ export async function POST(
     }
   }
 
-  // The failure was neither persisted nor captured: answer 5xx so the failure
-  // is visible to the caller/monitoring. Whether the provider then redelivers
-  // is NOT assumed. Other events of this batch were still handled above. IF a
-  // provider re-sent the WHOLE payload, events already persisted would be
-  // deduplicated by insert_inbound_message (no repeated effects), but an event
-  // that was already captured and fails again would be captured again (the DLQ
-  // has no dedup — future front).
-  if (uncapturedCount > 0) {
+  // Any event that did not reach a durable message+job (or was not parsed)
+  // blocks 2xx. A successful DLQ insert does not change that. Jobs already
+  // registered for the events that did persist are still drained; the 500
+  // does not ask UAZAPI to redeliver.
+  if (capturedCount + uncapturedCount > 0) {
+    if (inboundCount > 0) {
+      drainInboundTurnJobs().catch((err) => {
+        console.error('[webhook] inbound turn drain failed:', err);
+      });
+    }
     return NextResponse.json(
       {
-        error: 'Inbound persistence failed and could not be captured',
+        error: 'Inbound event was not durably persisted',
         processed: inboundCount,
         inboundProcessed: inboundCount,
         captured: capturedCount,
@@ -318,6 +321,10 @@ export async function POST(
       { status: 500 },
     );
   }
+
+  drainInboundTurnJobs().catch((err) => {
+    console.error('[webhook] inbound turn drain failed:', err);
+  });
 
   return NextResponse.json({
     received: true,

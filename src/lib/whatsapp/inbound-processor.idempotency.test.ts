@@ -34,6 +34,15 @@ function makeChain() {
     } else if (chain.__table === 'messages') {
       data = messagesUpsertResult.data
       error = messagesUpsertResult.error
+    } else if (chain.__table === 'inbound_turn_jobs') {
+      data = {
+        downstream_context: {
+          accountId: 'acc-1', contactId: 'contact-1', conversationId: 'conv-1',
+          configOwnerUserId: 'user-1', inboundText: 'Hello!', inboundType: 'text',
+          externalMessageId: 'ext-1', isFirstInboundMessage: true, contactWasCreated: false,
+          lastMessagePreview: 'Hello!', unreadCountBefore: 5,
+        },
+      }
     }
     resolve({ data, error })
     return Promise.resolve({ data, error })
@@ -49,10 +58,27 @@ const mockFromImpl = vi.fn((t: string) => {
 
 const mockRpcImpl = vi.fn((fn: string, _params: Record<string, unknown>) => {
   void _params
-  if (fn === 'insert_inbound_message') {
+  if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
+    if (messagesUpsertResult.error) return Promise.resolve({ data: null, error: messagesUpsertResult.error })
     const id = messagesUpsertResult.data?.[0]?.id ?? null
-    return Promise.resolve({ data: id, error: messagesUpsertResult.error })
+    if (!id) {
+      return Promise.resolve({
+        data: { message_id: 'msg-existing', message_inserted: false, job_ready: true },
+        error: null,
+      })
+    }
+    return Promise.resolve({
+      data: { message_id: id, message_inserted: true, job_ready: true },
+      error: null,
+    })
   }
+  if (fn === 'claim_inbound_turn_for_message') {
+    return Promise.resolve({
+      data: [{ message_id: _params.p_message_id, account_id: 'acc-1', contact_id: 'contact-1', conversation_id: 'conv-1', claim_token: 'tok' }],
+      error: null,
+    })
+  }
+  if (fn === 'complete_inbound_turn_job') return Promise.resolve({ data: true, error: null })
   return Promise.resolve({ data: null, error: null })
 })
 
@@ -129,7 +155,7 @@ describe('processInboundMessage — C4 idempotency', () => {
 
     await processInboundMessage(makeInbound('ext-1'), 'acc-1', 'user-1')
 
-    expect(mockRpcImpl).toHaveBeenCalledWith('insert_inbound_message', expect.anything())
+    expect(mockRpcImpl).toHaveBeenCalledWith('persist_inbound_message_with_turn', expect.anything())
     expect(mockDispatchFlows).toHaveBeenCalledTimes(1)
     expect(mockRunAutomations).toHaveBeenCalled()
     expect(
@@ -203,7 +229,7 @@ describe('processInboundMessage — C4 idempotency', () => {
       { type: 'unknown' as const, from: '15559876543', messageId: 'ext-unk-1', timestamp: '1710000000000' },
       'acc-1', 'user-1',
     )
-    expect(mockRpcImpl.mock.calls.filter((c) => c[0] === 'insert_inbound_message')).toHaveLength(1)
+    expect(mockRpcImpl.mock.calls.filter((c) => c[0] === 'persist_inbound_message_with_turn')).toHaveLength(1)
 
     mockRpcImpl.mockClear()
     await processInboundMessage(
