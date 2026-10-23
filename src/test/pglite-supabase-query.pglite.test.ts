@@ -96,11 +96,95 @@ describe('pgliteSupabaseWithQuery', () => {
     expect((r.error as PgliteQueryError).code).toBe('23503')
   })
 
+  describe('to-one embedded resources', () => {
+    let messageId: string
+
+    beforeAll(async () => {
+      messageId = (
+        await db.query<{ id: string }>(
+          `INSERT INTO messages (conversation_id, sender_type, content_type, content_text, message_id, status)
+           VALUES ($1, 'customer', 'text', 'x', 'wamid.embed', 'delivered') RETURNING id`,
+          [world.convA],
+        )
+      ).rows[0]!.id
+    })
+
+    // The exact shape the Meta webhook uses to resolve a message inside a tenant.
+    const lookup = (account: string) =>
+      client
+        .from('messages')
+        .select('id, conversations!inner(account_id)')
+        .eq('message_id', 'wamid.embed')
+        .eq('sender_type', 'customer')
+        .eq('conversations.account_id', account)
+        .maybeSingle()
+
+    it('!inner joins through the foreign key, nests the embedded columns and filters on them', async () => {
+      expect(await lookup(world.accountA)).toEqual({
+        data: { id: messageId, conversations: { account_id: world.accountA } },
+        error: null,
+      })
+    })
+
+    it('!inner drops the row when the embedded filter does not match (another tenant)', async () => {
+      expect(await lookup(world.accountB)).toEqual({ data: null, error: null })
+    })
+
+    it('count/head applies the join and its filter', async () => {
+      const count = await client
+        .from('messages')
+        .select('id, conversations!inner(account_id)', { count: 'exact', head: true })
+        .eq('conversations.account_id', world.accountA)
+      expect(count.error).toBeNull()
+      expect(count.count).toBeGreaterThanOrEqual(1)
+    })
+
+    it('ordering and in() work on the base table when a join is present', async () => {
+      const r = await client
+        .from('messages')
+        .select('id, conversations!inner(account_id)')
+        .in('id', [messageId])
+        .order('created_at', { ascending: false })
+        .limit(1)
+      expect(r.error).toBeNull()
+      expect(r.data).toHaveLength(1)
+    })
+
+    it('the same shape on the broadcast tables resolves (no longer unsupported)', async () => {
+      const r = await client
+        .from('broadcast_recipients')
+        .select('id, status, broadcast_id, broadcasts!inner(account_id)')
+        .eq('contact_id', contactId)
+        .eq('broadcasts.account_id', world.accountA)
+        .in('status', ['sent', 'delivered', 'read'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+      expect(r).toMatchObject({ data: [], error: null })
+    })
+
+    it('an inner embed resolves through its own foreign key (contacts -> accounts)', async () => {
+      const r = await client.from('contacts').select('id, accounts!inner(id)').eq('id', contactId).single()
+      expect(r).toMatchObject({ data: { id: contactId, accounts: { id: world.accountA } }, error: null })
+    })
+  })
+
   it('unmodelled constructs are explicit errors, never silent', async () => {
-    const embedded = await client.from('broadcast_recipients').select('id, broadcasts!inner(account_id)')
-    expect((embedded.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const unknownRel = await client.from('messages').select('id, no_such_table!inner(x)')
+    expect((unknownRel.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const noForeignKey = await client.from('accounts').select('id, contacts_x(id)')
+    expect((noForeignKey.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const leftEmbed = await client.from('messages').select('id, conversations(account_id)')
+    expect((leftEmbed.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const starEmbed = await client.from('messages').select('id, conversations!inner(*)')
+    expect((starEmbed.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const toMany = await client.from('conversations').select('id, messages!inner(id)')
+    expect((toMany.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
     const dotted = await client.from('messages').select('id').eq('conversations.account_id', world.accountA)
     expect((dotted.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const alias = await client.from('messages').select('id, total:count(*)')
+    expect((alias.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
+    const nested = await client.from('messages').select('id, conversations!inner(id, contacts!inner(id))')
+    expect((nested.error as PgliteQueryError).code).toBe('TEST_UNSUPPORTED')
   })
 
   it('rpc is the real function (H0)', async () => {

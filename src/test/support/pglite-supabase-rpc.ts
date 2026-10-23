@@ -17,6 +17,15 @@ import { pgliteSupabase } from '@/test/support/pglite-supabase-adapter'
  * Nothing here talks to a remote database.
  */
 
+/**
+ * What the test clients need from a database connection. PGlite satisfies it;
+ * so does a `pg` client/pool (cast at the call site), which lets the same clients
+ * run against a disposable local PostgreSQL server.
+ */
+export interface SqlRunner {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>
+}
+
 export interface PgliteRpcError {
   message: string
   code?: string
@@ -64,8 +73,8 @@ function bind(value: unknown, type: string): unknown {
   return value
 }
 
-export function pgliteSupabaseWithRpc(db: PGlite): SupabaseClient {
-  const base = pgliteSupabase(db) as unknown as Record<string, unknown>
+export function pgliteSupabaseWithRpc(db: SqlRunner): SupabaseClient {
+  const base = pgliteSupabase(db as unknown as PGlite) as unknown as Record<string, unknown>
   const metaCache = new Map<string, FunctionMeta[]>()
 
   async function metaFor(name: string): Promise<FunctionMeta[]> {
