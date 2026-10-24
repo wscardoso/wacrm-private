@@ -23,6 +23,7 @@ import { PlusIcon, TriangleAlert } from "lucide-react";
 
 import { createWorkspaceAction } from "@/app/act/actions";
 import type { CreateWorkspaceError } from "@/lib/workspaces/create-workspace";
+import { workspaceErrorKey } from "@/lib/workspaces/error-i18n";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,14 @@ import { Label } from "@/components/ui/label";
 export function CreateWorkspaceDialog() {
   const router = useRouter();
   const t = useTranslations("act.create_workspace_conflict");
+  const td = useTranslations("act.create_workspace");
+  const te = useTranslations("act.workspace_errors");
+
+  /** Localized message for a server error, falling back to the server text. */
+  function localize(message: string): string {
+    const key = workspaceErrorKey(message);
+    return key ? te(key) : message;
+  }
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [cnpj, setCnpj] = React.useState("");
@@ -74,11 +83,11 @@ export function CreateWorkspaceDialog() {
     // UX-only guards; the authoritative validation lives server-side.
     // We still show a friendly message without a round trip.
     if (name.trim() === "") {
-      setError("Workspace name is required.");
+      setError(td("name_required"));
       return;
     }
     if (ownerEmail.trim() === "") {
-      setError("Owner email is required.");
+      setError(td("owner_email_required"));
       return;
     }
 
@@ -101,7 +110,7 @@ export function CreateWorkspaceDialog() {
       }
 
       // Preserve typed values; surface the safe, typed error message.
-      setError(result.error.message);
+      setError(localize(result.error.message));
       if (result.error.field === "cnpj" && result.error.conflictAccountId) {
         setConflict(result.error);
       }
@@ -121,16 +130,16 @@ export function CreateWorkspaceDialog() {
         render={
           <Button>
             <PlusIcon />
-            New Workspace
+            {td("trigger")}
           </Button>
         }
       />
       <DialogContent>
         <form onSubmit={handleSubmit} noValidate>
           <DialogHeader>
-            <DialogTitle>New Workspace</DialogTitle>
+            <DialogTitle>{td("title")}</DialogTitle>
             <DialogDescription>
-              Provision a new tenant workspace with its Owner.
+              {td("description")}
             </DialogDescription>
           </DialogHeader>
 
@@ -163,7 +172,7 @@ export function CreateWorkspaceDialog() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="workspace-name">
-                Workspace name<span aria-hidden="true"> *</span>
+                {td("field_name")}<span aria-hidden="true"> *</span>
               </Label>
               <Input
                 id="workspace-name"
@@ -180,7 +189,7 @@ export function CreateWorkspaceDialog() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="workspace-cnpj">CNPJ (optional)</Label>
+              <Label htmlFor="workspace-cnpj">{td("field_cnpj")}</Label>
               <Input
                 id="workspace-cnpj"
                 name="cnpj"
@@ -195,7 +204,7 @@ export function CreateWorkspaceDialog() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="workspace-email">
-                Owner e-mail <span aria-hidden="true">*</span>
+                {td("field_owner_email")} <span aria-hidden="true">*</span>
               </Label>
               <Input
                 id="workspace-email"
@@ -203,14 +212,14 @@ export function CreateWorkspaceDialog() {
                 type="email"
                 value={ownerEmail}
                 onChange={(e) => setOwnerEmail(e.target.value)}
-                placeholder="izabela@oralunic.com.br"
+                placeholder={td("owner_email_placeholder")}
                 disabled={pending}
                 aria-describedby={error ? errorId : undefined}
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="workspace-currency">Currency</Label>
+              <Label htmlFor="workspace-currency">{td("field_currency")}</Label>
               <Input
                 id="workspace-currency"
                 value="BRL"
@@ -228,10 +237,10 @@ export function CreateWorkspaceDialog() {
               onClick={() => handleOpenChange(false)}
               disabled={pending}
             >
-              Cancel
+              {td("cancel")}
             </Button>
             <Button type="submit" disabled={pending}>
-              {pending ? "Creating…" : "Create"}
+              {pending ? td("creating") : td("create")}
             </Button>
           </DialogFooter>
         </form>

@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslations } from 'next-intl';
 import { createClient } from '@/lib/supabase/client';
 import { usePlatformContext } from '@/hooks/use-platform-context';
 import { updateWorkspaceIdentityAction } from './actions';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertTriangle, CheckCircle2, Lock } from 'lucide-react';
+import { workspaceErrorKey } from '@/lib/workspaces/error-i18n';
 
 // Platform Settings — write surface for E5b. Tenant is taken exclusively
 // from the already-validated platform context (the /act layout already
@@ -35,8 +37,21 @@ interface IdentityRow {
 type FieldKey = 'name' | 'legal_name' | 'commercial_phone' | 'commercial_email' | 'cnpj';
 
 export default function PlatformSettingsPage() {
-  const { activeAccountId } = usePlatformContext();
+  const t = useTranslations('act.settings');
+  const tErr = useTranslations('act.workspace_errors');
+  const { activeAccountId, accessRole } = usePlatformContext();
   const supabase = createClient();
+  // The RPC (054) only lets an operator with access_role = 'admin' on THIS
+  // tenant change its identity. Viewer/agent operators used to get a form
+  // that always failed on save; they now get it read-only. This is a UX
+  // mirror of the server rule — the RPC remains the gate.
+  const canEdit = accessRole === 'admin';
+
+  /** Localized message for a server error, falling back to the server text. */
+  function localize(message: string): string {
+    const key = workspaceErrorKey(message);
+    return key ? tErr(key) : message;
+  }
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -62,7 +77,7 @@ export default function PlatformSettingsPage() {
       .eq('id', activeAccountId)
       .single();
     if (error || !data) {
-      setLoadError('Failed to load workspace identity.');
+      setLoadError('load_failed');
       setLoading(false);
       return;
     }
@@ -94,7 +109,7 @@ export default function PlatformSettingsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!activeAccountId) return;
+    if (!activeAccountId || !canEdit) return;
 
     const fields: Record<string, string | null> = {};
     for (const key of Object.keys(touched) as FieldKey[]) {
@@ -111,9 +126,10 @@ export default function PlatformSettingsPage() {
 
     setSaving(false);
     if (!result.success) {
-      setSaveError(result.error.message);
+      const message = localize(result.error.message);
+      setSaveError(message);
       if (result.error.field) {
-        setFieldErrors({ [result.error.field]: result.error.message });
+        setFieldErrors({ [result.error.field]: message });
       }
       return;
     }
@@ -128,7 +144,7 @@ export default function PlatformSettingsPage() {
     return (
       <div className="flex items-center justify-center gap-2 p-12 text-muted-foreground">
         <Loader2 className="size-5 animate-spin" />
-        <span>Loading workspace identity…</span>
+        <span>{t('loading')}</span>
       </div>
     );
   }
@@ -137,7 +153,7 @@ export default function PlatformSettingsPage() {
     return (
       <div className="flex flex-col items-center gap-2 p-12 text-center">
         <AlertTriangle className="size-8 text-destructive" />
-        <p className="text-sm text-destructive">{loadError ?? 'Workspace not found.'}</p>
+        <p className="text-sm text-destructive">{loadError ? t(loadError) : t('not_found')}</p>
       </div>
     );
   }
@@ -148,34 +164,41 @@ export default function PlatformSettingsPage() {
   return (
     <div className="mx-auto max-w-xl space-y-6 p-4">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Workspace settings</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Commercial identity for <code className="font-mono text-xs">{account.name}</code>.
-          Blank a field to clear it.
+          {t('subtitle', { name: account.name })} {canEdit && t('clear_hint')}
         </p>
       </div>
+
+      {!canEdit && (
+        <p className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          <Lock className="size-4 shrink-0" /> {t('read_only_notice')}
+        </p>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground" htmlFor="name">
-            Workspace name
+            {t('field_name')}
           </label>
           <Input
             id="name"
             value={fieldValue('name')}
             onChange={(e) => setField('name', e.target.value)}
+            disabled={!canEdit}
           />
           {fieldErrors.name && <p className="text-xs text-destructive">{fieldErrors.name}</p>}
         </div>
 
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground" htmlFor="legal_name">
-            Legal name (razão social)
+            {t('field_legal_name')}
           </label>
           <Input
             id="legal_name"
             value={fieldValue('legal_name')}
             onChange={(e) => setField('legal_name', e.target.value)}
+            disabled={!canEdit}
           />
           {fieldErrors.legal_name && (
             <p className="text-xs text-destructive">{fieldErrors.legal_name}</p>
@@ -184,12 +207,13 @@ export default function PlatformSettingsPage() {
 
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground" htmlFor="commercial_phone">
-            Commercial phone
+            {t('field_phone')}
           </label>
           <Input
             id="commercial_phone"
             value={fieldValue('commercial_phone')}
             onChange={(e) => setField('commercial_phone', e.target.value)}
+            disabled={!canEdit}
           />
           {fieldErrors.commercial_phone && (
             <p className="text-xs text-destructive">{fieldErrors.commercial_phone}</p>
@@ -198,12 +222,13 @@ export default function PlatformSettingsPage() {
 
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground" htmlFor="commercial_email">
-            Commercial email
+            {t('field_email')}
           </label>
           <Input
             id="commercial_email"
             value={fieldValue('commercial_email')}
             onChange={(e) => setField('commercial_email', e.target.value)}
+            disabled={!canEdit}
           />
           {fieldErrors.commercial_email && (
             <p className="text-xs text-destructive">{fieldErrors.commercial_email}</p>
@@ -212,12 +237,13 @@ export default function PlatformSettingsPage() {
 
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground" htmlFor="cnpj">
-            CNPJ
+            {t('field_cnpj')}
           </label>
           <Input
             id="cnpj"
             value={fieldValue('cnpj')}
             onChange={(e) => setField('cnpj', e.target.value)}
+            disabled={!canEdit}
           />
           {fieldErrors.cnpj && <p className="text-xs text-destructive">{fieldErrors.cnpj}</p>}
         </div>
@@ -227,17 +253,17 @@ export default function PlatformSettingsPage() {
         )}
         {saveSuccess && (
           <p className="flex items-center gap-1.5 text-sm text-emerald-600">
-            <CheckCircle2 className="size-4" /> Workspace identity updated.
+            <CheckCircle2 className="size-4" /> {t('saved')}
           </p>
         )}
 
-        <Button type="submit" disabled={saving || Object.keys(touched).length === 0}>
+        <Button type="submit" disabled={!canEdit || saving || Object.keys(touched).length === 0}>
           {saving ? (
             <>
-              <Loader2 className="size-4 animate-spin" /> Saving…
+              <Loader2 className="size-4 animate-spin" /> {t('saving')}
             </>
           ) : (
-            'Save changes'
+            t('save')
           )}
         </Button>
       </form>
