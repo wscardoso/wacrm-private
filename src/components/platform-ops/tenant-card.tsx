@@ -37,24 +37,36 @@ const STATUS_STYLES: Record<WhatsappTenantStatus, string> = {
 
 interface TenantCardProps {
   account: PlatformOperatorAccount;
-  metrics: TenantMetrics;
+  /** null while loading or when the metrics could not be loaded. */
+  metrics: TenantMetrics | null;
+  /** true when the load failed (distinguishes "unavailable" from "still loading"). */
+  unavailable?: boolean;
 }
 
-export function TenantCard({ account, metrics }: TenantCardProps) {
+const PLACEHOLDER = "—";
+
+export function TenantCard({ account, metrics, unavailable = false }: TenantCardProps) {
   const t = useTranslations("act.tenant_card");
   const { locale } = useLocale();
   const dateFnsLocale = locale === "pt-BR" ? ptBR : enUS;
 
-  const statusLabel =
-    metrics.whatsappStatus === "connected"
+  const statusLabel = !metrics
+    ? unavailable
+      ? t("whatsapp_unavailable")
+      : PLACEHOLDER
+    : metrics.whatsappStatus === "connected"
       ? t("whatsapp_connected")
       : metrics.whatsappStatus === "pending"
         ? t("whatsapp_pending")
         : t("whatsapp_unconfigured");
 
-  const lastMessage = metrics.lastMessageAt
-    ? formatDistanceToNow(new Date(metrics.lastMessageAt), { addSuffix: true, locale: dateFnsLocale })
-    : t("last_message_never");
+  const lastMessage = !metrics
+    ? PLACEHOLDER
+    : metrics.lastMessageAt
+      ? formatDistanceToNow(new Date(metrics.lastMessageAt), { addSuffix: true, locale: dateFnsLocale })
+      : t("last_message_never");
+
+  const value = (n: number | undefined) => (metrics ? String(n) : PLACEHOLDER);
 
   return (
     <Link
@@ -73,7 +85,7 @@ export function TenantCard({ account, metrics }: TenantCardProps) {
             </Badge>
           </div>
         </div>
-        <Badge variant="outline" className={STATUS_STYLES[metrics.whatsappStatus]}>
+        <Badge variant="outline" className={metrics ? STATUS_STYLES[metrics.whatsappStatus] : STATUS_STYLES.unconfigured}>
           {statusLabel}
         </Badge>
       </div>
@@ -81,15 +93,15 @@ export function TenantCard({ account, metrics }: TenantCardProps) {
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div>
           <p className="text-muted-foreground">{t("messages_today")}</p>
-          <p className="font-medium text-foreground">{metrics.messagesToday}</p>
+          <p className="font-medium text-foreground">{value(metrics?.messagesToday)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">{t("unread")}</p>
-          <p className="font-medium text-foreground">{metrics.unreadCount}</p>
+          <p className="font-medium text-foreground">{value(metrics?.unreadCount)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">{t("contacts")}</p>
-          <p className="font-medium text-foreground">{metrics.contactsCount}</p>
+          <p className="font-medium text-foreground">{value(metrics?.contactsCount)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">{t("last_message")}</p>

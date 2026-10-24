@@ -17,6 +17,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { format } from 'date-fns';
+import { useTranslations } from 'next-intl';
+import { useLocale } from '@/lib/i18n-provider';
 import {
   Loader2,
   AlertTriangle,
@@ -32,6 +34,11 @@ import {
   Megaphone,
 } from 'lucide-react';
 import { useResolvedMediaUrl } from '@/components/shared/account-media';
+
+// Locale-aware timestamp (pt-BR day-first; English keeps the previous format).
+function formatStamp(iso: string, locale: string): string {
+  return format(new Date(iso), locale === 'pt-BR' ? 'dd/MM/yyyy HH:mm' : 'MMM d, yyyy HH:mm');
+}
 
 // Platform read-only Contact DETAIL view (Option C: a platform-only component,
 // NOT a reuse of the member ContactDetailView). It renders a supervised
@@ -60,7 +67,7 @@ interface PlatformContactDetailViewProps {
 type DetailView =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string | null }
   | { kind: 'not_found' }
   | { kind: 'found'; data: ContactDetailData };
 
@@ -69,6 +76,7 @@ export function PlatformContactDetailView({
   onOpenChange,
   contactId,
 }: PlatformContactDetailViewProps) {
+  const t = useTranslations('act.contact_detail');
   const { activeAccountId } = usePlatformContext();
   const supabaseRef = useRef(createClient());
   const loaderRef = useRef(createContactDetailLoader());
@@ -102,19 +110,19 @@ export function PlatformContactDetailView({
         if (!active) return;
         setView({
           kind: 'error',
-          message: err instanceof Error ? err.message : 'Failed to load contact.',
+          message: err instanceof Error ? err.message : null,
         });
       });
 
     return () => {
       active = false;
     };
-  }, [open, contactId, activeAccountId]);
+    }, [open, contactId, activeAccountId]);
 
   const title =
     view.kind === 'found'
-      ? view.data.contact.name || view.data.contact.phone || 'Contact'
-      : 'Contact';
+      ? view.data.contact.name || view.data.contact.phone || t('title')
+      : t('title');
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -125,7 +133,7 @@ export function PlatformContactDetailView({
         <SheetHeader className="p-4 border-b border-border/50">
           <SheetTitle className="text-foreground">{title}</SheetTitle>
           <SheetDescription className="text-muted-foreground">
-            Read-only tenant view.
+            {t('read_only')}
           </SheetDescription>
         </SheetHeader>
 
@@ -136,15 +144,14 @@ export function PlatformContactDetailView({
         ) : view.kind === 'error' ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <AlertTriangle className="size-8 text-destructive" />
-            <p className="text-sm text-destructive">{view.message}</p>
+            <p className="text-sm text-destructive">{view.message ?? t('load_failed')}</p>
           </div>
         ) : view.kind === 'not_found' ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <SearchX className="size-8 text-muted-foreground" />
-            <p className="text-sm font-medium text-foreground">Contact not found</p>
+            <p className="text-sm font-medium text-foreground">{t('not_found_title')}</p>
             <p className="text-xs text-muted-foreground">
-              This contact does not exist in the current tenant, or is no longer
-              available.
+              {t('not_found_body')}
             </p>
           </div>
         ) : (
@@ -160,6 +167,8 @@ export function PlatformContactDetailView({
 // ------------------------------------------------------------
 
 function FoundDetail({ data }: { data: ContactDetailData }) {
+  const t = useTranslations('act.contact_detail');
+  const { locale } = useLocale();
   const { contact, tags, notes, customFields, customValues, deals, attribution } = data;
   // S2 (plans/001-private-media-buckets-s2.md): ad_media_url is
   // Meta-hosted ad creative today, never one of our buckets, but this
@@ -172,47 +181,47 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
     <Tabs defaultValue="details" className="flex min-h-0 flex-1 flex-col">
       <TabsList className="mx-4 mt-3 flex-wrap bg-muted/50">
         <TabsTrigger value="details" className="text-muted-foreground data-active:text-primary">
-          Details
+          {t('tab_details')}
         </TabsTrigger>
         <TabsTrigger value="tags" className="text-muted-foreground data-active:text-primary">
-          Tags
+          {t('tab_tags')}
         </TabsTrigger>
         <TabsTrigger value="notes" className="text-muted-foreground data-active:text-primary">
-          Notes
+          {t('tab_notes')}
         </TabsTrigger>
         <TabsTrigger value="custom" className="text-muted-foreground data-active:text-primary">
-          Custom Fields
+          {t('tab_custom')}
         </TabsTrigger>
         <TabsTrigger value="deals" className="text-muted-foreground data-active:text-primary">
-          Deals
+          {t('tab_deals')}
         </TabsTrigger>
         <TabsTrigger value="attribution" className="text-muted-foreground data-active:text-primary">
-          Attribution
+          {t('tab_attribution')}
         </TabsTrigger>
       </TabsList>
 
       <ScrollArea className="min-h-0 flex-1">
         {/* Details — plain, non-editable rows */}
         <TabsContent value="details" className="space-y-3 p-4">
-          <ReadRow icon={<User className="size-4" />} label="Name">
-            {contact.name || <Muted>Unnamed</Muted>}
+          <ReadRow icon={<User className="size-4" />} label={t('field_name')}>
+            {contact.name || <Muted>{t('unnamed')}</Muted>}
           </ReadRow>
-          <ReadRow icon={<Phone className="size-4" />} label="Phone">
+          <ReadRow icon={<Phone className="size-4" />} label={t('field_phone')}>
             <span className="font-mono text-xs">{contact.phone}</span>
           </ReadRow>
-          <ReadRow icon={<Mail className="size-4" />} label="Email">
+          <ReadRow icon={<Mail className="size-4" />} label={t('field_email')}>
             {contact.email || <Muted>—</Muted>}
           </ReadRow>
-          <ReadRow icon={<Building2 className="size-4" />} label="Company">
+          <ReadRow icon={<Building2 className="size-4" />} label={t('field_company')}>
             {contact.company || <Muted>—</Muted>}
           </ReadRow>
         </TabsContent>
 
         {/* Tags — view only */}
         <TabsContent value="tags" className="p-4">
-          <SectionLabel icon={<TagIcon className="size-3" />}>Tags</SectionLabel>
+          <SectionLabel icon={<TagIcon className="size-3" />}>{t('tab_tags')}</SectionLabel>
           {tags.length === 0 ? (
-            <EmptyState>No tags on this contact.</EmptyState>
+            <EmptyState>{t('empty_tags')}</EmptyState>
           ) : (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {tags.map((tag) => (
@@ -233,9 +242,9 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
 
         {/* Notes — view only (no textarea, no add, no delete) */}
         <TabsContent value="notes" className="p-4">
-          <SectionLabel icon={<StickyNote className="size-3" />}>Notes</SectionLabel>
+          <SectionLabel icon={<StickyNote className="size-3" />}>{t('tab_notes')}</SectionLabel>
           {notes.length === 0 ? (
-            <EmptyState>No notes on this contact.</EmptyState>
+            <EmptyState>{t('empty_notes')}</EmptyState>
           ) : (
             <div className="mt-2 space-y-2">
               {notes.map((note) => (
@@ -244,7 +253,7 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
                     {note.note_text}
                   </p>
                   <p className="mt-1 text-[10px] text-muted-foreground">
-                    {format(new Date(note.created_at), 'MMM d, yyyy HH:mm')}
+                    {formatStamp(note.created_at, locale)}
                   </p>
                 </div>
               ))}
@@ -254,9 +263,9 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
 
         {/* Custom Fields — view only */}
         <TabsContent value="custom" className="p-4">
-          <SectionLabel icon={<ListChecks className="size-3" />}>Custom Fields</SectionLabel>
+          <SectionLabel icon={<ListChecks className="size-3" />}>{t('tab_custom')}</SectionLabel>
           {customFields.length === 0 ? (
-            <EmptyState>No custom fields defined for this tenant.</EmptyState>
+            <EmptyState>{t('empty_custom')}</EmptyState>
           ) : (
             <div className="mt-2 space-y-2">
               {customFields.map((field) => (
@@ -275,9 +284,9 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
 
         {/* Deals — view only */}
         <TabsContent value="deals" className="p-4">
-          <SectionLabel icon={<DollarSign className="size-3" />}>Deals</SectionLabel>
+          <SectionLabel icon={<DollarSign className="size-3" />}>{t('tab_deals')}</SectionLabel>
           {deals.length === 0 ? (
-            <EmptyState>No deals linked to this contact.</EmptyState>
+            <EmptyState>{t('empty_deals')}</EmptyState>
           ) : (
             <div className="mt-2 space-y-2">
               {deals.map((deal) => (
@@ -308,15 +317,15 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
 
         {/* Attribution — shown only if present; absence is a NORMAL state */}
         <TabsContent value="attribution" className="p-4">
-          <SectionLabel icon={<Megaphone className="size-3" />}>Lead Origin</SectionLabel>
+          <SectionLabel icon={<Megaphone className="size-3" />}>{t('lead_origin')}</SectionLabel>
           {!attribution ? (
-            <EmptyState>No attribution recorded for this contact.</EmptyState>
+            <EmptyState>{t('empty_attribution')}</EmptyState>
           ) : (
             <div className="mt-2 overflow-hidden rounded-lg border border-border">
               {attribution.ad_media_url && (
                 <img
                   src={resolvedAdMediaUrl}
-                  alt={attribution.ad_headline ?? 'Ad creative'}
+                  alt={attribution.ad_headline ?? t('ad_creative')}
                   className="h-28 w-full object-cover"
                 />
               )}
@@ -339,7 +348,7 @@ function FoundDetail({ data }: { data: ContactDetailData }) {
                   </p>
                 )}
                 <p className="pt-1 text-[10px] text-muted-foreground">
-                  Captured {format(new Date(attribution.created_at), 'MMM d, yyyy HH:mm')}
+                  {t('captured', { when: formatStamp(attribution.created_at, locale) })}
                 </p>
               </div>
             </div>

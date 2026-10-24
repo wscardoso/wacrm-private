@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslations } from 'next-intl';
 import { createClient } from '@/lib/supabase/client';
 import { usePlatformContext } from '@/hooks/use-platform-context';
 import { type ContactWithTags } from '@/lib/contacts/queries';
@@ -60,6 +61,7 @@ import {
 // the previous tenant is discarded, and the first contact fetch after a
 // switch uses the reset (empty) filters so no stale-filter query is sent.
 export default function PlatformContactsPage() {
+  const t = useTranslations('act.contacts');
   const { activeAccountId } = usePlatformContext();
   const supabase = createClient();
 
@@ -93,12 +95,17 @@ export default function PlatformContactsPage() {
     if (!activeAccountId) return;
     setTagsLoading(true);
     setTagsError(null);
-    const tagsResult = await tagsLoader.current.load({
-      supabase,
-      accountId: activeAccountId,
-    });
-    if (tagsResult === null) return; // superseded (tenant switch / newer load)
-    setTags(tagsResult);
+    try {
+      const tagsResult = await tagsLoader.current.load({
+        supabase,
+        accountId: activeAccountId,
+      });
+      if (tagsResult === null) return; // superseded (tenant switch / newer load)
+      setTags(tagsResult);
+    } catch (err) {
+      console.error('[act contacts] tags load failed:', err);
+      setTagsError('load_failed');
+    }
     setTagsLoading(false);
   }, [supabase, activeAccountId]);
 
@@ -118,18 +125,24 @@ export default function PlatformContactsPage() {
       tagsLoader.current.reset();
     }
 
-    const result = await contactsLoader.current.load({
-      supabase,
-      accountId: activeAccountId,
-      search: effective.search,
-      selectedTagIds: effective.selectedTagIds,
-      page: effective.page,
-      pageSize: PAGE_SIZE,
-    });
-    if (result === null) return; // superseded by a newer contacts fetch
+    try {
+      const result = await contactsLoader.current.load({
+        supabase,
+        accountId: activeAccountId,
+        search: effective.search,
+        selectedTagIds: effective.selectedTagIds,
+        page: effective.page,
+        pageSize: PAGE_SIZE,
+      });
+      if (result === null) return; // superseded by a newer contacts fetch
 
-    setContacts(result.contacts);
-    setTotalCount(result.totalCount);
+      setContacts(result.contacts);
+      setTotalCount(result.totalCount);
+    } catch (err) {
+      // A failed load is shown as an error, never as an empty list.
+      console.error('[act contacts] contacts load failed:', err);
+      setError('load_failed');
+    }
     setLoading(false);
   }, [supabase, activeAccountId, search, selectedTagIds, page]);
 
@@ -190,12 +203,12 @@ export default function PlatformContactsPage() {
   const tagsMap = new Map(tags.map((t) => [t.id, t]));
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="mx-auto w-full max-w-screen-xl space-y-6 p-4">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Contacts</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Read-only tenant view.{' '}
-          {totalCount > 0 && `${totalCount} contact${totalCount === 1 ? '' : 's'}`}
+          {t('read_only')}{' '}
+          {totalCount > 0 && t('count', { count: totalCount })}
         </p>
       </div>
 
@@ -207,7 +220,7 @@ export default function PlatformContactsPage() {
             <Input
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Search name, phone or email"
+              placeholder={t('search_placeholder')}
               className="pl-8 bg-card border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -222,7 +235,7 @@ export default function PlatformContactsPage() {
               }
             >
               <Filter className="size-4" />
-              Filter by tags
+              {t('filter_by_tags')}
               {selectedTagIds.length > 0 && (
                 <span className="ml-1 inline-flex items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
                   {selectedTagIds.length}
@@ -232,28 +245,28 @@ export default function PlatformContactsPage() {
             <PopoverContent align="start" className="w-64 p-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-border">
                 <span className="text-sm font-medium text-popover-foreground">
-                  Filter by tags
+                  {t('filter_by_tags')}
                 </span>
                 {selectedTagIds.length > 0 && (
                   <button
                     onClick={clearTagFilters}
                     className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    Clear
+                    {t('clear')}
                   </button>
                 )}
               </div>
               {tagsError ? (
                 <p className="px-3 py-4 text-sm text-destructive text-center">
-                  {tagsError}
+                  {t('tags_load_failed')}
                 </p>
               ) : tagsLoading ? (
                 <p className="px-3 py-4 text-sm text-muted-foreground text-center">
-                  Loading tags…
+                  {t('tags_loading')}
                 </p>
               ) : allTags.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-muted-foreground text-center">
-                  No tags available
+                  {t('tags_empty')}
                 </p>
               ) : (
                 <div className="max-h-64 overflow-y-auto py-1">
@@ -265,7 +278,7 @@ export default function PlatformContactsPage() {
                       <Checkbox
                         checked={selectedTagIds.includes(tag.id)}
                         onCheckedChange={() => toggleTag(tag.id)}
-                        aria-label={`Filter by ${tag.name}`}
+                        aria-label={t('filter_by_tag', { name: tag.name })}
                       />
                       <span
                         className="size-2.5 shrink-0 rounded-full"
@@ -300,7 +313,7 @@ export default function PlatformContactsPage() {
                   {tag.name}
                   <button
                     onClick={() => toggleTag(id)}
-                    aria-label={`Remove ${tag.name} filter`}
+                    aria-label={t('remove_tag_filter', { name: tag.name })}
                     className="hover:opacity-70"
                   >
                     <X className="size-3" />
@@ -312,7 +325,7 @@ export default function PlatformContactsPage() {
               onClick={clearTagFilters}
               className="text-xs text-muted-foreground hover:text-foreground px-1"
             >
-              Clear
+              {t('clear')}
             </button>
           </div>
         )}
@@ -323,10 +336,10 @@ export default function PlatformContactsPage() {
         <Table>
           <TableHeader>
             <TableRow className="border-border hover:bg-transparent">
-              <TableHead className="text-muted-foreground">Name</TableHead>
-              <TableHead className="text-muted-foreground">Phone</TableHead>
-              <TableHead className="text-muted-foreground hidden md:table-cell">Email</TableHead>
-              <TableHead className="text-muted-foreground hidden md:table-cell">Tags</TableHead>
+              <TableHead className="text-muted-foreground">{t('col_name')}</TableHead>
+              <TableHead className="text-muted-foreground">{t('col_phone')}</TableHead>
+              <TableHead className="text-muted-foreground hidden md:table-cell">{t('col_email')}</TableHead>
+              <TableHead className="text-muted-foreground hidden md:table-cell">{t('col_tags')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -335,7 +348,7 @@ export default function PlatformContactsPage() {
                 <TableCell colSpan={4} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="size-6 animate-spin text-primary" />
-                    <p className="text-sm text-muted-foreground">Loading contacts…</p>
+                    <p className="text-sm text-muted-foreground">{t('loading')}</p>
                   </div>
                 </TableCell>
               </TableRow>
@@ -344,7 +357,7 @@ export default function PlatformContactsPage() {
                 <TableCell colSpan={4} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <AlertTriangle className="size-8 text-destructive" />
-                    <p className="text-sm text-destructive">{error}</p>
+                    <p className="text-sm text-destructive">{t('load_failed')}</p>
                   </div>
                 </TableCell>
               </TableRow>
@@ -355,8 +368,8 @@ export default function PlatformContactsPage() {
                     <Users className="size-8 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
                       {hasActiveFilters
-                        ? 'No contacts match your search or filters.'
-                        : 'No contacts in this tenant yet.'}
+                        ? t('empty_filtered')
+                        : t('empty')}
                     </p>
                   </div>
                 </TableCell>
@@ -370,7 +383,7 @@ export default function PlatformContactsPage() {
                 >
                   <TableCell className="text-foreground font-medium">
                     {contact.name || (
-                      <span className="text-muted-foreground italic">Unnamed</span>
+                      <span className="text-muted-foreground italic">{t('unnamed')}</span>
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">
@@ -415,8 +428,11 @@ export default function PlatformContactsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–
-            {Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount}
+            {t('showing', {
+              from: page * PAGE_SIZE + 1,
+              to: Math.min((page + 1) * PAGE_SIZE, totalCount),
+              total: totalCount,
+            })}
           </p>
           <div className="flex items-center gap-1">
             <Button
@@ -429,7 +445,7 @@ export default function PlatformContactsPage() {
               <ChevronLeft className="size-4" />
             </Button>
             <span className="text-xs text-muted-foreground px-2">
-              Page {page + 1} of {totalPages}
+              {t('page_of', { page: page + 1, pages: totalPages })}
             </span>
             <Button
               variant="outline"
