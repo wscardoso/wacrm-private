@@ -11,6 +11,7 @@ import {
   Inbox,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import type { ActivityItem, ActivityKind } from '@/lib/dashboard/types'
 import { cn } from '@/lib/utils'
 import { EmptyState, ErrorState } from './empty-state'
@@ -33,11 +34,13 @@ interface KindTheme {
 }
 
 const KIND_THEME: Record<ActivityKind, KindTheme> = {
-  message: { icon: MessageSquare, badge: 'bg-blue-500/10 text-blue-400' },
-  contact: { icon: UserPlus, badge: 'bg-primary/10 text-primary' },
-  deal: { icon: Briefcase, badge: 'bg-primary/10 text-primary' },
-  broadcast: { icon: Radio, badge: 'bg-amber-500/10 text-amber-400' },
-  automation: { icon: Zap, badge: 'bg-rose-500/10 text-rose-400' },
+  // Conversation-side events carry the accent; outbound machinery
+  // (broadcasts, automations) stays neutral so the feed reads calm.
+  message: { icon: MessageSquare, badge: 'bg-primary-soft text-primary' },
+  contact: { icon: UserPlus, badge: 'bg-primary-soft text-primary' },
+  deal: { icon: Briefcase, badge: 'bg-primary-soft text-primary' },
+  broadcast: { icon: Radio, badge: 'bg-muted text-muted-foreground' },
+  automation: { icon: Zap, badge: 'bg-muted text-muted-foreground' },
 }
 
 export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedProps) {
@@ -45,6 +48,8 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
   // dominating vertical real estate. User expands explicitly via the
   // footer control when they want deeper history.
   const [pageSize, setPageSize] = useState<PageSize>(5)
+  const t = useTranslations('dashboard')
+  const locale = useLocale()
 
   const totalLoaded = items?.length ?? 0
   const visible = items?.slice(0, pageSize) ?? []
@@ -56,14 +61,14 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
     i === 0 || totalLoaded > PAGE_SIZES[i - 1]
 
   return (
-    <section className="rounded-xl border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card shadow-xs">
       <header className="flex items-center justify-between border-b border-border px-5 py-4">
-        <h2 className="text-sm font-semibold text-foreground">Recent Activity</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t('recent_activity')}</h2>
         <Link
           href="/inbox"
-          className="text-xs font-medium text-primary hover:text-primary/80"
+          className="rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary-soft"
         >
-          View all →
+          {t('view_all')} →
         </Link>
       </header>
 
@@ -81,22 +86,18 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
         <div className="p-5">
           <EmptyState
             icon={Inbox}
-            title="No activity yet"
-            hint="Activity from messages, deals, broadcasts, and automations will appear here."
+            title={t('no_activity')}
+            hint={t('no_activity_hint')}
           />
         </div>
       ) : (
         <>
           <ul className="divide-y divide-border">
-            {visible.map((it, i) => {
+            {visible.map((it) => {
               const theme = KIND_THEME[it.kind]
               const Icon = theme.icon
-              // Alternating row background for scanability. bg-muted/40
-              // keeps the stripe visible in both light and dark modes
-              // (bg-card/40 vanishes against a white card surface in light).
-              const stripe = i % 2 === 0 ? 'bg-transparent' : 'bg-muted/40'
               const row = (
-                <div className="flex items-center gap-3 px-5 py-2.5">
+                <div className="flex items-center gap-3 px-5 py-3">
                   <span
                     className={cn(
                       'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full',
@@ -106,15 +107,15 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
                     <Icon className="h-3.5 w-3.5" />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                    {it.text}
+                    {activityText(it, t)}
                   </span>
                   <span className="flex-shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {relativeTime(it.at)}
+                    {relativeTime(it.at, locale)}
                   </span>
                 </div>
               )
               return (
-                <li key={it.id} className={cn(stripe, 'transition-colors hover:bg-muted/40')}>
+                <li key={it.id} className="transition-colors hover:bg-muted/40">
                   {it.href ? (
                     <Link href={it.href} className="block">
                       {row}
@@ -128,11 +129,13 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
           </ul>
           <footer className="flex items-center justify-between border-t border-border px-5 py-3 text-xs">
             <span className="text-muted-foreground tabular-nums">
-              Showing {visible.length} of {totalLoaded}
-              {totalLoaded === 50 ? '+' : ''}
+              {t('showing', {
+                shown: visible.length,
+                total: `${totalLoaded}${totalLoaded === 50 ? '+' : ''}`,
+              })}
             </span>
             <div className="flex items-center gap-1">
-              <span className="mr-1 text-muted-foreground">Show</span>
+              <span className="mr-1 text-muted-foreground">{t('show')}</span>
               {PAGE_SIZES.map((size, i) => {
                 const disabled = !isSizeUseful(size, i)
                 return (
@@ -144,7 +147,7 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
                     className={cn(
                       'rounded-md px-2 py-1 font-medium tabular-nums transition-colors',
                       pageSize === size
-                        ? 'bg-secondary text-secondary-foreground'
+                        ? 'bg-primary-soft text-primary'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                       disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
                     )}
@@ -161,13 +164,34 @@ export function ActivityFeed({ items, loading, error, onRetry }: ActivityFeedPro
   )
 }
 
-function relativeTime(iso: string): string {
+type DashboardT = ReturnType<typeof useTranslations<'dashboard'>>
+
+/** Localized feed line. Items carry a message key + values; values
+ *  shaped `{ tKey }` are themselves translated (fallback labels,
+ *  broadcast status). Unknown status keys fall back to the raw value
+ *  rather than surfacing a missing-key string. */
+function activityText(it: ActivityItem, t: DashboardT): string {
+  if (!it.message) return it.text
+  const values: Record<string, string | number> = {}
+  for (const [k, v] of Object.entries(it.message.values)) {
+    values[k] =
+      typeof v === 'object'
+        ? t.has(v.tKey)
+          ? t(v.tKey)
+          : v.tKey.replace(/^broadcast_status_/, '')
+        : v
+  }
+  return t.has(it.message.key) ? t(it.message.key, values) : it.text
+}
+
+function relativeTime(iso: string, locale: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
   const diffSec = Math.round((Date.now() - then) / 1000)
-  if (diffSec < 60) return `${Math.max(1, diffSec)}s ago`
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
-  if (diffSec < 2_592_000) return `${Math.floor(diffSec / 86400)}d ago`
-  return new Date(iso).toLocaleDateString()
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'short' })
+  if (diffSec < 60) return rtf.format(-Math.max(1, diffSec), 'second')
+  if (diffSec < 3600) return rtf.format(-Math.floor(diffSec / 60), 'minute')
+  if (diffSec < 86400) return rtf.format(-Math.floor(diffSec / 3600), 'hour')
+  if (diffSec < 2_592_000) return rtf.format(-Math.floor(diffSec / 86400), 'day')
+  return new Date(iso).toLocaleDateString(locale)
 }

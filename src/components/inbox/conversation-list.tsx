@@ -6,6 +6,9 @@ import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus } from "@/types";
 import { Search, ChevronDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { enUS, ptBR } from "date-fns/locale";
+import { useLocale, useTranslations } from "next-intl";
+import { contactDisplayName } from "@/lib/contacts/display-name";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -37,20 +40,51 @@ interface ConversationListProps {
   resyncToken?: number;
 }
 
+// Status dots. "open" uses the data teal (--chart-1) rather than the
+// accent, so it stays distinct from the gold "pending" dot and from the
+// gold selection outline under the Force theme.
 const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-primary",
+  open: "bg-chart-1",
   pending: "bg-amber-500",
   closed: "bg-muted-foreground",
 };
 
+/** Map persisted bracket placeholders (`[image]`, `[unknown]`, …) to
+ *  inbox preview keys. Display-only — does not change last_message_text. */
+const LAST_MESSAGE_PLACEHOLDER_KEYS: Record<string, string> = {
+  image: "preview_image",
+  video: "preview_video",
+  audio: "preview_audio",
+  document: "preview_document",
+  location: "preview_location",
+  template: "preview_template",
+  message: "preview_message",
+  unknown: "preview_unknown",
+  interactive: "preview_interactive",
+  reaction: "preview_reaction",
+  sticker: "preview_sticker",
+};
+
+function formatLastMessagePreview(
+  text: string | null | undefined,
+  t: (key: string) => string,
+): string {
+  if (!text) return t("no_messages_yet");
+  const match = /^\[([a-z0-9_]+)\]$/i.exec(text.trim());
+  if (!match) return text;
+  const key = LAST_MESSAGE_PLACEHOLDER_KEYS[match[1].toLowerCase()];
+  return key ? t(key) : text;
+}
+
 type InboxFilter = ConversationStatus | "all" | "unread";
 
-const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
-  { label: "All", value: "all" },
-  { label: "Unread", value: "unread" },
-  { label: "Open", value: "open" },
-  { label: "Pending", value: "pending" },
-  { label: "Closed", value: "closed" },
+// labelKey → `inbox.*` message; `value` is the internal filter id.
+const FILTER_OPTIONS: { labelKey: string; value: InboxFilter }[] = [
+  { labelKey: "filter_all", value: "all" },
+  { labelKey: "filter_unread", value: "unread" },
+  { labelKey: "filter_open", value: "open" },
+  { labelKey: "filter_pending", value: "pending" },
+  { labelKey: "filter_closed", value: "closed" },
 ];
 
 export function ConversationList({
@@ -172,6 +206,8 @@ export function ConversationList({
   );
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const t = useTranslations("inbox");
+  const tc = useTranslations("common");
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
@@ -185,14 +221,14 @@ export function ConversationList({
           <Input
             value={search}
             onChange={handleSearchChange}
-            placeholder="Search conversations..."
+            placeholder={t("search_placeholder")}
             className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
           />
         </div>
 
         <DropdownMenu>
           <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-              {activeFilter?.label ?? "All"}
+              {t(activeFilter?.labelKey ?? "filter_all")}
               <ChevronDown className="h-3 w-3" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -210,7 +246,7 @@ export function ConversationList({
                     : "text-popover-foreground"
                 )}
               >
-                {opt.label}
+                {t(opt.labelKey)}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -230,7 +266,7 @@ export function ConversationList({
           </div>
         ) : fetchError ? (
           <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">Couldn&apos;t load conversations</p>
+            <p className="text-sm text-muted-foreground">{t("load_conversations_error")}</p>
             <button
               type="button"
               onClick={() => {
@@ -239,15 +275,15 @@ export function ConversationList({
               }}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             >
-              Try again
+              {tc("try_again")}
             </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">No conversations found</p>
+            <p className="text-sm text-muted-foreground">{t("no_conversations_found")}</p>
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div className="flex flex-col gap-0.5 p-1.5">
             {filtered.map((conv) => (
               <ConversationItem
                 key={conv.id}
@@ -274,8 +310,11 @@ function ConversationItem({
   isActive,
   onSelect,
 }: ConversationItemProps) {
+  const t = useTranslations("inbox");
+  const locale = useLocale();
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || "Unknown";
+  const displayName =
+    contactDisplayName(contact?.name, contact?.phone) ?? t("unknown_contact");
   const initials = displayName.charAt(0).toUpperCase();
 
   const handleClick = useCallback(() => {
@@ -285,15 +324,22 @@ function ConversationItem({
   const timeAgo = conversation.last_message_at
     ? formatDistanceToNow(new Date(conversation.last_message_at), {
         addSuffix: false,
+        locale: locale === "pt-BR" ? ptBR : enUS,
       })
     : "";
 
   return (
     <button
       onClick={handleClick}
+      aria-current={isActive ? "true" : undefined}
       className={cn(
-        "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50",
-        isActive && "border-l-2 border-primary bg-muted/70"
+        // Every row reserves a 1px border so selecting one doesn't shift
+        // the layout. Selected = thin gold outline + faint gold wash;
+        // hover = neutral wash only, so the two states never read alike.
+        "flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        isActive
+          ? "border-highlight-strong bg-highlight/[0.07]"
+          : "border-transparent hover:bg-muted/60"
       )}
     >
       {/* Avatar */}
@@ -319,7 +365,7 @@ function ConversationItem({
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <p className="truncate text-xs text-muted-foreground">
-            {conversation.last_message_text || "No messages yet"}
+            {formatLastMessagePreview(conversation.last_message_text, t)}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.unread_count > 0 && (
@@ -332,7 +378,7 @@ function ConversationItem({
                 "h-2 w-2 rounded-full",
                 STATUS_COLORS[conversation.status]
               )}
-              title={conversation.status}
+              title={t(`status_${conversation.status}`)}
             />
           </div>
         </div>

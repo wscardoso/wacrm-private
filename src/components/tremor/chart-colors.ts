@@ -68,6 +68,14 @@ export const chartColors = {
     fill: "fill-fuchsia-500",
     text: "text-fuchsia-500",
   },
+  // Local addition: follows the active theme's --chart-1 (the accent),
+  // so charts re-color with the theme picker instead of staying violet.
+  primary: {
+    bg: "bg-chart-1",
+    stroke: "stroke-chart-1",
+    fill: "fill-chart-1",
+    text: "text-chart-1",
+  },
 } as const satisfies {
   [color: string]: {
     [key in ColorUtility]: string

@@ -58,8 +58,16 @@ export type ActivityKind =
 export interface ActivityItem {
   id: string
   kind: ActivityKind
-  /** Primary line of text rendered in the feed. Pre-formatted. */
+  /** Primary line of text, pre-formatted in English. Kept as the
+   *  fallback; the feed prefers `message` so it can localize. */
   text: string
+  /** Localizable form of `text`: a `dashboard.*` message key plus its
+   *  ICU values. Values that are themselves translatable (fallback
+   *  contact labels, broadcast status) are passed as `{ tKey }`. */
+  message?: {
+    key: string
+    values: Record<string, string | number | { tKey: string }>
+  }
   /** ISO timestamp the item happened at, drives relative-time + sort. */
   at: string
   /** Optional deep-link for the whole row (not all items have a target). */

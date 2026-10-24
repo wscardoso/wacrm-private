@@ -1,7 +1,7 @@
 "use client"
 
 import { Clock } from 'lucide-react'
-import { DOW_SHORT_MON_FIRST } from '@/lib/dashboard/date-utils'
+import { useLocale, useTranslations } from 'next-intl'
 import type { ResponseTimeSummary } from '@/lib/dashboard/types'
 import { BarChart } from '@/components/tremor/bar-chart'
 import { EmptyState, ErrorState } from './empty-state'
@@ -24,8 +24,14 @@ interface ResponseTimeChartProps {
 // Single category, single colour — the data is "average minutes
 // per weekday". Tremor expects categories as the second tuple in
 // the row object, so we shape the buckets into
-// `{ day: 'Mon', 'Avg minutes': 4.2 }` rows below.
-const CATEGORY = 'Avg minutes'
+// `{ day: 'seg', 'Média (min)': 4.2 }` rows below. The category name
+// doubles as the tooltip label, so it comes from the translations.
+
+// 2024-01-01 was a Monday — a fixed anchor for locale weekday names in
+// the buckets' Monday-first order.
+function weekdayLabel(index: number, locale: string): string {
+  return new Date(2024, 0, 1 + index).toLocaleDateString(locale, { weekday: 'short' })
+}
 
 export function ResponseTimeChart({
   data,
@@ -34,6 +40,9 @@ export function ResponseTimeChart({
   error,
   onRetry,
 }: ResponseTimeChartProps) {
+  const t = useTranslations('dashboard')
+  const locale = useLocale()
+  const CATEGORY = t('response_avg_minutes')
   const hasData = data?.buckets.some((b) => b.avgMinutes != null) ?? false
 
   // Map buckets → Tremor rows. Null `avgMinutes` (no samples)
@@ -42,39 +51,38 @@ export function ResponseTimeChart({
   // surface "no samples" copy without losing the data shape.
   const chartData =
     data?.buckets.map((b, i) => ({
-      day: DOW_SHORT_MON_FIRST[i],
+      day: weekdayLabel(i, locale),
       [CATEGORY]: b.avgMinutes ?? 0,
       samples: b.samples,
     })) ?? []
 
   return (
-    <section className="rounded-xl border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card shadow-xs">
       <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h2 className="text-sm font-semibold text-foreground">
-            Average First Response Time
+            {t('response_title')}
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Minutes to reply to a customer&apos;s first unreplied message, by
-            weekday
+            {t('response_desc')}
           </p>
         </div>
         <div className="flex items-center gap-3 text-right text-xs">
           {thresholdMinutes > 0 && (
-            <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-300 tabular-nums">
-              target {thresholdMinutes}m
+            <span className="rounded-full border border-highlight/50 bg-highlight/15 px-2 py-0.5 font-medium text-foreground tabular-nums">
+              {t('response_target', { minutes: thresholdMinutes })}
             </span>
           )}
           {data && (data.thisWeekAvg != null || data.lastWeekAvg != null) && (
             <div>
               <div className="text-muted-foreground">
-                This week:{' '}
+                {t('this_week')}{' '}
                 <span className="font-medium text-foreground tabular-nums">
                   {fmt(data.thisWeekAvg)}
                 </span>
               </div>
               <div className="text-muted-foreground">
-                Last week:{' '}
+                {t('last_week')}{' '}
                 <span className="tabular-nums">{fmt(data.lastWeekAvg)}</span>
               </div>
             </div>
@@ -90,17 +98,17 @@ export function ResponseTimeChart({
         ) : !hasData ? (
           <EmptyState
             icon={Clock}
-            title="No replies recorded yet"
-            hint="This chart fills in as you reply to customer messages."
+            title={t('no_replies')}
+            hint={t('no_replies_hint')}
           />
         ) : (
           <BarChart
             data={chartData}
             index="day"
             categories={[CATEGORY]}
-            // 'violet' maps to Tailwind's `fill-violet-500` — matches
-            // the brand accent the hand-rolled bars used (#7c3aed).
-            colors={['violet']}
+            // 'primary' maps to `fill-chart-1` — the active theme's
+            // accent, so the bars follow the theme picker.
+            colors={['primary']}
             valueFormatter={(value) => `${value.toFixed(1)}m`}
             showLegend={false}
             yAxisWidth={48}

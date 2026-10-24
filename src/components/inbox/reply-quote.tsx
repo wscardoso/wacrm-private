@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
 
@@ -26,6 +27,7 @@ export function ReplyQuote({
   onDismiss,
   onPrimary = false,
 }: ReplyQuoteProps) {
+  const cancelLabel = useTranslations("inbox")("cancel_reply");
   const isChip = !!onDismiss;
   return (
     <div
@@ -63,7 +65,7 @@ export function ReplyQuote({
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="Cancel reply"
+          aria-label={cancelLabel}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
@@ -74,22 +76,37 @@ export function ReplyQuote({
 }
 
 /** Build the one-line preview text shown inside a reply quote. */
-export function buildReplyPreview(message: Message): string {
+export type ReplyPreviewLabels = Record<
+  "image" | "video" | "audio" | "document" | "location" | "template" | "message",
+  string
+>;
+
+const DEFAULT_PREVIEW_LABELS: ReplyPreviewLabels = {
+  image: "[Image]",
+  video: "[Video]",
+  audio: "[Audio]",
+  document: "[Document]",
+  location: "[Location]",
+  template: "[Template]",
+  message: "[Message]",
+};
+
+/** Quote text for a message. `labels` localizes the placeholders used
+ *  for media-only messages; it defaults to the English ones. */
+export function buildReplyPreview(
+  message: Message,
+  labels: ReplyPreviewLabels = DEFAULT_PREVIEW_LABELS,
+): string {
   if (message.content_text) return message.content_text;
   switch (message.content_type) {
     case "image":
-      return "[Image]";
     case "video":
-      return "[Video]";
     case "audio":
-      return "[Audio]";
     case "document":
-      return "[Document]";
     case "location":
-      return "[Location]";
     case "template":
-      return "[Template]";
+      return labels[message.content_type];
     default:
-      return "[Message]";
+      return labels.message;
   }
 }
