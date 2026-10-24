@@ -1,6 +1,7 @@
 "use client"
 
 import { GitBranch } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import type { PipelineDonutData } from '@/lib/dashboard/types'
 import { formatCurrencyShort } from '@/lib/currency'
 import { EmptyState, ErrorState } from './empty-state'
@@ -16,12 +17,13 @@ interface PipelineDonutProps {
 }
 
 export function PipelineDonut({ data, loading, currency, error, onRetry }: PipelineDonutProps) {
+  const t = useTranslations('dashboard')
   return (
-    <section className="flex h-full flex-col rounded-xl border border-border bg-card">
+    <section className="flex h-full flex-col rounded-xl border border-border bg-card shadow-xs">
       <header className="border-b border-border px-5 py-4">
-        <h2 className="text-sm font-semibold text-foreground">Pipeline Value</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t('pipeline_title')}</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Open deals by stage
+          {t('pipeline_desc')}
         </p>
       </header>
 
@@ -33,13 +35,13 @@ export function PipelineDonut({ data, loading, currency, error, onRetry }: Pipel
         ) : data.stages.length === 0 ? (
           <EmptyState
             icon={GitBranch}
-            title="No open deals yet"
-            hint="Create deals in Pipelines to see stage breakdowns here."
+            title={t('no_open_deals')}
+            hint={t('no_open_deals_hint')}
           />
         ) : (
           <>
             <Donut data={data} currency={currency} />
-            <ul className="mt-5 space-y-2">
+            <ul className="mt-5 space-y-2.5 border-t border-border pt-4">
               {data.stages.map((s) => (
                 <li key={s.id} className="flex items-center gap-3 text-xs">
                   <span
@@ -47,11 +49,11 @@ export function PipelineDonut({ data, loading, currency, error, onRetry }: Pipel
                     style={{ background: s.color }}
                     aria-hidden
                   />
-                  <span className="flex-1 truncate text-muted-foreground">{s.name}</span>
+                  <span className="flex-1 truncate text-foreground">{s.name}</span>
                   <span className="text-muted-foreground tabular-nums">
-                    {s.dealCount} deal{s.dealCount === 1 ? '' : 's'}
+                    {t('deals_count', { count: s.dealCount })}
                   </span>
-                  <span className="w-20 text-right text-muted-foreground tabular-nums">
+                  <span className="w-20 text-right font-medium text-foreground tabular-nums">
                     {formatCurrencyShort(s.totalValue, currency)}
                   </span>
                 </li>
@@ -71,6 +73,7 @@ export function PipelineDonut({ data, loading, currency, error, onRetry }: Pipel
 // them for a cleaner look.
 // ------------------------------------------------------------
 function Donut({ data, currency }: { data: PipelineDonutData; currency: string }) {
+  const t = useTranslations('dashboard')
   const size = 200
   const r = 80
   const ringWidth = 18
@@ -100,7 +103,7 @@ function Donut({ data, currency }: { data: PipelineDonutData; currency: string }
 
   return (
     <div className="flex items-center justify-center">
-      <svg viewBox={`0 0 ${size} ${size}`} className="h-48 w-48" role="img" aria-label="Pipeline value by stage">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-48 w-48" role="img" aria-label={t('pipeline_aria')}>
         {/* background ring */}
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--muted)" strokeWidth={ringWidth} />
         {segments.map((seg) => (
@@ -118,15 +121,15 @@ function Donut({ data, currency }: { data: PipelineDonutData; currency: string }
           x={cx}
           y={cy - 6}
           textAnchor="middle"
-          className="fill-muted-foreground text-[11px]"
+          className="fill-muted-foreground text-[10px] font-semibold uppercase tracking-[0.14em]"
         >
-          Total
+          {t('total')}
         </text>
         <text
           x={cx}
           y={cy + 14}
           textAnchor="middle"
-          className="fill-foreground text-[18px] font-semibold tabular-nums"
+          className="fill-foreground text-[20px] font-semibold tracking-tight tabular-nums"
         >
           {formatCurrencyShort(data.totalValue, currency)}
         </text>

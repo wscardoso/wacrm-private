@@ -95,7 +95,9 @@ describe('inbound turn ordering, conversation effect and DLQ (092-094)', () => {
 
     it('messages with the same message time run in arrival order', async () => {
       const x = await persist(A, ext(), 5)
+      await new Promise((r) => setTimeout(r, 5))
       const y = await persist(A, ext(), 5)
+      await new Promise((r) => setTimeout(r, 5))
       const z = await persist(A, ext(), 5)
       expect(await runAll()).toEqual([x, y, z])
     })

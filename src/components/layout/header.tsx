@@ -27,6 +27,7 @@ function getPageTitle(pathname: string, t: (key: string) => string): string {
     "/pipelines": t("nav_pipelines"),
     "/broadcasts": t("nav_broadcasts"),
     "/automations": t("nav_automations"),
+    "/flows": t("nav_flows"),
     "/settings": t("nav_settings"),
   };
   if (titles[pathname]) return titles[pathname];

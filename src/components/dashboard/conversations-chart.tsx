@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import type { ConversationsSeriesPoint } from '@/lib/dashboard/types'
 import { EmptyState, ErrorState } from './empty-state'
 import { Skeleton } from './skeleton'
@@ -33,6 +34,12 @@ const VB_W = 760
 const VB_H = 240
 const PADDING = { top: 16, right: 16, bottom: 28, left: 40 }
 
+// Series colors follow the theme's chart tokens: outgoing is the
+// accent (--chart-1), incoming the secondary series (--chart-2) —
+// teal and gold under the Force theme.
+const INCOMING = 'var(--chart-2)'
+const OUTGOING = 'var(--chart-1)'
+
 export function ConversationsChart({
   series,
   errors,
@@ -41,6 +48,7 @@ export function ConversationsChart({
   onRangeChange,
   onRetry,
 }: ConversationsChartProps) {
+  const t = useTranslations('dashboard')
   const data = series[range]
   const hasError = errors[range]
 
@@ -60,13 +68,13 @@ export function ConversationsChart({
   }, [data])
 
   return (
-    <section className="flex h-full flex-col rounded-xl border border-border bg-card">
+    <section className="flex h-full flex-col rounded-xl border border-border bg-card shadow-xs">
       <header className="flex items-center justify-between border-b border-border px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">Conversations Over Time</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">Daily message volume by direction</p>
+          <h2 className="text-sm font-semibold text-foreground">{t('conversations_title')}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('conversations_desc')}</p>
         </div>
-        <div className="flex items-center gap-1 rounded-lg bg-muted/60 p-1">
+        <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/50 p-0.5">
           {[7, 30, 90].map((r) => (
             <button
               key={r}
@@ -75,11 +83,11 @@ export function ConversationsChart({
               className={cn(
                 'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
                 range === r
-                  ? 'bg-secondary text-secondary-foreground'
+                  ? 'bg-card text-foreground shadow-xs'
                   : 'text-muted-foreground hover:text-foreground',
               )}
             >
-              {r} days
+              {t('range_days', { days: r })}
             </button>
           ))}
         </div>
@@ -93,8 +101,8 @@ export function ConversationsChart({
         ) : data.every((p) => p.incoming === 0 && p.outgoing === 0) ? (
           <EmptyState
             icon={MessageSquare}
-            title="No message activity in this range"
-            hint="Send or receive messages to start populating this chart."
+            title={t('no_message_activity')}
+            hint={t('no_message_activity_hint')}
           />
         ) : (
           <LineSvg data={data} maxY={maxY} ticks={niceTicks} />
@@ -102,8 +110,8 @@ export function ConversationsChart({
       </div>
 
       <footer className="flex items-center gap-4 border-t border-border px-5 py-3 text-xs text-muted-foreground">
-        <LegendDot color="#3b82f6" label="Incoming" />
-        <LegendDot color="#7c3aed" label="Outgoing" />
+        <LegendDot color={INCOMING} label={t('incoming')} />
+        <LegendDot color={OUTGOING} label={t('outgoing')} />
       </footer>
     </section>
   )
@@ -130,6 +138,9 @@ function LineSvg({
   const [hover, setHover] = useState<{ idx: number; tooltipLeftPx: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const gradientId = `outgoing-fill-${useId()}`
+  const t = useTranslations('dashboard')
+  const locale = useLocale()
 
   const chartW = VB_W - PADDING.left - PADDING.right
   const chartH = VB_H - PADDING.top - PADDING.bottom
@@ -144,6 +155,9 @@ function LineSvg({
 
   const incomingPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xFor(i)},${yFor(p.incoming)}`).join(' ')
   const outgoingPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xFor(i)},${yFor(p.outgoing)}`).join(' ')
+  // Closed version of the outgoing line for the soft area fill.
+  const baseY = PADDING.top + chartH
+  const outgoingArea = `${outgoingPath} L${xFor(data.length - 1)},${baseY} L${xFor(0)},${baseY} Z`
 
   // Mouse-move: use the SVG's current screen-CTM to map clientX
   // back to viewBox coordinates. The previous rect-based math
@@ -211,8 +225,15 @@ function LineSvg({
         viewBox={`0 0 ${VB_W} ${VB_H}`}
         className="h-[240px] w-full"
         role="img"
-        aria-label="Conversations per day"
+        aria-label={t('conversations_aria')}
       >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={OUTGOING} stopOpacity={0.22} />
+            <stop offset="100%" stopColor={OUTGOING} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
         {/* Y-axis gridlines + labels */}
         {ticks.map((t) => {
           const y = yFor(t)
@@ -249,25 +270,26 @@ function LineSvg({
               textAnchor="middle"
               className="fill-muted-foreground text-[10px]"
             >
-              {shortDayLabel(p.day)}
+              {shortDayLabel(p.day, locale)}
             </text>
           ) : null,
         )}
 
-        {/* Outgoing polyline (violet) */}
+        {/* Outgoing area + polyline (accent) */}
+        <path d={outgoingArea} fill={`url(#${gradientId})`} stroke="none" />
         <path
           d={outgoingPath}
           fill="none"
-          stroke="#7c3aed"
+          stroke={OUTGOING}
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        {/* Incoming polyline (blue) */}
+        {/* Incoming polyline (secondary series) */}
         <path
           d={incomingPath}
           fill="none"
-          stroke="#3b82f6"
+          stroke={INCOMING}
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -284,8 +306,8 @@ function LineSvg({
               stroke="var(--muted-foreground)"
               strokeDasharray="3 3"
             />
-            <circle cx={hoverX} cy={yFor(data[hover.idx].incoming)} r={3.5} fill="#3b82f6" />
-            <circle cx={hoverX} cy={yFor(data[hover.idx].outgoing)} r={3.5} fill="#7c3aed" />
+            <circle cx={hoverX} cy={yFor(data[hover.idx].incoming)} r={3.5} fill={INCOMING} stroke="var(--card)" strokeWidth={1.5} />
+            <circle cx={hoverX} cy={yFor(data[hover.idx].outgoing)} r={3.5} fill={OUTGOING} stroke="var(--card)" strokeWidth={1.5} />
           </g>
         )}
       </svg>
@@ -299,15 +321,15 @@ function LineSvg({
           className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] shadow-lg"
           style={{ left: `${hover.tooltipLeftPx}px` }}
         >
-          <div className="font-medium text-popover-foreground">{longDayLabel(hovered.day)}</div>
+          <div className="font-medium text-popover-foreground">{longDayLabel(hovered.day, locale)}</div>
           <div className="mt-1 flex flex-col gap-0.5">
-            <span className="flex items-center gap-1.5 text-blue-300">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
-              {hovered.incoming} incoming
+            <span className="flex items-center gap-1.5 text-popover-foreground">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: INCOMING }} />
+              <span className="tabular-nums">{t('incoming_count', { count: hovered.incoming })}</span>
             </span>
-            <span className="flex items-center gap-1.5 text-primary">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
-              {hovered.outgoing} outgoing
+            <span className="flex items-center gap-1.5 text-popover-foreground">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: OUTGOING }} />
+              <span className="tabular-nums">{t('outgoing_count', { count: hovered.outgoing })}</span>
             </span>
           </div>
         </div>
@@ -319,24 +341,24 @@ function LineSvg({
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
       {label}
     </span>
   )
 }
 
-function shortDayLabel(key: string): string {
+function shortDayLabel(key: string, locale: string): string {
   // key is YYYY-MM-DD; return "Apr 17"-style. Using Date with an
   // appended time avoids timezone-shift surprises across midnight.
   const [y, m, d] = key.split('-').map(Number)
   const date = new Date(y, m - 1, d)
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
-function longDayLabel(key: string): string {
+function longDayLabel(key: string, locale: string): string {
   const [y, m, d] = key.split('-').map(Number)
   const date = new Date(y, m - 1, d)
-  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 /**
