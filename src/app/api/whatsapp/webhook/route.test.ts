@@ -129,12 +129,22 @@ function makeRecorderChain(table: string) {
 function makeRpc(fn: string, _params: Record<string, unknown>) {
   void _params
   builderCalls.push({ table: `<rpc:${fn}>`, method: 'rpc' })
-  if (fn === 'insert_inbound_message') {
+  if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
     sawInboundRpc = true
     const terminal = tableTerminal['messages'] ?? { data: [], error: null }
+    if (terminal.error) return Promise.resolve({ data: null, error: terminal.error })
     const id = Array.isArray(terminal.data) && terminal.data.length > 0 ? terminal.data[0].id : null
-    if (id) sawRpcReturnedId = true
-    return Promise.resolve({ data: id, error: terminal.error ?? null })
+    if (!id) {
+      return Promise.resolve({
+        data: { message_id: 'existing-dup', message_inserted: false, job_ready: true },
+        error: null,
+      })
+    }
+    sawRpcReturnedId = true
+    return Promise.resolve({
+      data: { message_id: id, message_inserted: true, job_ready: true },
+      error: null,
+    })
   }
   return Promise.resolve({ data: null, error: null })
 }
@@ -483,10 +493,11 @@ describe('POST /api/whatsapp/webhook', () => {
     mockSupabaseAdmin.mockReturnValue({
       from: vi.fn((t: string) => makeRecorderChain(t)),
       rpc: (fn: string, params: Record<string, unknown>) => {
-        if (fn === 'insert_inbound_message') {
+        if (fn === 'persist_inbound_message_with_turn') {
           insertInboundCallCount++
           if (insertInboundCallCount === 1) {
-            throw new Error('simulated DB failure on first message')
+            // A deterministic failure (not a transient SQLSTATE), so it is not retried in-request.
+            throw Object.assign(new Error('simulated DB failure on first message'), { code: '23502' })
           }
         }
         return makeRpc(fn, params)
@@ -530,18 +541,20 @@ describe('POST /api/whatsapp/webhook', () => {
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = await POST(postRequest(body))
-    expect(res.status).toBe(200)
+    // H6: the first message never became durable, so the delivery is not 200.
+    // The second message is still attempted before that response.
+    expect(res.status).toBe(500)
 
-    // processWebhook runs fire-and-forget inside POST; let it settle.
     await new Promise((r) => setTimeout(r, 50))
 
-    // Both messages were attempted — the second's insert call still
-    // happened despite the first one throwing.
     expect(insertInboundCallCount).toBe(2)
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Error processing inbound message:',
-      'wamid.msg1',
+      'Error persisting inbound message with turn:',
       expect.any(Error),
+    )
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Inbound persistence failure, stage=%s',
+      'message_insert',
     )
     consoleErrorSpy.mockRestore()
   })

@@ -161,7 +161,7 @@ export const RATE_LIMITS = {
   /** Non-Meta webhook auth (uazapi), keyed per connection_id.
    *  Reuses the same fixed-window mechanism as webhookInbound — no second
    *  limiter system. 120/min per connection is comfortable for a busy
-   *  inbox (uazapi retries on 5xx) while bounding brute-force attempts
+   *  inbox while bounding brute-force attempts
    *  against the webhook secret. A 401 or 429 still counts toward the
    *  budget so a scanner cannot burn the limit to mask its hit rate. */
   webhookNonMeta: { limit: 120, windowMs: 60_000 },

@@ -27,6 +27,16 @@ function makeChain() {
     let data: any = null
     if (chain.__table === 'conversations') data = { id: 'conv-1', unread_count: 0, account_id: 'acc-1', user_id: 'user-1', contact_id: 'contact-1' }
     else if (chain.__table === 'contacts') data = { id: 'contact-1', name: 'Alice' }
+    else if (chain.__table === 'inbound_turn_jobs') {
+      data = {
+        downstream_context: {
+          accountId: 'acc-1', contactId: 'contact-1', conversationId: 'conv-1',
+          configOwnerUserId: 'user-1', inboundText: 'x', inboundType: 'text',
+          externalMessageId: 'ms-1', isFirstInboundMessage: false, contactWasCreated: false,
+          lastMessagePreview: 'x', unreadCountBefore: 0,
+        },
+      }
+    }
     else data = null
     resolve({ data, count: 0, error: null })
     return Promise.resolve({ data, count: 0, error: null })
@@ -46,9 +56,19 @@ vi.mock('@/lib/supabase/admin-client', () => ({
 
 function mockRpcImpl(fn: string, params: Record<string, unknown>) {
   rpcCalls.push({ fn, params })
-  if (fn === 'insert_inbound_message') {
-    return Promise.resolve({ data: rpcInserts ? 'msg-new-1' : null, error: null })
+  if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
+    if (!rpcInserts) {
+      return Promise.resolve({ data: { message_id: 'msg-existing', message_inserted: false, job_ready: true }, error: null })
+    }
+    return Promise.resolve({ data: { message_id: 'msg-new-1', message_inserted: true, job_ready: true }, error: null })
   }
+  if (fn === 'claim_inbound_turn_for_message') {
+    return Promise.resolve({
+      data: [{ message_id: 'msg-new-1', account_id: 'acc-1', contact_id: 'contact-1', conversation_id: 'conv-1', claim_token: 'tok' }],
+      error: null,
+    })
+  }
+  if (fn === 'complete_inbound_turn_job') return Promise.resolve({ data: true, error: null })
   return Promise.resolve({ data: null, error: null })
 }
 
@@ -99,7 +119,7 @@ describe('non-Meta inbound pipeline → idempotency RPC', () => {
       'user-1',
     )
 
-    const rpc = rpcCalls.find((c) => c.fn === 'insert_inbound_message')
+    const rpc = rpcCalls.find((c) => c.fn === 'persist_inbound_message_with_turn')
     expect(rpc).toBeDefined()
     expect(rpc!.params.p_message_id).toBe('ms-1')
     expect(rpc!.params.p_sender_type).toBe('customer')
@@ -116,7 +136,7 @@ describe('non-Meta inbound pipeline → idempotency RPC', () => {
       'user-1',
     )
 
-    const rpc = rpcCalls.find((c) => c.fn === 'insert_inbound_message')
+    const rpc = rpcCalls.find((c) => c.fn === 'persist_inbound_message_with_turn')
     expect(rpc!.params.p_created_at).toBe(new Date(1710000000 * 1000).toISOString())
   })
 
@@ -140,7 +160,7 @@ describe('non-Meta inbound pipeline → idempotency RPC', () => {
 
     await processInboundMessage(parsed!, 'acc-1', 'user-1')
 
-    const rpc = rpcCalls.find((c) => c.fn === 'insert_inbound_message')
+    const rpc = rpcCalls.find((c) => c.fn === 'persist_inbound_message_with_turn')
     expect(rpc).toBeDefined()
     expect(rpc!.params.p_message_id).toBe('evt-1')
     expect(rpc!.params.p_media_url).toBe('https://uazapi.dev/m.jpg')
@@ -195,7 +215,7 @@ describe('non-Meta inbound pipeline → idempotency RPC', () => {
 
     await processInboundMessage(parsed, 'acc-1', 'user-1')
 
-    expect(rpcCalls.some((c) => c.fn === 'insert_inbound_message')).toBe(false)
+    expect(rpcCalls.some((c) => c.fn === 'persist_inbound_message_with_turn')).toBe(false)
     expect(mockDispatchFlows).not.toHaveBeenCalled()
   })
 })

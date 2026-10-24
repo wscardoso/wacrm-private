@@ -137,11 +137,16 @@ function makeFakeSupabase() {
   }
 
   async function rpc(fn: string, params: Record<string, unknown>) {
-    if (fn === 'insert_inbound_message') {
+    if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
       const messageId = params.p_message_id as string | undefined
+      const durable = fn === 'persist_inbound_message_with_turn'
       if (messageId) {
         const existing = db.messages.find((r) => r.message_id === messageId)
-        if (existing) return { data: null, error: null }
+        if (existing) {
+          return durable
+            ? { data: { message_id: existing.id, message_inserted: false, job_ready: true }, error: null }
+            : { data: null, error: null }
+        }
       }
       const row: Row = {
         id: genId(),
@@ -157,7 +162,9 @@ function makeFakeSupabase() {
         interactive_reply_id: params.p_interactive_reply_id ?? null,
       }
       db.messages.push(row)
-      return { data: row.id, error: null }
+      return durable
+        ? { data: { message_id: row.id, message_inserted: true, job_ready: true }, error: null }
+        : { data: row.id, error: null }
     }
     if (fn === 'insert_lead_attribution') {
       const row: Row = { id: genId(), created_at: new Date().toISOString() }

@@ -17,7 +17,7 @@ import { join } from 'node:path'
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations')
 
-const SUPABASE_SHELL = `
+export const SUPABASE_SHELL = `
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE ROLE anon NOLOGIN;

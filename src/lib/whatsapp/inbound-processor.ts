@@ -15,8 +15,9 @@
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/lib/contacts/dedupe'
-import { runAutomationsForTrigger, cancelPendingCadencesForContact } from '@/lib/automations/engine'
-import { dispatchInboundToFlows } from '@/lib/flows/engine'
+import { type InboundDownstreamContext } from '@/lib/whatsapp/inbound-downstream'
+import { processInboundTurnForMessage } from '@/lib/agent/turn/process-message-turn'
+import { persistInboundMessageWithTurn } from '@/lib/agent/turn/substrate'
 import type { InboundMessage } from '@/lib/whatsapp/providers/types'
 import { InboundPersistenceError, InboundPostInsertError } from '@/lib/whatsapp/inbound-dlq'
 
@@ -105,28 +106,6 @@ async function findOrCreateConversation(
   return data
 }
 
-async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
-  try {
-    const { data: recs, error } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .select('id, status, broadcast_id, broadcasts!inner(account_id)')
-      .eq('contact_id', contactId)
-      .eq('broadcasts.account_id', accountId)
-      .in('status', ['sent', 'delivered', 'read'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (error || !recs || recs.length === 0) return
-
-    await supabaseAdmin()
-      .from('broadcast_recipients')
-      .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', recs[0].id)
-  } catch (err) {
-    console.error('[inbound-processor] flagBroadcastReplyIfAny failed:', err)
-  }
-}
-
 async function lookupInternalIdByMessageId(
   messageId: string,
   conversationId: string,
@@ -185,57 +164,23 @@ async function handleReaction(
     )
 }
 
-async function retryOnError<T>(
-  fn: () => Promise<T>,
-  opts: { label: string; retries?: number; backoffMs?: number },
-): Promise<void> {
-  const maxRetries = opts.retries ?? 2
-  const baseMs = opts.backoffMs ?? 200
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      await fn()
-      return
-    } catch (err) {
-      const isLast = attempt === maxRetries
-      console.error(
-        `[inbound-processor] ${opts.label} failed (attempt ${attempt + 1}/${maxRetries + 1})${isLast ? ' — giving up' : ', retrying…'}`,
-        err instanceof Error ? err.message : err,
-      )
-      if (isLast) return
-      await new Promise((r) => setTimeout(r, baseMs * (attempt + 1)))
-    }
-  }
-}
-
 // ============================================================
 // Main entry point
 // ============================================================
 
-/**
- * Throws InboundPersistenceError when contact, conversation or the message
- * insert FAILS (C6.2) — distinguishable from a legitimate duplicate, which
- * still returns normally. Anything thrown after the message was persisted is
- * wrapped in InboundPostInsertError so callers can keep it out of the DLQ.
- */
-export async function processInboundMessage(
-  inbound: InboundMessage,
-  accountId: string,
-  configOwnerUserId: string,
-): Promise<void> {
-  const state = { persisted: false }
-  try {
-    await processInboundMessageCore(inbound, accountId, configOwnerUserId, state)
-  } catch (err) {
-    if (state.persisted) throw new InboundPostInsertError(err)
-    throw err
-  }
+type InboundCoreState = {
+  persisted: boolean
+  insertedMessageId?: string
+  skipped?: boolean
+  duplicate?: boolean
 }
 
 async function processInboundMessageCore(
   inbound: InboundMessage,
   accountId: string,
   configOwnerUserId: string,
-  state: { persisted: boolean },
+  state: InboundCoreState,
+  phase: InboundPersistPhase,
 ): Promise<void> {
   // D-C (ADR-MSG-STATUS-001 §2.6): a provider callback that is not a
   // customer message (an unrecognised status callback, a presence event…)
@@ -246,6 +191,7 @@ async function processInboundMessageCore(
   // deliberately not logged (it carries a phone number).
   if (inbound.type === 'unknown' && !inbound.messageId) {
     console.warn('[inbound-processor] D-C: dropped non-message callback (type=unknown, no messageId)')
+    state.skipped = true
     return
   }
 
@@ -273,6 +219,7 @@ async function processInboundMessageCore(
   // 3) Reactions short-circuit — never insert into messages
   if (inbound.type === 'reaction') {
     await handleReaction(inbound, conversation.id, contactRecord.id)
+    state.skipped = true
     return
   }
 
@@ -327,114 +274,106 @@ async function processInboundMessageCore(
     ? new Date().toISOString()
     : new Date(tsNum > 1e12 ? tsNum : tsNum * 1000).toISOString()
 
-  // 8) Insert message (C4 idempotency). The RPC insert_inbound_message
-  //    uses ON CONFLICT (conversation_id, message_id) WHERE <partial
-  //    predicate> DO NOTHING RETURNING id — the only correct way to
-  //    dedupe against a partial unique index (supabase-js upsert would
-  //    emit ON CONFLICT without the predicate and fail with 42P10).
-  //    Returns the new row id on a genuine insert, NULL on redelivery.
-  const { data: insertedId, error: msgError } = await supabaseAdmin().rpc(
-    'insert_inbound_message',
-    {
-      p_conversation_id: conversation.id,
-      p_sender_type: 'customer',
-      p_content_type: contentType,
-      p_content_text: contentText,
-      p_media_url: mediaUrl,
-      p_message_id: inbound.messageId,
-      p_status: 'delivered',
-      p_created_at: createdAt,
-      p_reply_to_message_id: replyToInternalId,
-      p_interactive_reply_id:
-        inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
-    },
-  )
-
-  if (msgError) {
-    console.error('[inbound-processor] Error inserting message:', msgError)
-    throw new InboundPersistenceError('message_insert', msgError.code)
+  // Message + turn job commit in one function (091). A duplicate with no job
+  // recovers the job here; a duplicate that already has a job does not insert
+  // another row and does not re-run downstream.
+  const inboundText = contentText ?? ''
+  const downstreamCtx: InboundDownstreamContext = {
+    configOwnerUserId,
+    accountId,
+    contactId: contactRecord.id,
+    conversationId: conversation.id,
+    isFirstInboundMessage,
+    contactWasCreated: contactOutcome.wasCreated,
+    inboundText,
+    inboundType: inbound.type,
+    externalMessageId: inbound.messageId,
+    interactiveReplyId:
+      inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
+    lastMessagePreview: contentText || `[${inbound.type}]`,
   }
 
-  const wasInserted = !!insertedId
-  if (!wasInserted) {
+  let durable: { messageId: string; messageInserted: boolean }
+  try {
+    durable = await persistInboundMessageWithTurn({
+      conversationId: conversation.id,
+      contentType,
+      contentText,
+      mediaUrl,
+      externalMessageId: inbound.messageId,
+      createdAt,
+      replyToMessageId: replyToInternalId,
+      interactiveReplyId:
+        inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
+      accountId,
+      contactId: contactRecord.id,
+      downstreamContext: downstreamCtx as unknown as Record<string, unknown>,
+    })
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : undefined
+    console.error('[inbound-processor] Error persisting message with turn:', err)
+    throw new InboundPersistenceError('message_insert', code)
+  }
+
+  state.persisted = true
+  state.insertedMessageId = durable.messageId
+
+  if (!durable.messageInserted) {
+    state.duplicate = true
     console.log(
-      '[inbound-processor] Duplicate inbound (message_id=%s) — skipping downstream effects',
+      '[inbound-processor] Duplicate inbound (message_id=%s) — job ensured, skipping downstream effects',
       inbound.messageId,
     )
     return
   }
-  state.persisted = true
 
-  // 9) Update conversation
-  await supabaseAdmin()
-    .from('conversations')
-    .update({
-      last_message_text: contentText || `[${inbound.type}]`,
-      last_message_at: new Date().toISOString(),
-      unread_count: (conversation.unread_count || 0) + 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', conversation.id)
-
-  // 10) Flag broadcast reply
-  await flagBroadcastReplyIfAny(accountId, contactRecord.id)
-
-  // 11) Dispatch flows
-  const inboundText = contentText ?? ''
-  const flowResult = await dispatchInboundToFlows({
-    accountId,
-    userId: configOwnerUserId,
-    contactId: contactRecord.id,
-    conversationId: conversation.id,
-    message:
-      inbound.type === 'interactive' && inbound.interactiveReplyId
-        ? {
-            kind: 'interactive_reply',
-            reply_id: inbound.interactiveReplyId,
-            reply_title: inboundText,
-            meta_message_id: inbound.messageId,
-          }
-        : {
-            kind: 'text',
-            text: inboundText,
-            meta_message_id: inbound.messageId,
-          },
-    isFirstInboundMessage,
-  })
-  const flowConsumed = flowResult.consumed
-
-  // 12) Dispatch automations
-  const triggers: (
-    | 'new_contact_created'
-    | 'first_inbound_message'
-    | 'new_message_received'
-    | 'keyword_match'
-  )[] = []
-  if (!flowConsumed) triggers.push('new_message_received', 'keyword_match')
-  if (contactOutcome.wasCreated) triggers.unshift('new_contact_created')
-  if (isFirstInboundMessage) triggers.unshift('first_inbound_message')
-
-  // Cancel any waiting cadence steps for this contact upon incoming
-  // customer reply. Awaited before the trigger loop so a cadence this
-  // same reply might start is not clobbered by the cancellation.
-  try {
-    await cancelPendingCadencesForContact(accountId, contactRecord.id)
-  } catch (err) {
-    console.error('[inbound-processor] cancelPendingCadencesForContact error:', err)
+  if (phase === 'full') {
+    await processInboundTurnForMessage(state.insertedMessageId)
   }
+}
 
-  for (const triggerType of triggers) {
-    retryOnError(
-      () =>
-        runAutomationsForTrigger({
-          accountId,
-          triggerType,
-          contactId: contactRecord.id,
-          context: { message_text: inboundText, conversation_id: conversation.id },
-        }),
-      { label: `automation:${triggerType}` },
-    ).catch((err) => {
-      console.error('[inbound-processor] automation trigger unhandled:', err)
-    })
+export type InboundPersistPhase = 'full' | 'persist_only'
+
+/**
+ * Throws InboundPersistenceError when contact, conversation or the message
+ * insert FAILS (C6.2). Post-persist failures wrap InboundPostInsertError.
+ */
+
+/**
+ * Persist inbound + durable turn registration (Q10 minimum before ACK).
+ * When `phase` is persist_only, downstream is deferred to the turn worker.
+ */
+export async function persistInboundMessage(
+  inbound: InboundMessage,
+  accountId: string,
+  configOwnerUserId: string,
+  phase: InboundPersistPhase = 'full',
+): Promise<{ messageId: string } | 'duplicate' | 'skipped'> {
+  const state: InboundCoreState = { persisted: false }
+  await processInboundMessageCore(inbound, accountId, configOwnerUserId, state, phase)
+  if (state.skipped) return 'skipped'
+  if (!state.persisted || !state.insertedMessageId) return 'duplicate'
+  if (state.duplicate) return 'duplicate'
+  return { messageId: state.insertedMessageId }
+}
+
+export async function processInboundMessage(
+  inbound: InboundMessage,
+  accountId: string,
+  configOwnerUserId: string,
+  opts?: { deferDownstream?: boolean },
+): Promise<void> {
+  const state: InboundCoreState = { persisted: false }
+  try {
+    await processInboundMessageCore(
+      inbound,
+      accountId,
+      configOwnerUserId,
+      state,
+      opts?.deferDownstream ? 'persist_only' : 'full',
+    )
+  } catch (err) {
+    if (state.persisted) throw new InboundPostInsertError(err)
+    throw err
   }
 }
