@@ -86,7 +86,25 @@ const mockFromImpl = vi.fn((t: string) => makeChain(t))
 vi.mock('@/lib/supabase/admin-client', () => ({
   supabaseAdmin: () => ({
     from: mockFromImpl,
-    rpc: vi.fn(() => Promise.resolve({ data: 'msg-new-1', error: null })),
+    // R1: persist_inbound_message_with_turn returns a durable pair, not a bare uuid.
+    rpc: vi.fn((fn: string) => {
+      if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
+        return Promise.resolve({
+          data: { message_id: 'msg-new-1', message_inserted: true, job_ready: true },
+          error: null,
+        })
+      }
+      if (
+        fn === 'claim_inbound_turn_for_message' ||
+        fn === 'claim_inbound_turn_job' ||
+        fn === 'register_inbound_turn_job' ||
+        fn === 'complete_inbound_turn_job' ||
+        fn === 'reclaim_stuck_inbound_turn_jobs'
+      ) {
+        return Promise.resolve({ data: null, error: null })
+      }
+      return Promise.resolve({ data: null, error: null })
+    }),
   }),
 }))
 vi.mock('@/lib/whatsapp/encryption', () => ({

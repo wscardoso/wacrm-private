@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // =============================================================
 // C6.2 — inbound DLQ CAPTURE through the REAL Meta webhook route.
 //
-// The Meta route acknowledges (200) BEFORE processing, so the HTTP contract
-// does not change here: a failed capture is only logged. Only I/O is mocked;
+// H6: the Meta route returns 200 only after a durable message+job pair.
+// A persistence failure is still captured in the DLQ (diagnostic, not replay)
+// and the HTTP status is 500 so the provider can redeliver. Only I/O is mocked;
 // engines are mocked solely to prove they are never executed by the capture
 // path.
 // =============================================================
@@ -17,6 +18,9 @@ const S = {
   conversationFails: false,
   insertModeFor: ((): InsertMode => 'ok') as (id: string) => InsertMode,
   enqueueMode: 'ok' as 'ok' | 'error' | 'reject',
+  lastMessageId: null as string | null,
+  lastInserted: false,
+  lastContext: null as Record<string, unknown> | null,
   postInsertFlowThrows: false,
   decryptFails: false,
   configError: false,
@@ -38,15 +42,19 @@ function makeChain(table: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let error: any = null
     if (table === 'whatsapp_config') {
-      if (S.configError) error = { code: '57P01', message: 'config lookup failed 5511999887766' }
+      if (S.configError) error = { code: 'XX000', message: 'config lookup failed 5511999887766' }
       else data = S.configRows
     }
     else if (table === 'conversations') {
-      if (S.conversationFails) error = { code: '57P01', message: 'conv db down 5511999887766' }
+      if (S.conversationFails) error = { code: 'XX000', message: 'conv db down 5511999887766' }
       else data = { id: 'conv-1', unread_count: 0 }
-    } else if (table === 'contacts') {
+    }     else if (table === 'contacts') {
       if (S.contactFails) error = { code: '23502', message: 'null value 5511999887766' }
       else data = { id: 'contact-1', name: 'Bob' }
+    } else if (table === 'messages') {
+      data = S.lastMessageId ? { id: S.lastMessageId, count: 0 } : { count: 0 }
+    } else if (table === 'inbound_turn_jobs') {
+      data = S.lastContext ? { downstream_context: S.lastContext } : null
     } else data = { count: 0 }
     resolve({ data, error })
     return Promise.resolve({ data, error })
@@ -59,13 +67,34 @@ vi.mock('@/lib/supabase/admin-client', () => ({
     from: (t: string) => makeChain(t),
     rpc: (fn: string, params: Record<string, unknown>) => {
       rpcCalls.push({ fn, params })
-      if (fn === 'insert_inbound_message') {
+      if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
         const mode = S.insertModeFor(String(params.p_message_id))
         if (mode === 'reject') return Promise.reject(new Error('network down 5511999887766'))
-        if (mode === 'error') return Promise.resolve({ data: null, error: { code: '57P01', message: 'db unavailable Key (phone)=(5511999887766)' } })
-        if (mode === 'dup') return Promise.resolve({ data: null, error: null })
-        return Promise.resolve({ data: `id-${rpcCalls.length}`, error: null })
+        if (mode === 'error') return Promise.resolve({ data: null, error: { code: 'XX000', message: 'db unavailable Key (phone)=(5511999887766)' } })
+        if (mode === 'dup') {
+          S.lastInserted = false
+          S.lastMessageId = 'existing-dup'
+          return Promise.resolve({ data: { message_id: 'existing-dup', message_inserted: false, job_ready: true }, error: null })
+        }
+        const id = `id-${rpcCalls.length}`
+        S.lastMessageId = id
+        S.lastInserted = true
+        S.lastContext = (params.p_downstream_context as Record<string, unknown>) ?? {
+          accountId: 'acc-1', contactId: 'contact-1', conversationId: 'conv-1',
+          configOwnerUserId: 'user-1', inboundText: 'x', inboundType: 'text',
+          externalMessageId: String(params.p_message_id), isFirstInboundMessage: false,
+          contactWasCreated: false, lastMessagePreview: 'x', unreadCountBefore: 0,
+        }
+        return Promise.resolve({ data: { message_id: id, message_inserted: true, job_ready: true }, error: null })
       }
+      if (fn === 'claim_inbound_turn_for_message') {
+        if (!S.lastInserted || !S.lastMessageId) return Promise.resolve({ data: [], error: null })
+        return Promise.resolve({
+          data: [{ message_id: S.lastMessageId, account_id: 'acc-1', contact_id: 'contact-1', conversation_id: 'conv-1', claim_token: 'tok' }],
+          error: null,
+        })
+      }
+      if (fn === 'complete_inbound_turn_job') return Promise.resolve({ data: true, error: null })
       if (fn === 'enqueue_webhook_dlq') {
         if (S.enqueueMode === 'reject') return Promise.reject(new Error('enqueue down'))
         if (S.enqueueMode === 'error') return Promise.resolve({ data: null, error: { code: '42501', message: 'ownership' } })
@@ -138,7 +167,7 @@ async function post(b: unknown) {
   return { status: res.status, json: await res.json() }
 }
 const dlq = () => rpcCalls.filter((c) => c.fn === 'enqueue_webhook_dlq')
-const inserts = () => rpcCalls.filter((c) => c.fn === 'insert_inbound_message')
+const inserts = () => rpcCalls.filter((c) => c.fn === 'persist_inbound_message_with_turn' || c.fn === 'insert_inbound_message')
 const noEnginesRan = () => {
   expect(mockFlows).not.toHaveBeenCalled()
   expect(mockAutomations).not.toHaveBeenCalled()
@@ -155,6 +184,9 @@ beforeEach(() => {
   S.insertModeFor = () => 'ok'
   S.enqueueMode = 'ok'
   S.postInsertFlowThrows = false
+  S.lastMessageId = null
+  S.lastInserted = false
+  S.lastContext = null
   S.decryptFails = false
   S.configError = false
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
@@ -164,14 +196,14 @@ beforeEach(() => {
 
 describe('C6.2 Meta route: persistence failure is captured per message', () => {
   it.each([
-    ['message_insert', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=57P01'],
+    ['message_insert', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=XX000'],
     ['contact', () => { S.contactFails = true }, 'contact', 'db_code=23502'],
-    ['conversation', () => { S.conversationFails = true }, 'conversation', 'db_code=57P01'],
-  ])('%s failure → one enqueue scoped to the resolved config; ack unchanged; no engine ran', async (_n, arrange, stage, codePart) => {
+    ['conversation', () => { S.conversationFails = true }, 'conversation', 'db_code=XX000'],
+  ])('%s failure → one enqueue scoped to the resolved config; HTTP 500; no engine ran', async (_n, arrange, stage, codePart) => {
     arrange()
     const { status, json } = await post(body([metaMsg('wamid.A1')]))
-    expect(status).toBe(200)
-    expect(json).toEqual({ status: 'received' })
+    expect(status).toBe(500)
+    expect(json).toEqual({ error: 'Inbound persistence incomplete' })
     expect(dlq()).toHaveLength(1)
     expect(dlq()[0].params).toMatchObject({ p_account_id: 'acc-1', p_whatsapp_config_id: 'cfg-1' })
     const payload = dlq()[0].params.p_payload as { stage: string; source: string; external_message_id: string }
@@ -208,12 +240,12 @@ describe('C6.2 Meta route: duplicates are not captured', () => {
 })
 
 describe('C6.2 Meta route: enqueue failure', () => {
-  it.each(['error', 'reject'] as const)('enqueue %s → ack stays 200 and the rest of the batch is still processed', async (mode) => {
+  it.each(['error', 'reject'] as const)('enqueue %s → HTTP 500 and the rest of the batch is still processed', async (mode) => {
     S.insertModeFor = (id) => (id === 'wamid.1' ? 'error' : 'ok')
     S.enqueueMode = mode
     const { status, json } = await post(body([metaMsg('wamid.1'), metaMsg('wamid.2')]))
-    expect(status).toBe(200)
-    expect(json).toEqual({ status: 'received' })
+    expect(status).toBe(500)
+    expect(json).toEqual({ error: 'Inbound persistence incomplete' })
     expect(inserts()).toHaveLength(2)
     // loss is surfaced loudly, with no PII
     const lost = vi.mocked(console.error).mock.calls.filter((c) => String(c[0]).includes('NOT captured in DLQ'))
@@ -286,11 +318,11 @@ describe('C6.2 Meta route: out-of-scope behaviour is unchanged', () => {
 })
 
 describe('C6.2 Meta route: token decryption failure (A9)', () => {
-  it('each message of the delivery is captured (stage=token_decrypt), nothing is persisted, ack stays 200, no engine ran', async () => {
+  it('each message of the delivery is captured (stage=token_decrypt), nothing is persisted, HTTP 500, no engine ran', async () => {
     S.decryptFails = true
     const { status, json } = await post(body([metaMsg('wamid.T1'), metaMsg('wamid.T2')]))
-    expect(status).toBe(200)
-    expect(json).toEqual({ status: 'received' })
+    expect(status).toBe(500)
+    expect(json).toEqual({ error: 'Inbound persistence incomplete' })
     expect(inserts()).toHaveLength(0)
     expect(dlq()).toHaveLength(2)
     expect(dlq().map((c) => (c.params.p_payload as { external_message_id: string }).external_message_id)).toEqual(['wamid.T1', 'wamid.T2'])
@@ -322,11 +354,11 @@ describe('C6.2 Meta route: token decryption failure (A9)', () => {
     expect(logged).not.toMatch(/bad key|ciphertext|5511999887766/)
   })
 
-  it('decrypt failure AND capture failure -> ack 200, loss surfaced in the logs only', async () => {
+  it('decrypt failure AND capture failure -> HTTP 500, loss surfaced in the logs', async () => {
     S.decryptFails = true
     S.enqueueMode = 'error'
     const { status } = await post(body([metaMsg('wamid.T4')]))
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     const lost = vi.mocked(console.error).mock.calls.filter((c) => String(c[0]).includes('NOT captured in DLQ'))
     expect(lost).toHaveLength(1)
   })

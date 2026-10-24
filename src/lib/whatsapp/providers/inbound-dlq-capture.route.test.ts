@@ -51,7 +51,7 @@ function makeChain(table: string) {
         ? { id: c.id, account_id: c.account_id, user_id: c.user_id, access_token: 'enc', instance_id: 'inst', base_url: 'https://x.uazapi.dev', provider: S.provider, connection_id: chain.__conn, webhook_secret_hash: hashWebhookSecret(c.secret) }
         : null
     } else if (table === 'conversations') {
-      if (S.conversationFails) { error = { code: '57P01', message: 'conv db down (Maria 5511999887766)' } }
+      if (S.conversationFails) { error = { code: 'XX000', message: 'conv db down (Maria 5511999887766)' } }
       else data = { id: 'conv-1', unread_count: 0 }
     } else if (table === 'contacts') {
       if (S.contactFails) { error = { code: '23502', message: 'null value (5511999887766)' } }
@@ -70,12 +70,12 @@ vi.mock('@/lib/supabase/admin-client', () => ({
     from: (t: string) => makeChain(t),
     rpc: (fn: string, params: Record<string, unknown>) => {
       rpcCalls.push({ fn, params })
-      if (fn === 'insert_inbound_message') {
+      if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
         const mode = S.insertModeFor(String(params.p_message_id))
         if (mode === 'reject') return Promise.reject(new Error('network down for 5511999887766'))
-        if (mode === 'error') return Promise.resolve({ data: null, error: { code: '57P01', message: 'db unavailable: Key (phone)=(5511999887766)' } })
-        if (mode === 'dup') return Promise.resolve({ data: null, error: null })
-        return Promise.resolve({ data: `id-${rpcCalls.length}`, error: null })
+        if (mode === 'error') return Promise.resolve({ data: null, error: { code: 'XX000', message: 'db unavailable: Key (phone)=(5511999887766)' } })
+        if (mode === 'dup') return Promise.resolve({ data: { message_id: 'existing', message_inserted: false, job_ready: true }, error: null })
+        return Promise.resolve({ data: { message_id: `id-${rpcCalls.length}`, message_inserted: true, job_ready: true }, error: null })
       }
       if (fn === 'enqueue_webhook_dlq') {
         if (S.enqueueMode === 'reject') return Promise.reject(new Error('enqueue network down'))
@@ -128,7 +128,7 @@ async function post(provider: 'uazapi', conn: string, body: unknown, secret?: st
 }
 
 const dlq = () => rpcCalls.filter((c) => c.fn === 'enqueue_webhook_dlq')
-const inserts = () => rpcCalls.filter((c) => c.fn === 'insert_inbound_message')
+const inserts = () => rpcCalls.filter((c) => c.fn === 'persist_inbound_message_with_turn' || c.fn === 'insert_inbound_message')
 const uazapiMsg = (id: string) => ({
   messages: [{
     key: { remoteJid: '5511999887766@s.whatsapp.net', id },
@@ -159,14 +159,17 @@ beforeEach(() => {
 
 describe('C6.2 provider route: persistence failure is captured', () => {
   it.each([
-    ['message_insert (db error)', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=57P01'],
+    ['message_insert (db error)', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=XX000'],
     ['contact create failure', () => { S.contactFails = true }, 'contact', 'db_code=23502'],
-    ['conversation failure', () => { S.conversationFails = true }, 'conversation', 'db_code=57P01'],
-  ])('%s → exactly one enqueue for tenant A, 200, not counted as processed, no engine ran', async (_n, arrange, stage, codePart) => {
+    ['conversation failure', () => { S.conversationFails = true }, 'conversation', 'db_code=XX000'],
+  ])('%s → exactly one diagnostic enqueue for tenant A, HTTP 500, not counted as processed, no engine ran', async (_n, arrange, stage, codePart) => {
     arrange()
     const { status, json } = await post('uazapi', 'conn-A', singleMsg())
-    expect(status).toBe(200)
-    expect(json).toMatchObject({ received: true, processed: 0, inboundProcessed: 0, captured: 1, statusProcessed: 0 })
+    expect(status).toBe(500)
+    expect(json).toMatchObject({ processed: 0, inboundProcessed: 0, captured: 1, statusProcessed: 0 })
+    expect(json.received).toBeUndefined()
+    const payload = dlq()[0]?.params.p_payload as Record<string, unknown> | undefined
+    expect(payload && 'message' in (payload ?? {})).toBe(false)
     expect(dlq()).toHaveLength(1)
     expect(dlq()[0].params).toMatchObject({ p_account_id: 'acc-A', p_whatsapp_config_id: 'cfg-A' })
     expect((dlq()[0].params.p_payload as { stage: string; source: string }).stage).toBe(stage)
@@ -179,10 +182,10 @@ describe('C6.2 provider route: persistence failure is captured', () => {
   it('an unexpected exception is captured with the distinct stage "unexpected"', async () => {
     S.insertModeFor = () => 'reject'
     const { status, json } = await post('uazapi', 'conn-A', singleMsg())
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(json.captured).toBe(1)
-    expect((dlq()[0].params.p_payload as { stage: string }).stage).toBe('unexpected')
-    expect(String(dlq()[0].params.p_error_message)).toBe('source=uazapi;stage=unexpected;db_code=none;error_type=Error')
+    expect((dlq()[0].params.p_payload as { stage: string }).stage).toBe('message_insert')
+    expect(String(dlq()[0].params.p_error_message)).toBe('source=uazapi;stage=message_insert;db_code=none')
     noEnginesRan()
   })
 
@@ -205,7 +208,7 @@ describe('C6.2 provider route: legitimate duplicates are not captured', () => {
   })
 })
 
-describe('C6.2 provider route: enqueue failure → 500 so the provider redelivers', () => {
+describe('C6.2 provider route: enqueue failure → 500; UAZAPI worker retry is not assumed', () => {
   it.each(['error', 'reject'] as const)('persistence fails AND enqueue %s → 500, not a success body', async (mode) => {
     S.insertModeFor = () => 'error'
     S.enqueueMode = mode
@@ -237,10 +240,10 @@ describe('C6.2 provider route: enqueue failure → 500 so the provider redeliver
 describe('C6.2 provider route: batch (uazapi) — the INDIVIDUAL event is enqueued', () => {
   const batch = { event: 'messages', data: [uazapiMsg('evt-1'), uazapiMsg('evt-2'), uazapiMsg('evt-3')] }
 
-  it('1 failing event of 3 → 1 enqueue (that event only); the other two are processed; 200', async () => {
+  it('1 failing event of 3 → 1 enqueue (that event only); the other two are processed; HTTP 500', async () => {
     S.insertModeFor = (id) => (id === 'evt-2' ? 'error' : 'ok')
     const { status, json } = await post('uazapi', 'conn-A', batch)
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(json).toMatchObject({ processed: 2, captured: 1 })
     expect(inserts()).toHaveLength(3)
     expect(dlq()).toHaveLength(1)
@@ -262,7 +265,7 @@ describe('C6.2 provider route: batch (uazapi) — the INDIVIDUAL event is enqueu
   it('redelivery of the whole batch: persisted events dedupe (no DLQ row for them)', async () => {
     S.insertModeFor = (id) => (id === 'evt-2' ? 'error' : 'dup')
     const { status, json } = await post('uazapi', 'conn-A', batch)
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(dlq()).toHaveLength(1) // only the still-failing one
     expect(json.captured).toBe(1)
     noEnginesRan()
@@ -316,11 +319,11 @@ describe('C6.2 provider route: tenant isolation', () => {
 })
 
 describe('C6.2 provider route: out-of-scope behaviour is unchanged', () => {
-  it('a failure AFTER the insert is NOT captured (logged, not processed, 200) — as before C6.2', async () => {
+  it('a durable persist is counted even when a later flow would throw — downstream is deferred, not captured', async () => {
     S.postInsertFlowThrows = true
     const { status, json } = await post('uazapi', 'conn-A', singleMsg())
     expect(status).toBe(200)
-    expect(json).toMatchObject({ processed: 0, captured: 0 })
+    expect(json).toMatchObject({ processed: 1, captured: 0 })
     expect(dlq()).toHaveLength(0)
     expect(inserts()).toHaveLength(1)
   })
@@ -355,9 +358,9 @@ describe('C6.2 provider route: parse failures (A2) are isolated and captured', (
   // uazapi's adapter dereferences `payload.data`: a null item in data[] throws.
   const batchWithBadItem = { event: 'messages', data: [uazapiMsg('evt-1'), null, uazapiMsg('evt-3')] }
 
-  it('a throwing parse of ONE item no longer aborts the request: others processed, 1 capture (stage=parse), 200', async () => {
+  it('a throwing parse of ONE item no longer aborts the request: others processed, 1 capture (stage=parse), HTTP 500', async () => {
     const { status, json } = await post('uazapi', 'conn-A', batchWithBadItem)
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(json).toMatchObject({ processed: 2, captured: 1 })
     expect(inserts()).toHaveLength(2)
     expect(dlq()).toHaveLength(1)

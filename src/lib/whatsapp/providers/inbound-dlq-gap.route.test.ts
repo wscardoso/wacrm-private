@@ -60,10 +60,10 @@ vi.mock('@/lib/supabase/admin-client', () => ({
     from: (t: string) => makeChain(t),
     rpc: (fn: string, params: Record<string, unknown>) => {
       rpcCalls.push({ fn, params })
-      if (fn === 'insert_inbound_message') {
+      if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
         if (insertMode === 'reject') return Promise.reject(new Error('network down'))
         if (insertMode === 'error') return Promise.resolve({ data: null, error: { message: 'db unavailable' } })
-        return Promise.resolve({ data: 'id-1', error: null })
+        return Promise.resolve({ data: { message_id: 'id-1', message_inserted: true, job_ready: true }, error: null })
       }
       // The real RPC returns the new row's uuid; without an id a capture cannot be confirmed.
       if (fn === 'enqueue_webhook_dlq') return Promise.resolve({ data: 'dlq-1', error: null })
@@ -128,7 +128,7 @@ describe('C6.2: failures on the provider inbound route are captured, not invisib
   it('a thrown processing error is recorded via enqueue_webhook_dlq with account/config scope', async () => {
     insertMode = 'reject'
     const { status, json } = await post(textMsg)
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(json.processed).toBe(0)
     expect(json.captured).toBe(1)
     expect(dlqCalls()).toHaveLength(1)
@@ -138,7 +138,7 @@ describe('C6.2: failures on the provider inbound route are captured, not invisib
   it('a DB error inside processInboundMessage is surfaced (not counted as processed) and captured', async () => {
     insertMode = 'error'
     const { status, json } = await post(textMsg)
-    expect(status).toBe(200)
+    expect(status).toBe(500)
     expect(json.processed).toBe(0)
     expect(json.captured).toBe(1)
     expect(dlqCalls()).toHaveLength(1)

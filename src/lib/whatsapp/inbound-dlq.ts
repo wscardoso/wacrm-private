@@ -4,9 +4,16 @@
  * CAPTURE ONLY. There is no drain, retry or replay here, and the envelope
  * stored is deliberately NOT replayable on its own (data minimisation): the
  * DLQ row is a diagnostic record, not a recovery payload. A captured failure
- * therefore does NOT recover the message — its permanent loss remains a risk
- * that is temporarily accepted until a future, separately authorised front
- * (replay/drain/dedup). C6.3/C6.4 own recovery.
+ * therefore does NOT recover the message — for a provider that never
+ * redelivers, its permanent loss remains a risk that is accepted until a
+ * future, separately authorised front (a replayable store needs a privacy
+ * decision). C6.3/C6.4 own recovery.
+ *
+ * Since migration 094 a persistent failure is ONE pending row per
+ * (account, config, source, stage, external message id): repeats raise
+ * `occurrences` and `last_seen_at` instead of adding rows, and the row turns
+ * 'resolved' when the message is finally stored. Failures without an external
+ * id cannot be correlated and still get one row per call.
  *
  * Hard rules for this module:
  *   - it must NOT import the automations, flows or cadence engines, nor the
