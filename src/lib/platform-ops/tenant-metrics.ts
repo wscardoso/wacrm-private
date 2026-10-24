@@ -1,19 +1,21 @@
 // ============================================================
-// E9 / Fase 1 — batch metrics for the platform operator "control
-// tower" grid (/act, Tenants tab).
+// E9 / Fase 1 — metrics for the platform operator "control tower"
+// grid (/act, Tenants tab).
 //
-// Every query here is batched across ALL of the caller's supervised
-// tenants at once (account_id = ANY(...) / .in('account_id', ids)),
-// never one query per tenant in a loop. RLS (migration 038) already
-// scopes contacts/conversations/messages reads to
-// is_account_member() OR can_access_account(), so an authenticated
-// operator's client can read these tables directly for every tenant
-// they supervise — no new RPC needed for those three.
+// The numbers come from two RPCs, both scoped inside the database by
+// auth.uid() to the operator's active assignments:
 //
-// whatsapp_config is the one exception: it was deliberately excluded
-// from the 038 operator read grant (it holds credentials), so its
-// status is fetched via the narrow list_platform_tenant_whatsapp_status()
-// RPC (migration 059), which returns ONLY account_id/status/provider.
+//   * list_platform_tenant_metrics()          (096) — contacts, unread,
+//     last message and today's message count, AGGREGATED in SQL: one row
+//     per supervised tenant. The previous implementation selected every
+//     contact/conversation/message row and counted on the client, which
+//     PostgREST silently truncates at its max-rows cap (finding E-1).
+//   * list_platform_tenant_whatsapp_status()  (059) — whatsapp_config is
+//     deliberately excluded from the 038 operator read grant (it holds
+//     credentials), so only account_id/status/provider are exposed.
+//
+// A failed call is NEVER rendered as zero: loadTenantMetrics throws a
+// TenantMetricsError and the caller shows an error state.
 //
 // "Mensagens hoje" uses a UTC day boundary, not the viewer's local
 // day — a deliberate, documented simplification. An operator in a
@@ -57,78 +59,80 @@ function emptyMetrics(): TenantMetrics {
   };
 }
 
-function startOfTodayUtc(): string {
-  const now = new Date();
+function startOfTodayUtc(now: Date): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+}
+
+export type TenantMetricsErrorSource = "metrics" | "whatsapp_status";
+
+export class TenantMetricsError extends Error {
+  constructor(
+    readonly source: TenantMetricsErrorSource,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TenantMetricsError";
+  }
+}
+
+interface MetricsRow {
+  account_id: string;
+  contacts_count: number | string | null;
+  unread_count: number | string | null;
+  last_message_at: string | null;
+  messages_today: number | string | null;
+}
+
+interface WhatsappStatusRow {
+  account_id: string;
+  status: string;
+  provider: string;
 }
 
 /**
  * Load per-tenant metrics for the given (already-authorized) list of
- * account ids, in a fixed small number of batched queries — never one
- * query per tenant. Returns a Map keyed by account_id; a tenant with
- * no data anywhere still gets an entry with zeroed/unconfigured
+ * account ids with two RPC calls, independent of how many rows the
+ * tenants hold. Returns a Map keyed by account_id; a tenant the RPCs
+ * return nothing for still gets an entry with zeroed/unconfigured
  * defaults, so callers never need a fallback branch per tenant.
+ *
+ * Throws TenantMetricsError when either RPC fails — a failure is never
+ * reported as zero.
  */
 export async function loadTenantMetrics(
   db: SupabaseClient,
   accountIds: string[],
+  now: Date = new Date(),
 ): Promise<Map<string, TenantMetrics>> {
   const metrics = new Map<string, TenantMetrics>();
   for (const id of accountIds) metrics.set(id, emptyMetrics());
   if (accountIds.length === 0) return metrics;
 
-  const todayStart = startOfTodayUtc();
-
-  const [contactsRes, conversationsRes, messagesRes, waStatusRes] = await Promise.all([
-    db.from("contacts").select("account_id").in("account_id", accountIds),
-    db
-      .from("conversations")
-      .select("account_id, unread_count, last_message_at")
-      .in("account_id", accountIds),
-    db
-      .from("messages")
-      .select("id, conversations!inner(account_id)")
-      .gte("created_at", todayStart)
-      .in("conversations.account_id", accountIds),
+  const [metricsRes, waStatusRes] = await Promise.all([
+    db.rpc("list_platform_tenant_metrics", { p_messages_since: startOfTodayUtc(now) }),
     db.rpc("list_platform_tenant_whatsapp_status"),
   ]);
 
-  for (const row of (contactsRes.data ?? []) as { account_id: string }[]) {
-    const m = metrics.get(row.account_id);
-    if (m) m.contactsCount += 1;
+  if (metricsRes.error) {
+    throw new TenantMetricsError("metrics", metricsRes.error.message || "list_platform_tenant_metrics failed");
+  }
+  if (waStatusRes.error) {
+    throw new TenantMetricsError(
+      "whatsapp_status",
+      waStatusRes.error.message || "list_platform_tenant_whatsapp_status failed",
+    );
   }
 
-  for (const row of (conversationsRes.data ?? []) as {
-    account_id: string;
-    unread_count: number | null;
-    last_message_at: string | null;
-  }[]) {
+  for (const row of (metricsRes.data ?? []) as MetricsRow[]) {
     const m = metrics.get(row.account_id);
     if (!m) continue;
-    m.unreadCount += row.unread_count ?? 0;
-    if (row.last_message_at && (!m.lastMessageAt || row.last_message_at > m.lastMessageAt)) {
-      m.lastMessageAt = row.last_message_at;
-    }
+    m.contactsCount = Number(row.contacts_count ?? 0);
+    m.unreadCount = Number(row.unread_count ?? 0);
+    m.messagesToday = Number(row.messages_today ?? 0);
+    m.lastMessageAt = row.last_message_at;
   }
 
-  for (const row of (messagesRes.data ?? []) as {
-    conversations: { account_id: string } | { account_id: string }[] | null;
-  }[]) {
-    // Embedded FK resources come back as an object for a to-one join in
-    // most supabase-js versions, but defensively handle the array shape
-    // some client/type combinations produce for `!inner` embeds.
-    const embedded = row.conversations;
-    const accountId = Array.isArray(embedded) ? embedded[0]?.account_id : embedded?.account_id;
-    if (!accountId) continue;
-    const m = metrics.get(accountId);
-    if (m) m.messagesToday += 1;
-  }
-
-  for (const row of (waStatusRes.data ?? []) as {
-    account_id: string;
-    status: string;
-    provider: string;
-  }[]) {
+  for (const row of (waStatusRes.data ?? []) as WhatsappStatusRow[]) {
     const m = metrics.get(row.account_id);
     if (!m) continue;
     // No row at all -> "unconfigured" (the map's default). A row exists

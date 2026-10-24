@@ -1,51 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { loadTenantMetrics, summarizeTenantMetrics } from "./tenant-metrics";
+import { loadTenantMetrics, summarizeTenantMetrics, TenantMetricsError } from "./tenant-metrics";
 
-// Fake Supabase client covering the 4 batched calls loadTenantMetrics
-// makes: contacts, conversations, messages (embedded conversations
-// filter), and the list_platform_tenant_whatsapp_status RPC.
+// Fake Supabase client: loadTenantMetrics makes exactly two RPC calls
+// (list_platform_tenant_metrics, list_platform_tenant_whatsapp_status) and
+// no table reads. The SQL side is covered end-to-end against the real
+// migration in src/test/platform-tenant-metrics.pglite.test.ts.
 
-interface TableResponses {
-  contacts?: { account_id: string }[];
-  conversations?: { account_id: string; unread_count: number | null; last_message_at: string | null }[];
-  messages?: { id: string; conversations: { account_id: string } | null }[];
+interface MetricsRow {
+  account_id: string;
+  contacts_count: number | string | null;
+  unread_count: number | string | null;
+  last_message_at: string | null;
+  messages_today: number | string | null;
 }
+interface WaRow {
+  account_id: string;
+  status: string;
+  provider: string;
+}
+type RpcResult = { data: unknown; error: { message: string } | null };
 
-function fakeClient(tables: TableResponses, waStatus: { account_id: string; status: string; provider: string }[]) {
-  const from = vi.fn((table: string) => {
-    const chain = {
-      select: () => chain,
-      in: () => chain,
-      gte: () => chain,
-      then: (resolve: (v: { data: unknown; error: null }) => void) => {
-        const data =
-          table === "contacts" ? (tables.contacts ?? []) : table === "conversations" ? (tables.conversations ?? []) : (tables.messages ?? []);
-        return resolve({ data, error: null });
-      },
-    };
-    return chain;
+function fakeClient(opts: { metrics?: MetricsRow[] | RpcResult; wa?: WaRow[] | RpcResult }) {
+  const asResult = (v: unknown): RpcResult =>
+    Array.isArray(v) || v === undefined ? { data: v ?? [], error: null } : (v as RpcResult);
+  const rpc = vi.fn(async (fn: string) => {
+    if (fn === "list_platform_tenant_metrics") return asResult(opts.metrics);
+    if (fn === "list_platform_tenant_whatsapp_status") return asResult(opts.wa);
+    throw new Error(`unexpected rpc ${fn}`);
   });
-
-  const rpc = vi.fn(async () => ({ data: waStatus, error: null }));
-
-  return { from, rpc } as unknown as SupabaseClient;
+  const from = vi.fn();
+  return { rpc, from, client: { rpc, from } as unknown as SupabaseClient };
 }
 
 describe("loadTenantMetrics", () => {
   it("returns an empty Map without querying anything when given no account ids", async () => {
-    const client = fakeClient({}, []);
+    const { client, rpc, from } = fakeClient({});
 
     const result = await loadTenantMetrics(client, []);
 
     expect(result.size).toBe(0);
-    expect((client.from as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
-    expect((client.rpc as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
   });
 
   it("seeds every requested account id with zeroed/unconfigured defaults, even with no data anywhere", async () => {
-    const client = fakeClient({}, []);
+    const { client } = fakeClient({});
 
     const result = await loadTenantMetrics(client, ["acc-1", "acc-2"]);
 
@@ -60,62 +61,56 @@ describe("loadTenantMetrics", () => {
     });
   });
 
-  it("counts contacts per account_id from a single batched query", async () => {
-    const client = fakeClient(
-      { contacts: [{ account_id: "acc-1" }, { account_id: "acc-1" }, { account_id: "acc-2" }] },
-      [],
-    );
+  it("reads only the two aggregate RPCs (no table reads) and sends the UTC day start", async () => {
+    const { client, rpc, from } = fakeClient({});
 
-    const result = await loadTenantMetrics(client, ["acc-1", "acc-2"]);
+    await loadTenantMetrics(client, ["acc-1"], new Date("2026-03-04T15:30:00-03:00"));
 
-    expect(result.get("acc-1")?.contactsCount).toBe(2);
-    expect(result.get("acc-2")?.contactsCount).toBe(1);
+    expect(from).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenCalledWith("list_platform_tenant_metrics", { p_messages_since: "2026-03-04T00:00:00.000Z" });
+    expect(rpc).toHaveBeenCalledWith("list_platform_tenant_whatsapp_status");
   });
 
-  it("sums unread_count and tracks the most recent last_message_at per account", async () => {
-    const client = fakeClient(
-      {
-        conversations: [
-          { account_id: "acc-1", unread_count: 3, last_message_at: "2026-01-01T00:00:00Z" },
-          { account_id: "acc-1", unread_count: 2, last_message_at: "2026-01-05T00:00:00Z" },
-          { account_id: "acc-2", unread_count: null, last_message_at: null },
-        ],
-      },
-      [],
-    );
+  it("maps each aggregate row onto its account and ignores accounts that were not requested", async () => {
+    const { client } = fakeClient({
+      metrics: [
+        { account_id: "acc-1", contacts_count: 1500, unread_count: 7, last_message_at: "2026-01-05T00:00:00Z", messages_today: 2 },
+        { account_id: "acc-2", contacts_count: 0, unread_count: 0, last_message_at: null, messages_today: 0 },
+        { account_id: "stranger", contacts_count: 99, unread_count: 99, last_message_at: null, messages_today: 99 },
+      ],
+    });
 
     const result = await loadTenantMetrics(client, ["acc-1", "acc-2"]);
 
-    expect(result.get("acc-1")?.unreadCount).toBe(5);
-    expect(result.get("acc-1")?.lastMessageAt).toBe("2026-01-05T00:00:00Z");
-    expect(result.get("acc-2")?.unreadCount).toBe(0);
+    expect(result.get("acc-1")).toMatchObject({
+      contactsCount: 1500,
+      unreadCount: 7,
+      messagesToday: 2,
+      lastMessageAt: "2026-01-05T00:00:00Z",
+    });
     expect(result.get("acc-2")?.lastMessageAt).toBeNull();
+    expect(result.has("stranger")).toBe(false);
   });
 
-  it("counts today's messages per account via the embedded conversations.account_id", async () => {
-    const client = fakeClient(
-      {
-        messages: [
-          { id: "m1", conversations: { account_id: "acc-1" } },
-          { id: "m2", conversations: { account_id: "acc-1" } },
-          { id: "m3", conversations: { account_id: "acc-2" } },
-        ],
-      },
-      [],
-    );
+  it("accepts bigint counts serialised as strings", async () => {
+    const { client } = fakeClient({
+      metrics: [{ account_id: "acc-1", contacts_count: "2500", unread_count: "3", last_message_at: null, messages_today: "1200" }],
+    });
 
-    const result = await loadTenantMetrics(client, ["acc-1", "acc-2"]);
+    const result = await loadTenantMetrics(client, ["acc-1"]);
 
-    expect(result.get("acc-1")?.messagesToday).toBe(2);
-    expect(result.get("acc-2")?.messagesToday).toBe(1);
+    expect(result.get("acc-1")).toMatchObject({ contactsCount: 2500, unreadCount: 3, messagesToday: 1200 });
   });
 
   it("maps whatsapp status: connected row -> connected, disconnected row -> pending, no row -> unconfigured", async () => {
-    const client = fakeClient({}, [
-      { account_id: "acc-1", status: "connected", provider: "meta" },
-      { account_id: "acc-2", status: "disconnected", provider: "zapi" },
-      // acc-3 has no row at all.
-    ]);
+    const { client } = fakeClient({
+      wa: [
+        { account_id: "acc-1", status: "connected", provider: "meta" },
+        { account_id: "acc-2", status: "disconnected", provider: "zapi" },
+        // acc-3 has no row at all.
+      ],
+    });
 
     const result = await loadTenantMetrics(client, ["acc-1", "acc-2", "acc-3"]);
 
@@ -125,7 +120,7 @@ describe("loadTenantMetrics", () => {
   });
 
   it("never includes a whatsapp_config column beyond account_id/status/provider in its output shape", async () => {
-    const client = fakeClient({}, [{ account_id: "acc-1", status: "connected", provider: "meta" }]);
+    const { client } = fakeClient({ wa: [{ account_id: "acc-1", status: "connected", provider: "meta" }] });
 
     const result = await loadTenantMetrics(client, ["acc-1"]);
 
@@ -133,6 +128,24 @@ describe("loadTenantMetrics", () => {
     expect(Object.keys(metric).sort()).toEqual(
       ["contactsCount", "lastMessageAt", "messagesToday", "unreadCount", "whatsappProvider", "whatsappStatus"].sort(),
     );
+  });
+
+  it("throws a metrics-sourced TenantMetricsError when the aggregate RPC fails — never zeros", async () => {
+    const { client } = fakeClient({ metrics: { data: null, error: { message: "boom" } } });
+
+    const err = await loadTenantMetrics(client, ["acc-1"]).catch((e) => e);
+
+    expect(err).toBeInstanceOf(TenantMetricsError);
+    expect(err).toMatchObject({ source: "metrics", message: "boom" });
+  });
+
+  it("throws a whatsapp_status-sourced TenantMetricsError when the status RPC fails", async () => {
+    const { client } = fakeClient({ wa: { data: null, error: { message: "denied" } } });
+
+    const err = await loadTenantMetrics(client, ["acc-1"]).catch((e) => e);
+
+    expect(err).toBeInstanceOf(TenantMetricsError);
+    expect(err).toMatchObject({ source: "whatsapp_status", message: "denied" });
   });
 });
 
