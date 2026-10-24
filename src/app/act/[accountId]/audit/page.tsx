@@ -127,7 +127,7 @@ export default function PlatformAuditPage() {
   }
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="mx-auto w-full max-w-screen-xl space-y-6 p-4">
       <div>
         <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('subtitle')}</p>
@@ -163,7 +163,7 @@ export default function PlatformAuditPage() {
                 <TableRow className="border-border hover:bg-transparent">
                   <TableHead className="text-muted-foreground">{t('col_when')}</TableHead>
                   <TableHead className="text-muted-foreground">{t('col_action')}</TableHead>
-                  <TableHead className="text-muted-foreground">{t('col_actor')}</TableHead>
+                  <TableHead className="hidden text-muted-foreground md:table-cell">{t('col_actor')}</TableHead>
                   <TableHead className="hidden text-muted-foreground md:table-cell">{t('col_detail')}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -173,8 +173,14 @@ export default function PlatformAuditPage() {
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                       {stamp(e.createdAt)}
                     </TableCell>
-                    <TableCell className="text-foreground">{actionLabel(e.action)}</TableCell>
-                    <TableCell className="text-sm text-foreground">{actorLabel(e)}</TableCell>
+                    <TableCell className="whitespace-normal text-foreground">
+                      {actionLabel(e.action)}
+                      {/* Below md the actor and detail columns are hidden; show them here. */}
+                      <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
+                        {[actorLabel(e), detail(e)].filter(Boolean).join(' · ')}
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden text-sm text-foreground md:table-cell">{actorLabel(e)}</TableCell>
                     <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
                       {detail(e) ?? '—'}
                     </TableCell>
