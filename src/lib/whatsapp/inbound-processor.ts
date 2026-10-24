@@ -106,28 +106,6 @@ async function findOrCreateConversation(
   return data
 }
 
-async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
-  try {
-    const { data: recs, error } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .select('id, status, broadcast_id, broadcasts!inner(account_id)')
-      .eq('contact_id', contactId)
-      .eq('broadcasts.account_id', accountId)
-      .in('status', ['sent', 'delivered', 'read'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (error || !recs || recs.length === 0) return
-
-    await supabaseAdmin()
-      .from('broadcast_recipients')
-      .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', recs[0].id)
-  } catch (err) {
-    console.error('[inbound-processor] flagBroadcastReplyIfAny failed:', err)
-  }
-}
-
 async function lookupInternalIdByMessageId(
   messageId: string,
   conversationId: string,
@@ -313,7 +291,6 @@ async function processInboundMessageCore(
     interactiveReplyId:
       inbound.type === 'interactive' ? (inbound.interactiveReplyId ?? null) : null,
     lastMessagePreview: contentText || `[${inbound.type}]`,
-    unreadCountBefore: conversation.unread_count || 0,
   }
 
   let durable: { messageId: string; messageInserted: boolean }

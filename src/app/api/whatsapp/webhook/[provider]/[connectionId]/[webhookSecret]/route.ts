@@ -240,10 +240,16 @@ export async function POST(
   //   * 2xx only when every inbound event in this delivery was durably stored
   //     (message + turn job) or was not an inbound message (status, ignored callback).
   //   * persistence or parse failed, whether or not the DLQ row was written -> 500.
-  //   * UAZAPI's worker does not automatically retry a non-2xx delivery
-  //     (docs.uazapi.com/docs/errors-and-retries). This 500 does not recover
-  //     the event through the provider. Repeated events, if they arrive, are
-  //     deduped and must not re-run Flows or Automations.
+  //   * The public UAZAPI documentation states no webhook retry policy, and an
+  //     operational test on a UAZAPI FREE instance observed none (one delivery
+  //     answered 500, attempts: 1, no redelivery in two minutes). Nothing here
+  //     depends on the provider coming back: a transient database error is retried
+  //     inside the request (substrate.persistInboundMessageWithTurn), what was stored
+  //     is executed right away by the drain below, and anything left over is taken by
+  //     the cron. A message whose persistence fails for good is lost for this
+  //     provider; the 500 and the single, counted DLQ row make that visible.
+  //     Repeated events, if they arrive, are deduped and must not re-run Flows or
+  //     Automations.
   let capturedCount = 0;
   let uncapturedCount = 0;
 

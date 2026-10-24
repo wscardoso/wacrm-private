@@ -15,7 +15,7 @@ const STUB = `
 CREATE TABLE public.accounts (id UUID PRIMARY KEY DEFAULT gen_random_uuid());
 CREATE TABLE public.contacts (id UUID PRIMARY KEY DEFAULT gen_random_uuid());
 CREATE TABLE public.conversations (id UUID PRIMARY KEY DEFAULT gen_random_uuid());
-CREATE TABLE public.messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid());
+CREATE TABLE public.messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 `
 
 type Claim = { message_id: string; contact_id: string; claim_token: string }
@@ -59,7 +59,13 @@ describe.skipIf(!adminUrl)('088 under overlapping transactions (PostgreSQL serve
   }
 
   async function job(client: pg.Client, contactId: string, ageSec: number) {
-    const id = (await client.query<{ id: string }>(`INSERT INTO messages DEFAULT VALUES RETURNING id`)).rows[0]!.id
+    // Since 092 the queue orders by message time first: age the message together with its job
+    // so both keys agree and the fixtures keep meaning "older".
+    const id = (
+      await client.query<{ id: string }>(`INSERT INTO messages (created_at) VALUES (NOW() - make_interval(secs => $1)) RETURNING id`, [
+        ageSec,
+      ])
+    ).rows[0]!.id
     await client.query(`SELECT register_inbound_turn_job($1, $2, $3, $4, '{}'::jsonb)`, [id, account, contactId, conv])
     await client.query(`UPDATE inbound_turn_jobs SET created_at = NOW() - make_interval(secs => $2) WHERE message_id = $1`, [
       id,
@@ -83,6 +89,8 @@ describe.skipIf(!adminUrl)('088 under overlapping transactions (PostgreSQL serve
     c0 = await connect(db.url)
     await c0.query(STUB)
     await c0.query(readMigration('088'))
+    // The claim functions in production are 092's: the concurrency properties are asserted on those.
+    await c0.query(readMigration('092'))
     for (let i = 0; i < 6; i++) clients.push(await connect(db.url))
     ;[w1, w2, w3] = clients
     account = (await c0.query<{ id: string }>(`INSERT INTO accounts DEFAULT VALUES RETURNING id`)).rows[0]!.id

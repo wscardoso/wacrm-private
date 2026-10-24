@@ -17,6 +17,7 @@ import { findExistingContact, isUniqueViolation, type ExistingContact } from '@/
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { type InboundDownstreamContext } from '@/lib/whatsapp/inbound-downstream'
 import { processInboundTurnForMessage } from '@/lib/agent/turn/process-message-turn'
+import { drainInboundTurnJobs } from '@/lib/agent/turn/drain'
 import { persistInboundMessageWithTurn } from '@/lib/agent/turn/substrate'
 import {
   handleTemplateWebhookChange,
@@ -254,20 +255,24 @@ export async function POST(request: Request) {
   // H6: 200 only after each inbound message has a durable message+job pair.
   // DLQ capture is diagnostic and does not by itself authorize 200.
   let incomplete = 0
+  let persistThrew = false
   try {
     incomplete = await processWebhook(body, 'persist')
   } catch (error) {
+    persistThrew = true
     console.error('Error persisting webhook before ack:', error)
+  }
+
+  if (persistThrew || incomplete > 0) {
+    // Whatever did become durable is executed now: a stored message must not wait for
+    // the provider to redeliver (some never do). Statuses and template events are left
+    // for the delivery that gets acknowledged; the redelivery of this payload handles
+    // them, and its persist pass finds the stored messages as duplicates.
+    runInboundTurns(body, 'turns')
     return NextResponse.json({ error: 'Inbound persistence incomplete' }, { status: 500 })
   }
 
-  if (incomplete > 0) {
-    return NextResponse.json({ error: 'Inbound persistence incomplete' }, { status: 500 })
-  }
-
-  processWebhook(body, 'execute').catch((error) => {
-    console.error('Error executing inbound turns:', error)
-  })
+  runInboundTurns(body, 'execute')
 
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
@@ -286,7 +291,30 @@ function metaEventInfo(message: WhatsAppMessage): DlqEventInfo {
   }
 }
 
-type MetaWebhookPass = 'persist' | 'execute' | 'full'
+/**
+ * persist  inbound messages only: make each one durable (message + turn job)
+ * turns    inbound messages only: run the turn of every message that is durable
+ * execute  everything the acknowledged delivery owes: statuses, template events, turns
+ * full     persist and run inline (kept for callers that need the single-pass behaviour)
+ */
+type MetaWebhookPass = 'persist' | 'turns' | 'execute' | 'full'
+
+/**
+ * Fire-and-forget after the response. The turn of each message of the payload runs in
+ * payload order (inline claim); jobs the per-contact queue held back (an older message
+ * of the same contact was still pending), jobs of other deliveries and expired leases
+ * are then taken by the drain, so nothing waits for the cron or for a redelivery.
+ */
+function runInboundTurns(body: { entry?: WhatsAppWebhookEntry[] }, pass: 'turns' | 'execute') {
+  processWebhook(body, pass)
+    .catch((error) => {
+      console.error('Error executing inbound turns:', error)
+    })
+    .then(() => drainInboundTurnJobs())
+    .catch((error) => {
+      console.error('Error draining inbound turns:', error)
+    })
+}
 
 async function processWebhook(
   body: { entry?: WhatsAppWebhookEntry[] },
@@ -303,7 +331,7 @@ async function processWebhook(
       // dedicated handler. Skip the messaging branches below so we
       // don't try to read message-shaped fields off a template event.
       if (isTemplateWebhookField(change.field)) {
-        if (pass !== 'persist') {
+        if (pass === 'execute' || pass === 'full') {
           await handleTemplateWebhookChange(
             { field: change.field, value: change.value as unknown },
             supabaseAdmin(),
@@ -315,7 +343,7 @@ async function processWebhook(
       const value = change.value
 
       // Handle status updates (deferred to execute pass — Q10 persist is inbound-only)
-      if (value.statuses && pass !== 'persist') {
+      if (value.statuses && (pass === 'execute' || pass === 'full')) {
         for (const status of value.statuses) {
           // Per-item isolation (F-INT-02, E2E validation): the route
           // already returns 200 to Meta before this runs (fire-and-
@@ -395,6 +423,9 @@ async function processWebhook(
           config.id,
           err instanceof Error ? err.name : 'NonError',
         )
+        // Only the pass that makes messages durable reports this: the later passes
+        // would count and capture the same failure a second time.
+        if (pass !== 'persist' && pass !== 'full') continue
         for (const message of value.messages) {
           incomplete++
           const capture = await captureInboundFailure({
@@ -599,45 +630,6 @@ async function handleStatusUpdate(status: {
 }
 
 /**
- * If an inbound message's sender is on a still-unreplied
- * broadcast_recipients row, flip it to `replied` so the reply count
- * advances on the parent broadcast.
- *
- * Runs on a best-effort basis — failures here must not break the
- * main inbound-message flow, so errors are swallowed with a log.
- */
-async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
-  try {
-    // Most recent outbound broadcast in this account that hasn't
-    // been replied to yet. Account-scoped so a shared inbox reply
-    // marks the broadcast as replied regardless of which teammate
-    // sent it.
-    const { data: recs, error } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .select('id, status, broadcast_id, broadcasts!inner(account_id)')
-      .eq('contact_id', contactId)
-      .eq('broadcasts.account_id', accountId)
-      .in('status', ['sent', 'delivered', 'read'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (error || !recs || recs.length === 0) return
-
-    const row = recs[0]
-    const { error: updErr } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', row.id)
-
-    if (updErr) {
-      console.error('Error marking broadcast recipient replied:', updErr)
-    }
-  } catch (err) {
-    console.error('flagBroadcastReplyIfAny failed:', err)
-  }
-}
-
-/**
  * Resolve a Meta-side message_id into the matching internal UUID, scoped
  * to one conversation. Returns null when we never received the parent
  * (e.g. a swipe-reply to a message older than this CRM install).
@@ -754,7 +746,7 @@ async function processMessage(
   state: { persisted: boolean },
   pass: MetaWebhookPass = 'full',
 ) {
-  if (pass === 'execute') {
+  if (pass === 'execute' || pass === 'turns') {
     const internalId = await resolveInternalCustomerMessageId(accountId, message.id)
     if (internalId) {
       try {
@@ -862,7 +854,6 @@ async function processMessage(
     externalMessageId: message.id,
     interactiveReplyId,
     lastMessagePreview: contentText || `[${message.type}]`,
-    unreadCountBefore: conversation.unread_count || 0,
   }
 
   // 091: message row and turn job in one transaction. Duplicate without a job
@@ -1162,32 +1153,4 @@ async function findOrCreateConversation(
   }
 
   return data
-}
-
-/**
- * Fire a promise-returning function with retries + backoff. The
- * function is expected to handle its own errors internally (logging
- * etc.); this wrapper only retries when the promise rejects (e.g. a
- * connection error that prevented the function from running at all).
- */
-async function retryOnError<T>(
-  fn: () => Promise<T>,
-  opts: { label: string; retries?: number; backoffMs?: number },
-): Promise<void> {
-  const maxRetries = opts.retries ?? 2
-  const baseMs = opts.backoffMs ?? 200
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      await fn()
-      return
-    } catch (err) {
-      const isLast = attempt === maxRetries
-      console.error(
-        `[webhook] ${opts.label} failed (attempt ${attempt + 1}/${maxRetries + 1})${isLast ? ' — giving up' : ', retrying…'}`,
-        err instanceof Error ? err.message : err,
-      )
-      if (isLast) return
-      await new Promise((r) => setTimeout(r, baseMs * (attempt + 1)))
-    }
-  }
 }

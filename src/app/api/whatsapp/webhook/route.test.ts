@@ -496,7 +496,8 @@ describe('POST /api/whatsapp/webhook', () => {
         if (fn === 'persist_inbound_message_with_turn') {
           insertInboundCallCount++
           if (insertInboundCallCount === 1) {
-            throw new Error('simulated DB failure on first message')
+            // A deterministic failure (not a transient SQLSTATE), so it is not retried in-request.
+            throw Object.assign(new Error('simulated DB failure on first message'), { code: '23502' })
           }
         }
         return makeRpc(fn, params)

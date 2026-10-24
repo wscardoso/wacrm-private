@@ -38,7 +38,13 @@ export interface InboundDownstreamContext {
   externalMessageId: string
   interactiveReplyId?: string | null
   lastMessagePreview: string
-  unreadCountBefore: number
+  /**
+   * @deprecated No longer read. The unread counter is incremented atomically in the
+   * database (apply_inbound_message_to_conversation, 093) instead of being derived
+   * from a snapshot taken at persist time. Kept optional so jobs queued before 093
+   * and test fixtures that still carry it keep working.
+   */
+  unreadCountBefore?: number
 }
 
 async function retryOnError<T>(
@@ -101,15 +107,16 @@ export async function runInboundDownstreamFromContext(
 ): Promise<void> {
   await flagBroadcastReplyIfAny(ctx.accountId, ctx.contactId)
 
-  await supabaseAdmin()
-    .from('conversations')
-    .update({
-      last_message_text: ctx.lastMessagePreview,
-      last_message_at: new Date().toISOString(),
-      unread_count: (ctx.unreadCountBefore || 0) + 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', ctx.conversationId)
+  // Exactly once per message, atomic, and order-safe (093): a retried turn does not
+  // count the message twice and a message that runs after a newer one leaves the
+  // preview alone. A failure throws, so the job is retried.
+  const { error: conversationError } = await supabaseAdmin().rpc('apply_inbound_message_to_conversation', {
+    p_message_id: inboundMessageId,
+    p_preview: ctx.lastMessagePreview,
+  })
+  if (conversationError) {
+    throw new Error(`apply_inbound_message_to_conversation: ${conversationError.message}`)
+  }
 
   const flowResult = await dispatchInboundToFlows({
     accountId: ctx.accountId,

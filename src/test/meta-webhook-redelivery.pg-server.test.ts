@@ -1,36 +1,43 @@
 import { createHmac } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import pg from 'pg'
 import type { PGlite } from '@electric-sql/pglite'
-import { SUPABASE_SHELL, migrationFiles, seedWorld } from '@/test/support/full-migration-chain'
+import { seedWorld } from '@/test/support/full-migration-chain'
+import { JOB_INSERT_FAULT_SQL, createChainDatabase, faults, type ChainDatabase } from '@/test/support/pg-server-chain'
 import { pgliteSupabaseWithQuery } from '@/test/support/pglite-supabase-query'
 import type { SqlRunner } from '@/test/support/pglite-supabase-rpc'
 import { encryptWithBindingContext } from '@/lib/whatsapp/encryption'
 import { whatsappConfigBindingContext } from '@/lib/whatsapp/config-binding'
 
 /**
- * Meta webhook: redelivery after HTTP 500, on a REAL PostgreSQL server.
+ * Meta webhook: durable intake, redelivery and recovery, on a REAL PostgreSQL server.
  *
- * Why this test exists: answering 500 when a message is not durable is only a good
- * contract if the provider's redelivery of the same payload is safe and heals the
- * gap. This drives the real `POST /api/whatsapp/webhook` handler (HMAC signature,
- * whatsapp_config lookup, token decryption, the persist pass, the 200/500 decision,
- * the fire-and-forget execute pass) and the real 088-091 SQL, on the complete
- * 001..091 migration chain applied to a throwaway database of a local server.
+ * Drives the real `POST /api/whatsapp/webhook` handler (HMAC signature, whatsapp_config
+ * lookup, token decryption, the persist pass, the 200/500 decision, the turn passes and
+ * the follow-up drain) over the complete 001..094 migration chain applied to a
+ * throwaway database of a local server. No mock stands in for SQL. Mocked at their
+ * boundary: the flow engine and the automation engine (other subsystems, own suites).
  *
  * Runs only when R1_PG_URL points at a LOOPBACK disposable server
- * (scripts/diagnostics/r1-disposable-pg.mjs start). The suite creates its own
- * database, never touches another one, and drops it at the end. No mock stands in
- * for SQL. Mocked at their boundary: the flow engine and the automation engine
- * (other subsystems with their own suites). Secrets are synthetic: the HMAC key and
- * the encryption key come from vitest.config.ts, the access token is a literal.
+ * (scripts/diagnostics/r1-disposable-pg.mjs start). The suite creates its own database
+ * and drops it. Secrets are synthetic (the HMAC and encryption keys come from
+ * vitest.config.ts; the access token is a literal).
  *
- * The only injected fault is a trigger, in the throwaway database only, that fails
- * the turn-job insert of ONE named external message id. The 091 function then rolls
- * its message insert back, which is what a transient database error looks like to
- * the route.
+ * Faults are injected only in the throwaway database, by one trigger on the turn-job
+ * insert: a PERMANENT failure (SQLSTATE P0001) for one external message id, and a
+ * FLAKY one (SQLSTATE 40001) for one external id that fails its first N attempts. The
+ * 091 function rolls the message insert back with the job insert, which is what a
+ * database error looks like to the route.
+ *
+ * Contract asserted (the R1 intake guarantees):
+ *   - 200 only when every message of the delivery is durable; otherwise 500;
+ *   - whatever IS durable is executed immediately, whether or not the delivery is
+ *     acknowledged, and a stored message never waits for the provider to redeliver;
+ *   - a redelivery stores what is missing, never duplicates a message, a job or an effect;
+ *   - the queue of a contact runs the oldest MESSAGE first; a message that runs after a
+ *     newer one is counted but cannot regress the conversation preview;
+ *   - the DLQ holds one row per persistent failure (occurrences counted) and resolves it
+ *     when the message is finally stored;
+ *   - a transient database error on the persist call is retried inside the request.
  */
 
 const adminUrl = process.env.R1_PG_URL
@@ -57,15 +64,12 @@ vi.mock('@/lib/automations/engine', () => ({
 const { POST } = await import('@/app/api/whatsapp/webhook/route')
 const { drainInboundTurnJobs } = await import('@/lib/agent/turn/drain')
 
-const LOOPBACK = ['127.0.0.1', '::1', '[::1]', 'localhost']
 const PHONE_NUMBER_ID = '111111111' // seedWorld's Meta number for tenant A
 
 type Msg = { id: string; text: string }
 
-describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real PostgreSQL)', () => {
-  let admin: pg.Client
-  let c0: pg.Client
-  let dbName = ''
+describe.skipIf(!adminUrl)('Meta webhook intake, redelivery and recovery (real PostgreSQL)', () => {
+  let chain: ChainDatabase
   let world: Awaited<ReturnType<typeof seedWorld>>
   let seq = 0
   let phone = ''
@@ -75,7 +79,7 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
   let logSpy: ReturnType<typeof vi.spyOn>
 
   const q = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) =>
-    (await c0.query(sql, params)).rows as T[]
+    (await chain.client.query(sql, params)).rows as T[]
   const n = async (sql: string, params: unknown[] = []) =>
     Number((await q<{ n: string }>(`SELECT count(*) AS n ${sql}`, params))[0]!.n)
 
@@ -89,7 +93,7 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
     ]
   }
 
-  /** A Meta delivery carrying `msgs`, all from the same contact, signed like Meta signs it. */
+  /** A Meta delivery carrying `msgs` (message time = payload position), all from one contact, signed like Meta signs it. */
   function delivery(msgs: Msg[]) {
     const body = {
       object: 'whatsapp_business_account',
@@ -103,10 +107,11 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
                 messaging_product: 'whatsapp',
                 metadata: { display_phone_number: '5511900000000', phone_number_id: PHONE_NUMBER_ID },
                 contacts: msgs.map(() => ({ profile: { name: 'Cliente R1' }, wa_id: phone })),
-                messages: msgs.map((m, i) => ({
+                messages: msgs.map((m) => ({
                   from: phone,
                   id: m.id,
-                  timestamp: String(1761220800 + i),
+                  // Message time follows the A, B, C labels whatever subset a delivery carries.
+                  timestamp: String(1761220800 + (m.id.endsWith('.A') ? 0 : m.id.endsWith('.B') ? 1 : 2)),
                   type: 'text',
                   text: { body: m.text },
                 })),
@@ -130,8 +135,10 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
     return { status: res.status, body: (await res.json()) as Record<string, unknown> }
   }
 
-  const failJobFor = (extId: string) => q(`SELECT set_config('app.r1_fail_ext_id', $1, false)`, [extId])
-  const clearFault = () => failJobFor('')
+  // --- fault injection (throwaway database only; see JOB_INSERT_FAULT_SQL)
+  const failPermanently = (extId: string) => faults.permanent(chain.client, extId)
+  const failTransiently = (extId: string, times: number) => faults.transient(chain.client, extId, times)
+  const clearFaults = () => faults.clear(chain.client)
 
   const jobOf = async (extId: string) =>
     (
@@ -142,6 +149,8 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
       )
     )[0]
   const messageRows = (extId: string) => n(`FROM messages WHERE message_id = $1 AND sender_type = 'customer'`, [extId])
+  const jobRows = (extId: string) =>
+    n(`FROM inbound_turn_jobs j JOIN messages x ON x.id = j.message_id WHERE x.message_id = $1`, [extId])
   const conversation = async () =>
     (
       await q<{ last_message_text: string | null; unread_count: number }>(
@@ -151,71 +160,43 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
       )
     )[0]
   const flowTexts = () => mockFlows.mock.calls.map((c) => (c[0] as { message: { text: string } }).message.text)
-  const dlqRows = () => n(`FROM whatsapp_webhook_dlq WHERE account_id = $1`, [world.accountA])
+  const dlq = () =>
+    q<{ status: string; occurrences: number; error_message: string; last_error_message: string }>(
+      `SELECT status, occurrences, error_message, last_error_message FROM whatsapp_webhook_dlq
+        WHERE account_id = $1 ORDER BY created_at`,
+      [world.accountA],
+    )
+  const persistCalls = (mark: number) => state.log.slice(mark).filter((c) => c.name === 'persist_inbound_message_with_turn')
+  const makeAvailable = (extId: string) =>
+    q(`UPDATE inbound_turn_jobs SET available_at = clock_timestamp()
+        WHERE message_id IN (SELECT id FROM messages WHERE message_id = $1)`, [extId])
 
   /**
-   * The execute pass is fire-and-forget after the response. It visits the payload's
-   * messages in order, one claim attempt each, and completes the ones it claimed, so
-   * it is over once every message had its claim and every successful claim its
-   * completion. No sleeps.
+   * Everything a delivery starts after its response is fire-and-forget: the turn of each
+   * durable message of the payload (one inline claim each, in payload order, each claim
+   * that wins is completed) and then the drain, which ends with an empty claim. The
+   * delivery is settled when all of that has happened. No sleeps.
    */
-  async function executePassDone(mark: number, messages: number) {
+  async function settled(mark: number, durableInPayload: number) {
     await vi.waitFor(
       () => {
         const since = state.log.slice(mark)
         const claims = since.filter((c) => c.name === 'claim_inbound_turn_for_message')
         const won = claims.filter((c) => Array.isArray(c.data) && c.data.length > 0)
         const completes = since.filter((c) => c.name === 'complete_inbound_turn_job')
-        expect(claims.length).toBe(messages)
-        expect(completes.length).toBe(won.length)
+        expect(claims.length).toBe(durableInPayload)
+        expect(completes.length).toBeGreaterThanOrEqual(won.length)
+        const lastDrainClaim = since.filter((c) => c.name === 'claim_inbound_turn_job').at(-1)
+        expect(lastDrainClaim).toBeDefined()
+        expect(Array.isArray(lastDrainClaim!.data) ? lastDrainClaim!.data.length : 0).toBe(0)
       },
       { timeout: 10_000, interval: 25 },
     )
   }
 
   beforeAll(async () => {
-    const uri = new URL(adminUrl!)
-    if (!LOOPBACK.includes(uri.hostname)) {
-      throw new Error('R1_PG_URL must point to a loopback disposable server; refusing to connect')
-    }
-    admin = new pg.Client({ connectionString: adminUrl })
-    await admin.connect()
-    dbName = `r1_route_${process.pid}_${Date.now()}`
-    // The disposable cluster may be a non-UTF8 one; the migrations contain UTF-8 text.
-    await admin.query(`CREATE DATABASE ${dbName} TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`)
-    uri.pathname = `/${dbName}`
-    c0 = new pg.Client({ connectionString: uri.toString() })
-    await c0.connect()
-
-    // Roles are cluster-wide and may already exist; make the shell idempotent about them.
-    const shell = SUPABASE_SHELL.replace(
-      /CREATE ROLE (\w+)([^;]*);/g,
-      (_m, role: string, rest: string) =>
-        `DO $$ BEGIN CREATE ROLE ${role}${rest}; EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-    )
-    await c0.query(shell)
-    const dir = join(process.cwd(), 'supabase', 'migrations')
-    for (const f of migrationFiles()) {
-      try {
-        await c0.query(readFileSync(join(dir, f), 'utf8'))
-      } catch (e) {
-        throw new Error(`migration ${f} failed on the real server: ${(e as Error).message}`)
-      }
-    }
-
-    await c0.query(`
-      CREATE FUNCTION r1_fail_job_for_ext() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN
-        IF NEW.downstream_context->>'externalMessageId' = current_setting('app.r1_fail_ext_id', true) THEN
-          RAISE EXCEPTION 'r1 injected job failure';
-        END IF;
-        RETURN NEW;
-      END $$;
-      CREATE TRIGGER r1_fail_job_for_ext BEFORE INSERT ON inbound_turn_jobs
-        FOR EACH ROW EXECUTE FUNCTION r1_fail_job_for_ext();
-    `)
-
-    world = await seedWorld(c0 as unknown as PGlite)
+    chain = await createChainDatabase(adminUrl!, 'route', { extraSql: JOB_INSERT_FAULT_SQL })
+    world = await seedWorld(chain.client as unknown as PGlite)
     // A real token the route can decrypt with the tenant's binding context (key: the synthetic one from vitest.config.ts).
     const token = encryptWithBindingContext('test-meta-access-token', whatsappConfigBindingContext(world.accountA))
     await q(`UPDATE whatsapp_config SET access_token = $1 WHERE id = $2`, [token, world.cfgA])
@@ -225,7 +206,7 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
     )
     expect(cfg[0]).toEqual({ provider: 'meta', phone_number_id: PHONE_NUMBER_ID })
 
-    const real = pgliteSupabaseWithQuery(c0 as unknown as SqlRunner)
+    const real = pgliteSupabaseWithQuery(chain.client as unknown as SqlRunner)
     state.client = {
       ...real,
       async rpc(name: string, args: Record<string, unknown> = {}) {
@@ -237,21 +218,14 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
   })
 
   afterAll(async () => {
-    await c0?.end().catch(() => undefined)
-    if (admin && dbName) {
-      await admin
-        .query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [dbName])
-        .catch(() => undefined)
-      await admin.query(`DROP DATABASE IF EXISTS ${dbName}`).catch(() => undefined)
-    }
-    await admin?.end().catch(() => undefined)
+    await chain?.drop()
   })
 
   beforeEach(async () => {
     // Jobs are global (the drain claims any of them); the DLQ is read per tenant.
     await q(`DELETE FROM inbound_turn_jobs`)
     await q(`DELETE FROM whatsapp_webhook_dlq`)
-    await clearFault()
+    await clearFaults()
     state.log.length = 0
     mockFlows.mockReset()
     mockFlows.mockResolvedValue({ consumed: false })
@@ -266,20 +240,22 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
   })
 
   afterEach(async () => {
-    await clearFault()
+    await clearFaults()
     errorSpy.mockRestore()
     warnSpy.mockRestore()
     logSpy.mockRestore()
   })
 
-  it('the route accepts a signed delivery of a healthy batch and runs every message once (baseline)', async () => {
+  it('a healthy batch is acknowledged and every message runs once, in message order (baseline)', async () => {
     const mark = state.log.length
     const res = await post()
 
     expect(res).toEqual({ status: 200, body: { status: 'received' } })
-    await executePassDone(mark, 3)
+    await settled(mark, 3)
     expect(flowTexts()).toEqual(['one', 'two', 'three'])
     for (const m of batch) expect(await jobOf(m.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
+    expect(await conversation()).toEqual({ last_message_text: 'three', unread_count: 3 })
+    expect(await dlq()).toEqual([])
   })
 
   it('a bad signature is refused before anything is written', async () => {
@@ -292,146 +268,211 @@ describe.skipIf(!adminUrl)('Meta webhook redelivery after HTTP 500 (real Postgre
   })
 
   describe('B cannot be made durable while A and C can', () => {
-    it('first delivery: 500, A and C are durable and pending, B is absent, nothing ran, one diagnostic DLQ row', async () => {
-      await failJobFor(batch[1]!.id)
+    it('first delivery: 500, but A and C are stored AND executed at once, without waiting for a redelivery or the cron', async () => {
+      await failPermanently(batch[1]!.id)
       const mark = state.log.length
 
       const res = await post()
 
       expect(res).toEqual({ status: 500, body: { error: 'Inbound persistence incomplete' } })
+      await settled(mark, 2) // the turns pass visits only what is durable: A and C
       expect([await messageRows(batch[0]!.id), await messageRows(batch[1]!.id), await messageRows(batch[2]!.id)]).toEqual([1, 0, 1])
-      expect(await jobOf(batch[0]!.id)).toMatchObject({ status: 'pending', attempt_count: 0 })
-      expect(await jobOf(batch[1]!.id)).toBeUndefined()
-      expect(await jobOf(batch[2]!.id)).toMatchObject({ status: 'pending', attempt_count: 0 })
-
-      // The execute pass is not started on a 500: no claim, no downstream.
-      expect(state.log.slice(mark).some((c) => c.name === 'claim_inbound_turn_for_message')).toBe(false)
-      expect(mockFlows).not.toHaveBeenCalled()
-      expect(mockAutomations).not.toHaveBeenCalled()
-      expect(await n(`FROM agent_runs`)).toBe(0)
-
-      // Captured for diagnosis only (stage + code, no content): it does not hold the message.
-      expect(await dlqRows()).toBe(1)
-      const dlq = await q<{ error_message: string }>(`SELECT error_message FROM whatsapp_webhook_dlq`)
-      expect(dlq[0]!.error_message).toBe('source=meta;stage=message_insert;db_code=P0001')
-    })
-
-    it('redelivery of the same payload: 200, B becomes durable, no message is duplicated, A and C each run exactly once', async () => {
-      await failJobFor(batch[1]!.id)
-      expect((await post()).status).toBe(500)
-      await clearFault()
-      const mark = state.log.length
-
-      const res = await post()
-
-      expect(res).toEqual({ status: 200, body: { status: 'received' } })
-      await executePassDone(mark, 3)
-
-      // Persistence healed: one message and one job per external id, B included.
-      for (const m of batch) {
-        expect(await messageRows(m.id)).toBe(1)
-        expect(await n(`FROM inbound_turn_jobs j JOIN messages x ON x.id = j.message_id WHERE x.message_id = $1`, [m.id])).toBe(1)
-      }
-      // The messages that were already durable were not re-inserted: only B reported an insert.
-      const inserts = state.log
-        .slice(mark)
-        .filter((c) => c.name === 'persist_inbound_message_with_turn')
-        .map((c) => (c.data as { message_inserted: boolean }).message_inserted)
-      expect(inserts).toEqual([false, true, false])
-
-      // Effects already owed by A and C ran once each; none ran twice.
       expect(await jobOf(batch[0]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
+      expect(await jobOf(batch[1]!.id)).toBeUndefined()
       expect(await jobOf(batch[2]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
-      expect(flowTexts().filter((t) => t === 'one')).toHaveLength(1)
-      expect(flowTexts().filter((t) => t === 'three')).toHaveLength(1)
-      expect(await n(`FROM agent_runs`)).toBe(0)
-    })
-
-    // Observed contract of the current code, written down so a change is noticed:
-    // B's job was created AFTER C's, and the per-contact queue is FIFO by job
-    // creation, so the inline execute pass cannot claim B while C is pending. B waits
-    // for the drain (the cron).
-    it('characterization: B, recovered last, is not executed by the redelivery itself; the drain executes it', async () => {
-      await failJobFor(batch[1]!.id)
-      await post()
-      await clearFault()
-      const mark = state.log.length
-      await post()
-      await executePassDone(mark, 3)
-
-      expect(await jobOf(batch[1]!.id)).toMatchObject({ status: 'pending', attempt_count: 0 })
       expect(flowTexts()).toEqual(['one', 'three'])
+      expect(await conversation()).toEqual({ last_message_text: 'three', unread_count: 2 })
+      expect(await n(`FROM agent_runs`)).toBe(0)
 
-      expect(await drainInboundTurnJobs()).toMatchObject({ processed: 1, failed: 0 })
-      expect(await jobOf(batch[1]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
-      expect(flowTexts()).toEqual(['one', 'three', 'two']) // each exactly once, in job-creation order
-      expect(await drainInboundTurnJobs()).toMatchObject({ processed: 0, failed: 0 })
-      expect(mockFlows).toHaveBeenCalledTimes(3)
+      // One diagnostic row (stage + code, no content): it does not hold the message.
+      const rows = await dlq()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ status: 'pending', occurrences: 1, error_message: 'source=meta;stage=message_insert;db_code=P0001' })
     })
 
-    it('a further identical redelivery after everything completed changes nothing', async () => {
-      await failJobFor(batch[1]!.id)
-      await post()
-      await clearFault()
+    it('redelivery: 200, B is stored and executed once (late), nothing else is duplicated, and the preview does not regress', async () => {
+      await failPermanently(batch[1]!.id)
       let mark = state.log.length
-      await post()
-      await executePassDone(mark, 3)
-      await drainInboundTurnJobs()
-      const before = {
-        flows: mockFlows.mock.calls.length,
-        messages: await n(`FROM messages WHERE sender_type = 'customer' AND message_id LIKE $1`, [`wamid.r1.${seq}.%`]),
-        jobs: await n(`FROM inbound_turn_jobs`),
-        dlq: await dlqRows(),
-      }
+      expect((await post()).status).toBe(500)
+      await settled(mark, 2)
+      await clearFaults()
 
       mark = state.log.length
       const res = await post()
-      await executePassDone(mark, 3)
+
+      expect(res).toEqual({ status: 200, body: { status: 'received' } })
+      await settled(mark, 3)
+      for (const m of batch) {
+        expect(await messageRows(m.id)).toBe(1)
+        expect(await jobRows(m.id)).toBe(1)
+        expect(await jobOf(m.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
+      }
+      // Only B reported an insert; A and C were found as duplicates.
+      expect(persistCalls(mark).map((c) => (c.data as { message_inserted: boolean }).message_inserted)).toEqual([false, true, false])
+      // Each effect exactly once. B ran after C (a turn already finished cannot be undone)...
+      expect(flowTexts()).toEqual(['one', 'three', 'two'])
+      // ...but the conversation shows the newest message and counts all three.
+      expect(await conversation()).toEqual({ last_message_text: 'three', unread_count: 3 })
+      // The failure is no longer "not stored".
+      expect(await dlq()).toMatchObject([{ status: 'resolved', occurrences: 1 }])
+    })
+
+    it('a further identical redelivery after everything completed changes nothing', async () => {
+      await failPermanently(batch[1]!.id)
+      let mark = state.log.length
+      await post()
+      await settled(mark, 2)
+      await clearFaults()
+      mark = state.log.length
+      await post()
+      await settled(mark, 3)
+      const before = { flows: mockFlows.mock.calls.length, conversation: await conversation(), jobs: await n(`FROM inbound_turn_jobs`), dlq: await dlq() }
+
+      mark = state.log.length
+      const res = await post()
+      await settled(mark, 3)
 
       expect(res.status).toBe(200)
       expect(mockFlows.mock.calls.length).toBe(before.flows)
-      expect(await n(`FROM messages WHERE sender_type = 'customer' AND message_id LIKE $1`, [`wamid.r1.${seq}.%`])).toBe(before.messages)
+      expect(await conversation()).toEqual(before.conversation)
       expect(await n(`FROM inbound_turn_jobs`)).toBe(before.jobs)
-      expect(await dlqRows()).toBe(before.dlq)
+      expect(await dlq()).toEqual(before.dlq)
       for (const m of batch) expect(await jobOf(m.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
     })
 
-    it('redelivery while the fault is still on: 500 again, A and C stay single and pending, the DLQ grows by one row per retry', async () => {
-      await failJobFor(batch[1]!.id)
+    it('while the fault lasts every retry answers 500, stores nothing twice, and the DLQ keeps ONE row whose occurrences grow', async () => {
+      await failPermanently(batch[1]!.id)
+      let mark = state.log.length
       expect((await post()).status).toBe(500)
+      await settled(mark, 2)
+      mark = state.log.length
       expect((await post()).status).toBe(500)
+      await settled(mark, 2)
+      mark = state.log.length
+      expect((await post()).status).toBe(500)
+      await settled(mark, 2)
 
       expect(await messageRows(batch[0]!.id)).toBe(1)
       expect(await messageRows(batch[2]!.id)).toBe(1)
       expect(await messageRows(batch[1]!.id)).toBe(0)
-      expect(await jobOf(batch[0]!.id)).toMatchObject({ status: 'pending', attempt_count: 0 })
-      expect(mockFlows).not.toHaveBeenCalled()
-      // The DLQ has no dedup (documented in inbound-dlq.ts): the same failure is captured again.
-      expect(await dlqRows()).toBe(2)
+      expect(flowTexts()).toEqual(['one', 'three']) // not executed again by the retries
+      expect(await conversation()).toEqual({ last_message_text: 'three', unread_count: 2 })
+      expect(await dlq()).toMatchObject([{ status: 'pending', occurrences: 3, error_message: 'source=meta;stage=message_insert;db_code=P0001' }])
+    })
+  })
+
+  describe('queue order and recovery of a message that was held back', () => {
+    // C's turn fails once; B (older message) is stored by the redelivery while C waits in
+    // backoff. Message-time order: B runs BEFORE C's retry, and C's conversation effect was
+    // already applied by its first attempt, so the retry does not count it twice.
+    it('an older message stored while a newer one waits in backoff runs first; the retry of the newer one counts once', async () => {
+      let failThree = true
+      mockFlows.mockImplementation(async (input: { message: { text: string } }) => {
+        if (input.message.text === 'three' && failThree) {
+          failThree = false
+          throw new Error('flows temporarily down')
+        }
+        return { consumed: false }
+      })
+      await failPermanently(batch[1]!.id)
+      let mark = state.log.length
+      expect((await post()).status).toBe(500)
+      await settled(mark, 2)
+      expect(await jobOf(batch[2]!.id)).toMatchObject({ status: 'pending', attempt_count: 1, last_error: 'flows temporarily down' })
+
+      await clearFaults()
+      mark = state.log.length
+      expect((await post()).status).toBe(200)
+      await settled(mark, 3)
+
+      expect(await jobOf(batch[1]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 }) // not held behind C
+      expect(await jobOf(batch[2]!.id)).toMatchObject({ status: 'pending', attempt_count: 1 }) // still in backoff
+
+      await makeAvailable(batch[2]!.id)
+      expect(await drainInboundTurnJobs()).toMatchObject({ processed: 1, failed: 0 })
+      expect(await jobOf(batch[2]!.id)).toMatchObject({ status: 'completed', attempt_count: 2 })
+      expect(flowTexts()).toEqual(['one', 'three', 'two', 'three']) // 'three' ran twice: its first attempt threw
+      expect(await conversation()).toEqual({ last_message_text: 'three', unread_count: 3 })
+    })
+  })
+
+  describe('a transient database error on the persist call', () => {
+    it('is retried inside the request: the delivery is acknowledged, stored once, executed once, and leaves no DLQ row', async () => {
+      const only: Msg[] = [batch[0]!]
+      await failTransiently(only[0]!.id, 2) // fails twice, succeeds on the third (= last) attempt
+      const mark = state.log.length
+
+      const res = await post(only)
+
+      expect(res).toEqual({ status: 200, body: { status: 'received' } })
+      await settled(mark, 1)
+      expect(persistCalls(mark)).toHaveLength(3)
+      expect(await messageRows(only[0]!.id)).toBe(1)
+      expect(await jobRows(only[0]!.id)).toBe(1)
+      expect(await jobOf(only[0]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
+      expect(flowTexts()).toEqual(['one'])
+      expect(await dlq()).toEqual([])
+    })
+
+    it('that outlasts the retries answers 500 with one DLQ row (code 40001) and stores nothing; the redelivery recovers it', async () => {
+      const only: Msg[] = [batch[0]!]
+      await failTransiently(only[0]!.id, 3)
+      let mark = state.log.length
+
+      const first = await post(only)
+
+      expect(first.status).toBe(500)
+      expect(persistCalls(mark)).toHaveLength(3) // the first attempt plus two retries
+      expect(await messageRows(only[0]!.id)).toBe(0)
+      expect(await dlq()).toMatchObject([{ status: 'pending', occurrences: 1, error_message: 'source=meta;stage=message_insert;db_code=40001' }])
+
+      await clearFaults()
+      mark = state.log.length
+      const second = await post(only)
+      expect(second.status).toBe(200)
+      await settled(mark, 1)
+      expect(await jobOf(only[0]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
+      expect(flowTexts()).toEqual(['one'])
+      expect(await dlq()).toMatchObject([{ status: 'resolved' }])
+    })
+
+    it('a permanent error is NOT retried: one attempt, 500, one DLQ row', async () => {
+      const only: Msg[] = [batch[0]!]
+      await failPermanently(only[0]!.id)
+      const mark = state.log.length
+
+      const res = await post(only)
+
+      expect(res.status).toBe(500)
+      expect(persistCalls(mark)).toHaveLength(1)
+      expect(await dlq()).toMatchObject([{ occurrences: 1, error_message: 'source=meta;stage=message_insert;db_code=P0001' }])
     })
   })
 
   describe('a single message cannot be made durable', () => {
-    it('500, then the redelivery recovers it completely: persisted, executed once, completed', async () => {
+    it('500, then the redelivery recovers it completely: stored, executed once, conversation updated once', async () => {
       const only: Msg[] = [batch[0]!]
-      await failJobFor(only[0]!.id)
+      await failPermanently(only[0]!.id)
+      let mark = state.log.length
+
       const first = await post(only)
 
       expect(first.status).toBe(500)
+      await settled(mark, 0)
       expect(await messageRows(only[0]!.id)).toBe(0)
       expect(await jobOf(only[0]!.id)).toBeUndefined()
       expect(mockFlows).not.toHaveBeenCalled()
 
-      await clearFault()
-      const mark = state.log.length
+      await clearFaults()
+      mark = state.log.length
       const second = await post(only)
 
       expect(second.status).toBe(200)
-      await executePassDone(mark, 1)
+      await settled(mark, 1)
       expect(await messageRows(only[0]!.id)).toBe(1)
       expect(await jobOf(only[0]!.id)).toMatchObject({ status: 'completed', attempt_count: 1 })
       expect(flowTexts()).toEqual(['one'])
-      expect(await conversation()).toMatchObject({ last_message_text: 'one', unread_count: 1 })
+      expect(await conversation()).toEqual({ last_message_text: 'one', unread_count: 1 })
       expect(await n(`FROM agent_runs`)).toBe(0)
     })
   })

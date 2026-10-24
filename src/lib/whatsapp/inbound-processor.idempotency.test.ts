@@ -158,9 +158,11 @@ describe('processInboundMessage — C4 idempotency', () => {
     expect(mockRpcImpl).toHaveBeenCalledWith('persist_inbound_message_with_turn', expect.anything())
     expect(mockDispatchFlows).toHaveBeenCalledTimes(1)
     expect(mockRunAutomations).toHaveBeenCalled()
-    expect(
-      chainCalls.some((c) => c.table === 'conversations' && c.method === 'update'),
-    ).toBe(true)
+    // The conversation effect is one atomic, once-per-message database call (093).
+    expect(mockRpcImpl).toHaveBeenCalledWith(
+      'apply_inbound_message_to_conversation',
+      expect.objectContaining({ p_message_id: expect.any(String), p_preview: expect.any(String) }),
+    )
   })
 
   it('short-circuits ALL downstream effects on redelivery (duplicate)', async () => {
@@ -189,12 +191,12 @@ describe('processInboundMessage — C4 idempotency', () => {
     const { processInboundMessage } = await import('./inbound-processor')
     const { InboundPersistenceError } = await import('./inbound-dlq')
 
-    messagesUpsertResult = { data: null, error: { message: 'boom', code: '57P01' } }
+    messagesUpsertResult = { data: null, error: { message: 'boom', code: 'XX000' } }
     const err = await processInboundMessage(makeInbound('ext-err'), 'acc-1', 'user-1').catch((e) => e)
 
     expect(err).toBeInstanceOf(InboundPersistenceError)
     expect(err.stage).toBe('message_insert')
-    expect(err.dbCode).toBe('57P01')
+    expect(err.dbCode).toBe('XX000')
     // The raw DB message must not travel inside the error.
     expect(String(err.message)).not.toContain('boom')
     expect(mockDispatchFlows).not.toHaveBeenCalled()

@@ -51,7 +51,7 @@ function makeChain(table: string) {
         ? { id: c.id, account_id: c.account_id, user_id: c.user_id, access_token: 'enc', instance_id: 'inst', base_url: 'https://x.uazapi.dev', provider: S.provider, connection_id: chain.__conn, webhook_secret_hash: hashWebhookSecret(c.secret) }
         : null
     } else if (table === 'conversations') {
-      if (S.conversationFails) { error = { code: '57P01', message: 'conv db down (Maria 5511999887766)' } }
+      if (S.conversationFails) { error = { code: 'XX000', message: 'conv db down (Maria 5511999887766)' } }
       else data = { id: 'conv-1', unread_count: 0 }
     } else if (table === 'contacts') {
       if (S.contactFails) { error = { code: '23502', message: 'null value (5511999887766)' } }
@@ -73,7 +73,7 @@ vi.mock('@/lib/supabase/admin-client', () => ({
       if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
         const mode = S.insertModeFor(String(params.p_message_id))
         if (mode === 'reject') return Promise.reject(new Error('network down for 5511999887766'))
-        if (mode === 'error') return Promise.resolve({ data: null, error: { code: '57P01', message: 'db unavailable: Key (phone)=(5511999887766)' } })
+        if (mode === 'error') return Promise.resolve({ data: null, error: { code: 'XX000', message: 'db unavailable: Key (phone)=(5511999887766)' } })
         if (mode === 'dup') return Promise.resolve({ data: { message_id: 'existing', message_inserted: false, job_ready: true }, error: null })
         return Promise.resolve({ data: { message_id: `id-${rpcCalls.length}`, message_inserted: true, job_ready: true }, error: null })
       }
@@ -159,9 +159,9 @@ beforeEach(() => {
 
 describe('C6.2 provider route: persistence failure is captured', () => {
   it.each([
-    ['message_insert (db error)', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=57P01'],
+    ['message_insert (db error)', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=XX000'],
     ['contact create failure', () => { S.contactFails = true }, 'contact', 'db_code=23502'],
-    ['conversation failure', () => { S.conversationFails = true }, 'conversation', 'db_code=57P01'],
+    ['conversation failure', () => { S.conversationFails = true }, 'conversation', 'db_code=XX000'],
   ])('%s → exactly one diagnostic enqueue for tenant A, HTTP 500, not counted as processed, no engine ran', async (_n, arrange, stage, codePart) => {
     arrange()
     const { status, json } = await post('uazapi', 'conn-A', singleMsg())

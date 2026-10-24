@@ -13,16 +13,18 @@ type Claim = { message_id: string; account_id: string; contact_id: string; claim
 
 function turnApi(db: PGlite) {
   return {
-    async message(conversationId: string, externalId: string) {
+    // `ageSec` places the message in time; since 092 the queue orders by message time first,
+    // so the message and its job are aged together and both keys agree.
+    async message(conversationId: string, externalId: string, ageSec = 0) {
       const { rows } = await db.query<{ id: string }>(
-        `INSERT INTO messages (conversation_id, sender_type, content_type, content_text, message_id, status)
-         VALUES ($1, 'customer', 'text', 'hello', $2, 'delivered') RETURNING id`,
-        [conversationId, externalId],
+        `INSERT INTO messages (conversation_id, sender_type, content_type, content_text, message_id, status, created_at)
+         VALUES ($1, 'customer', 'text', 'hello', $2, 'delivered', NOW() - make_interval(secs => $3)) RETURNING id`,
+        [conversationId, externalId, ageSec],
       )
       return rows[0]!.id
     },
     async job(world: { account: string; contact: string; conv: string }, externalId: string, ageSec: number) {
-      const id = await this.message(world.conv, externalId)
+      const id = await this.message(world.conv, externalId, ageSec)
       await db.query(
         `SELECT register_inbound_turn_job($1::uuid, $2::uuid, $3::uuid, $4::uuid, '{}'::jsonb)`,
         [id, world.account, world.contact, world.conv],
@@ -102,7 +104,8 @@ describe('inbound turn substrate (088 / Q10)', () => {
   let B: { account: string; contact: string; conv: string }
 
   beforeAll(async () => {
-    db = await bootChain(88)
+    // The final chain: the claim functions under test are 092's, the rest is 088's contract.
+    db = await bootChain(9999)
     const world = await seedWorld(db)
     const pair = async (account: string, conv: string) => {
       const { rows } = await db.query<{ contact_id: string }>(`SELECT contact_id FROM conversations WHERE id = $1`, [

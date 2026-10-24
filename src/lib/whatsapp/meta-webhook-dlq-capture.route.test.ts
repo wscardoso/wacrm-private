@@ -42,11 +42,11 @@ function makeChain(table: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let error: any = null
     if (table === 'whatsapp_config') {
-      if (S.configError) error = { code: '57P01', message: 'config lookup failed 5511999887766' }
+      if (S.configError) error = { code: 'XX000', message: 'config lookup failed 5511999887766' }
       else data = S.configRows
     }
     else if (table === 'conversations') {
-      if (S.conversationFails) error = { code: '57P01', message: 'conv db down 5511999887766' }
+      if (S.conversationFails) error = { code: 'XX000', message: 'conv db down 5511999887766' }
       else data = { id: 'conv-1', unread_count: 0 }
     }     else if (table === 'contacts') {
       if (S.contactFails) error = { code: '23502', message: 'null value 5511999887766' }
@@ -70,7 +70,7 @@ vi.mock('@/lib/supabase/admin-client', () => ({
       if (fn === 'persist_inbound_message_with_turn' || fn === 'insert_inbound_message') {
         const mode = S.insertModeFor(String(params.p_message_id))
         if (mode === 'reject') return Promise.reject(new Error('network down 5511999887766'))
-        if (mode === 'error') return Promise.resolve({ data: null, error: { code: '57P01', message: 'db unavailable Key (phone)=(5511999887766)' } })
+        if (mode === 'error') return Promise.resolve({ data: null, error: { code: 'XX000', message: 'db unavailable Key (phone)=(5511999887766)' } })
         if (mode === 'dup') {
           S.lastInserted = false
           S.lastMessageId = 'existing-dup'
@@ -196,9 +196,9 @@ beforeEach(() => {
 
 describe('C6.2 Meta route: persistence failure is captured per message', () => {
   it.each([
-    ['message_insert', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=57P01'],
+    ['message_insert', () => { S.insertModeFor = () => 'error' }, 'message_insert', 'db_code=XX000'],
     ['contact', () => { S.contactFails = true }, 'contact', 'db_code=23502'],
-    ['conversation', () => { S.conversationFails = true }, 'conversation', 'db_code=57P01'],
+    ['conversation', () => { S.conversationFails = true }, 'conversation', 'db_code=XX000'],
   ])('%s failure → one enqueue scoped to the resolved config; HTTP 500; no engine ran', async (_n, arrange, stage, codePart) => {
     arrange()
     const { status, json } = await post(body([metaMsg('wamid.A1')]))

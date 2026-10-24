@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
+import { withTransientRetry } from '@/lib/agent/turn/transient'
 
 export interface ClaimedInboundTurn {
   messageId: string
@@ -14,8 +15,18 @@ export interface PersistInboundWithTurnResult {
   jobReady: boolean
 }
 
-/** Message + turn job in one Postgres function (091). One transaction. */
-export async function persistInboundMessageWithTurn(args: {
+/**
+ * Message + turn job in one Postgres function (091). One transaction. The call is
+ * idempotent, so a transient database failure (see transient.ts) is retried a couple
+ * of times before the error reaches the caller.
+ */
+export function persistInboundMessageWithTurn(args: PersistInboundWithTurnArgs): Promise<PersistInboundWithTurnResult> {
+  return withTransientRetry(() => persistInboundMessageWithTurnOnce(args), {
+    label: 'persist_inbound_message_with_turn',
+  })
+}
+
+export interface PersistInboundWithTurnArgs {
   conversationId: string
   contentType: string
   contentText: string | null
@@ -27,7 +38,11 @@ export async function persistInboundMessageWithTurn(args: {
   accountId: string
   contactId: string
   downstreamContext: Record<string, unknown>
-}): Promise<PersistInboundWithTurnResult> {
+}
+
+async function persistInboundMessageWithTurnOnce(
+  args: PersistInboundWithTurnArgs,
+): Promise<PersistInboundWithTurnResult> {
   const { data, error } = await supabaseAdmin().rpc('persist_inbound_message_with_turn', {
     p_conversation_id: args.conversationId,
     p_sender_type: 'customer',

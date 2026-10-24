@@ -145,7 +145,7 @@ describe('inbound with the native agent OFF (T5)', () => {
   const touchedAgentTables = () => state.tables.filter((t) => AGENT_TABLES.includes(t))
 
   beforeAll(async () => {
-    testDb = await bootChain(91)
+    testDb = await bootChain(9999)
     world = await seedWorld(testDb)
     // Test-only fault injector on the DISPOSABLE db (not a migration): fails the job
     // insert inside persist_inbound_message_with_turn while the GUC is on.
@@ -222,7 +222,6 @@ describe('inbound with the native agent OFF (T5)', () => {
         contactWasCreated: true,
         inboundText: 'hello',
         externalMessageId: msg.messageId,
-        unreadCountBefore: 0,
       })
 
       // Downstream effects.

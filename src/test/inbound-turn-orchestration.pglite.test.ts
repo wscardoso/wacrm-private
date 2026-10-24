@@ -124,7 +124,7 @@ describe('inbound turn: TypeScript over SQL (088–091)', () => {
   const completeCalls = () => state.rpcLog.filter((c) => c.name === 'complete_inbound_turn_job')
 
   beforeAll(async () => {
-    testDb = await bootChain(91)
+    testDb = await bootChain(9999)
     const world = await seedWorld(testDb)
     const pair = async (account: string, conv: string): Promise<Pair> => ({
       account,
